@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "skills": {
+    "emil-design-eng": {
+      "source": "emilkowalski/skill",
+      "sourceType": "github",
+      "computedHash": "8bdf9e4e6de7a4969147bf4828a4ad2c5aacd9fba4b690b250a85e0467ca387d"
+    },
+    "macos-menubar-tuist-app": {
+      "source": "Dimillian/Skills",
+      "sourceType": "github",
+      "computedHash": "8724ada68cf08a1a965321a688969825bf33be8d344ba2ce67207c6ce604e76a"
+    },
+    "macos-spm-app-packaging": {
+      "source": "Dimillian/Skills",
+      "sourceType": "github",
+      "computedHash": "dd9fba9ca23b45f1c12db08470da9726b294bd6fb334f63d3447872efdf392c3"
+    },
+    "swift-accessibility-skill": {
+      "source": "PasqualeVittoriosi/swift-accessibility-skill",
+      "sourceType": "github",
+      "computedHash": "cae7f6f35c9844fc28401f72252cdb32b4088e8ae212703e781bbe2663803ec9"
+    },
+    "swift-api-design-guidelines-skill": {
+      "source": "Erikote04/Swift-API-Design-Guidelines-Agent-Skill",
+      "sourceType": "github",
+      "computedHash": "aea51903f26bb8771e292a9e5c1ad0d5731224620fd764f7e3db1236e086d356"
+    },
+    "swift-architecture-skill": {
+      "source": "efremidze/swift-architecture-skill",
+      "sourceType": "github",
+      "computedHash": "67d3359424b19084631998def14666fd5a77284a45ac0353c41a86a7ed216923"
+    },
+    "swift-concurrency-pro": {
+      "source": "twostraws/Swift-Concurrency-Agent-Skill",
+      "sourceType": "github",
+      "computedHash": "dec65531b4bd37d15e6243dbb0d2d1f554b4f4087bcb2e8deb7273f570fa4069"
+    },
+    "swift-testing-pro": {
+      "source": "twostraws/Swift-Testing-Agent-Skill",
+      "sourceType": "github",
+      "computedHash": "90504b29146ccd7e88d8ba7244c6c4e4d2b410fb21bdd4ce578f10583b158481"
+    },
+    "swiftdata-pro": {
+      "source": "twostraws/SwiftData-Agent-Skill",
+      "sourceType": "github",
+      "computedHash": "2f979bad98ea3a6744084c5f93e27897f02e8d0ffe15dd03042e88aaae4da14c"
+    },
+    "swiftui-liquid-glass": {
+      "source": "Dimillian/Skills",
+      "sourceType": "github",
+      "computedHash": "e4d3634171bc6caa7cc8d15f58cd2fb848dab4744493edc56ec14f4b2c8521a0"
+    },
+    "swiftui-performance-audit": {
+      "source": "Dimillian/Skills",
+      "sourceType": "github",
+      "computedHash": "4c153a7401d4d878fad3b7b83ca3d29f43245f8404dd34b7beb400cdfcab46f7"
+    },
+    "swiftui-pro": {
+      "source": "twostraws/SwiftUI-Agent-Skill",
+      "sourceType": "github",
+      "computedHash": "07033426e384295a4b49cf0b2ffdefd4098cae4af53fef16bc1f2d9281118c41"
+    }
+  }
+}

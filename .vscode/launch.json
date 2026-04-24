@@ -1,0 +1,104 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:aos}/playground/open-codex-computer-use",
+            "name": "Debug OpenComputerUse (playground/open-codex-computer-use)",
+            "target": "OpenComputerUse",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug OpenComputerUse (playground/open-codex-computer-use)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:aos}/playground/open-codex-computer-use",
+            "name": "Release OpenComputerUse (playground/open-codex-computer-use)",
+            "target": "OpenComputerUse",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release OpenComputerUse (playground/open-codex-computer-use)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:aos}/playground/open-codex-computer-use",
+            "name": "Debug OpenComputerUseFixture (playground/open-codex-computer-use)",
+            "target": "OpenComputerUseFixture",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug OpenComputerUseFixture (playground/open-codex-computer-use)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:aos}/playground/open-codex-computer-use",
+            "name": "Release OpenComputerUseFixture (playground/open-codex-computer-use)",
+            "target": "OpenComputerUseFixture",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release OpenComputerUseFixture (playground/open-codex-computer-use)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:aos}/playground/open-codex-computer-use",
+            "name": "Debug OpenComputerUseSmokeSuite (playground/open-codex-computer-use)",
+            "target": "OpenComputerUseSmokeSuite",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug OpenComputerUseSmokeSuite (playground/open-codex-computer-use)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:aos}/playground/open-codex-computer-use",
+            "name": "Release OpenComputerUseSmokeSuite (playground/open-codex-computer-use)",
+            "target": "OpenComputerUseSmokeSuite",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release OpenComputerUseSmokeSuite (playground/open-codex-computer-use)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:aos}/playground/open-codex-computer-use",
+            "name": "Debug CursorMotion (playground/open-codex-computer-use)",
+            "target": "CursorMotion",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug CursorMotion (playground/open-codex-computer-use)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:aos}/playground/open-codex-computer-use",
+            "name": "Release CursorMotion (playground/open-codex-computer-use)",
+            "target": "CursorMotion",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release CursorMotion (playground/open-codex-computer-use)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:aos}/playground/open-codex-computer-use",
+            "name": "Debug StandaloneCursor (playground/open-codex-computer-use)",
+            "target": "StandaloneCursor",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug StandaloneCursor (playground/open-codex-computer-use)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:aos}/playground/open-codex-computer-use",
+            "name": "Release StandaloneCursor (playground/open-codex-computer-use)",
+            "target": "StandaloneCursor",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release StandaloneCursor (playground/open-codex-computer-use)"
+        }
+    ]
+}
