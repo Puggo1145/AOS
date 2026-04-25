@@ -66,6 +66,12 @@ export const RPCErrorCode = {
   payloadTooLarge: -32001,
   timeout: -32002,
   permissionDenied: -32003,
+  // auth.* (provider OAuth login) — per onboarding plan
+  loginInProgress: -32200,
+  loginCancelled: -32201,
+  loginTimeout: -32202,
+  unknownProvider: -32203,
+  loginNotConfigured: -32204,
 } as const;
 
 export type RPCErrorCodeName = keyof typeof RPCErrorCode;
@@ -91,9 +97,20 @@ export const RPCMethod = {
   rpcPing: "rpc.ping",
   agentSubmit: "agent.submit",
   agentCancel: "agent.cancel",
+  agentReset: "agent.reset",
+  conversationTurnStarted: "conversation.turnStarted",
+  conversationReset: "conversation.reset",
   uiToken: "ui.token",
   uiStatus: "ui.status",
   uiError: "ui.error",
+  providerStatus: "provider.status",
+  providerStartLogin: "provider.startLogin",
+  providerCancelLogin: "provider.cancelLogin",
+  providerLoginStatus: "provider.loginStatus",
+  providerStatusChanged: "provider.statusChanged",
+  configGet: "config.get",
+  configSet: "config.set",
+  configSetEffort: "config.setEffort",
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -145,6 +162,57 @@ export interface AgentCancelParams {
 export interface AgentCancelResult {
   cancelled: boolean;
 }
+
+/// `agent.reset` clears the entire conversation. Cancels any in-flight turn.
+/// Sidecar emits `conversation.reset` after the wipe so all observers can
+/// discard their mirrors.
+export type AgentResetParams = Record<string, never>;
+
+export interface AgentResetResult {
+  ok: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// conversation.* — Sidecar → Shell (notifications)
+//
+// The sidecar owns the canonical conversation state (turns array, LLM
+// history). Shell mirrors it 1:1 from these notifications:
+//   - `conversation.turnStarted { turn }` fires once per `agent.submit` once
+//     the turn has been registered in the sidecar's Conversation. `turn`
+//     carries the snapshot the sidecar persisted (id, prompt, citedContext,
+//     initial empty reply, status: thinking).
+//   - `conversation.reset` fires after `agent.reset` clears the store.
+//   - reply token deltas continue to flow over the existing `ui.token`
+//     notification so tight streaming doesn't pay a serialization cost on
+//     every character.
+//   - per-turn status changes flow over `ui.status` / `ui.error` (existing).
+// ---------------------------------------------------------------------------
+
+export type TurnStatus =
+  | "thinking"
+  | "working"
+  | "waiting"
+  | "done"
+  | "error"
+  | "cancelled";
+
+export interface ConversationTurnWire {
+  id: string;
+  prompt: string;
+  citedContext: CitedContext;
+  reply: string;
+  status: TurnStatus;
+  errorMessage?: string;
+  errorCode?: number;
+  /// Milliseconds since epoch.
+  startedAt: number;
+}
+
+export interface ConversationTurnStartedParams {
+  turn: ConversationTurnWire;
+}
+
+export type ConversationResetParams = Record<string, never>;
 
 // ---------------------------------------------------------------------------
 // CitedContext — wire-only projection of Shell's SenseContext
@@ -226,4 +294,126 @@ export interface UIErrorParams {
   code: number;
   message: string;
   data?: JSONValue;
+}
+
+// ---------------------------------------------------------------------------
+// provider.* — bidirectional namespace (per docs/plans/onboarding.md)
+// ---------------------------------------------------------------------------
+
+export type ProviderState = "ready" | "unauthenticated";
+export type ProviderLoginState =
+  | "awaitingCallback"
+  | "exchanging"
+  | "success"
+  | "failed";
+export type ProviderStatusReason = "authInvalidated" | "loggedOut";
+
+export interface ProviderInfo {
+  id: string;
+  name: string;
+  state: ProviderState;
+}
+
+export type ProviderStatusParams = Record<string, never>;
+
+export interface ProviderStatusResult {
+  providers: ProviderInfo[];
+}
+
+export interface ProviderStartLoginParams {
+  providerId: string;
+}
+
+export interface ProviderStartLoginResult {
+  loginId: string;
+  authorizeUrl: string;
+}
+
+export interface ProviderCancelLoginParams {
+  loginId: string;
+}
+
+export interface ProviderCancelLoginResult {
+  cancelled: boolean;
+}
+
+export interface ProviderLoginStatusParams {
+  loginId: string;
+  providerId: string;
+  state: ProviderLoginState;
+  message?: string;
+  errorCode?: number;
+}
+
+export interface ProviderStatusChangedParams {
+  providerId: string;
+  state: ProviderState;
+  reason?: ProviderStatusReason;
+  message?: string;
+}
+
+// ---------------------------------------------------------------------------
+// config.* — Shell → Bun. Global user config (selected provider/model, etc).
+// Backed by ~/.aos/config.json. Catalog snapshot is included in `config.get`
+// so the Shell settings UI doesn't need a second RPC.
+// ---------------------------------------------------------------------------
+
+/// Wire enum for reasoning effort. Mirrors `Effort` in
+/// `sidecar/src/llm/models/catalog.ts`. Sidecar clamps per-model at request
+/// time (e.g. `xhigh` → `high` for models that don't support xhigh, and
+/// any value is replaced by "off" for non-reasoning models).
+export type ConfigEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+
+export interface ConfigModelEntry {
+  id: string;
+  name: string;
+  /// Whether the model supports any reasoning effort at all (`!model.reasoning`
+  /// → `false`, in which case the Shell should disable the effort picker
+  /// while this model is selected).
+  reasoning: boolean;
+  /// Whether the model accepts the highest "xhigh" tier specifically. The
+  /// effort picker should disable that row for models with `false`.
+  supportsXhigh: boolean;
+}
+
+export interface ConfigProviderEntry {
+  id: string;
+  name: string;
+  defaultModelId: string;
+  models: ConfigModelEntry[];
+}
+
+export interface ConfigSelection {
+  providerId: string;
+  modelId: string;
+}
+
+export type ConfigGetParams = Record<string, never>;
+
+export interface ConfigGetResult {
+  /// `null` when the user has never picked. Shell falls back to
+  /// `defaultModelId` of the first provider for the initial UI selection.
+  selection: ConfigSelection | null;
+  /// `null` when the user has never picked. Shell falls back to
+  /// `defaultEffort` for the initial UI selection.
+  effort: ConfigEffort | null;
+  defaultEffort: ConfigEffort;
+  providers: ConfigProviderEntry[];
+}
+
+export interface ConfigSetParams {
+  providerId: string;
+  modelId: string;
+}
+
+export interface ConfigSetResult {
+  selection: ConfigSelection;
+}
+
+export interface ConfigSetEffortParams {
+  effort: ConfigEffort;
+}
+
+export interface ConfigSetEffortResult {
+  effort: ConfigEffort;
 }

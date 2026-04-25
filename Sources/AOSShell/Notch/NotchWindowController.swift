@@ -28,8 +28,7 @@ public final class NotchWindowController {
     private var viewModel: NotchViewModel?
     private var cancellables: Set<AnyCancellable> = []
 
-    public init(senseStore: SenseStore, agentService: AgentService, screen: NSScreen) {
-        let panelHeight: CGFloat = 240
+    public init(senseStore: SenseStore, agentService: AgentService, providerService: ProviderService, configService: ConfigService, screen: NSScreen) {
         let screenFrame = screen.frame
         let notchSize = screen.notchSize
         let deviceNotchRect = Self.makeDeviceNotchRect(screen: screen, notchSize: notchSize)
@@ -37,12 +36,18 @@ public final class NotchWindowController {
         let viewModel = NotchViewModel(
             senseStore: senseStore,
             agentService: agentService,
+            providerService: providerService,
+            configService: configService,
             screenRect: screenFrame,
             deviceNotchRect: deviceNotchRect
         )
         viewModel.bindEvents(.shared, agent: agentService)
         self.viewModel = viewModel
 
+        // The NSWindow strip is sized to the silhouette's MAX height — the
+        // dynamically-grown panel never extends past it, so once the
+        // conversation outgrows this budget the history ScrollView scrolls.
+        let panelHeight = viewModel.notchOpenedMaxHeight
         let topStrip = Self.makeTopStripRect(screenFrame: screenFrame, panelHeight: panelHeight)
 
         let win = NotchWindow(

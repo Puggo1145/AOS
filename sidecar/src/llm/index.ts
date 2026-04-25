@@ -6,7 +6,10 @@
 import { registerBuiltins } from "./providers/register-builtins";
 
 export { stream, streamSimple } from "./stream";
-export { getModel, getProviders, getModels, modelsAreEqual } from "./models/registry";
+export { getModel, getDefaultModel, getProviders, getModels, modelsAreEqual } from "./models/registry";
+export { PROVIDER_IDS, PROVIDER_NAMES, DEFAULT_MODEL_PER_PROVIDER, EFFORT_LEVELS, DEFAULT_EFFORT } from "./models/catalog";
+export type { KnownProvider, KnownModelId, Effort } from "./models/catalog";
+export { supportsXhigh, supportsThinking, supportsVision } from "./models/capabilities";
 export { isContextOverflow } from "./utils/overflow";
 export { validateToolCall, validateToolArguments } from "./utils/validation";
 export { calculateCost } from "./models/cost";

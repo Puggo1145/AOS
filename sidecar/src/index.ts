@@ -12,6 +12,8 @@
 import { StdioTransport } from "./rpc/transport";
 import { Dispatcher } from "./rpc/dispatcher";
 import { registerAgentHandlers } from "./agent/loop";
+import { registerProviderHandlers } from "./auth/register";
+import { registerConfigHandlers } from "./config/handlers";
 import { logger } from "./log";
 import { AOS_PROTOCOL_VERSION, RPCMethod, type HelloResult } from "./rpc/rpc-types";
 
@@ -25,6 +27,8 @@ async function main(): Promise<void> {
   const dispatcher = new Dispatcher(transport);
 
   registerAgentHandlers(dispatcher);
+  registerProviderHandlers(dispatcher);
+  registerConfigHandlers(dispatcher);
   // rpc.ping handler — installed before the reader sees any inbound frames so
   // the Shell can immediately health-check us after the handshake.
   dispatcher.registerRequest(RPCMethod.rpcPing, async () => ({}));

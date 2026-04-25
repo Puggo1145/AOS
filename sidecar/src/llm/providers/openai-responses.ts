@@ -46,7 +46,7 @@ import {
   AUTHENTICATED_SENTINEL,
   getEnvApiKey,
 } from "../auth/env-api-keys";
-import { readChatGPTToken } from "../auth/oauth/chatgpt-plan";
+import { readChatGPTToken, AuthInvalidatedError } from "../auth/oauth/chatgpt-plan";
 import { buildBaseOptions, clampReasoning } from "./simple-options";
 
 export interface OpenAIResponsesOptions extends ProviderStreamOptions {
@@ -81,22 +81,34 @@ function makeOutput<TApi extends "openai-responses">(model: Model<TApi>): Assist
   };
 }
 
-function buildPayload(model: Model<"openai-responses">, context: Context, options?: OpenAIResponsesOptions): Record<string, unknown> {
+export function buildPayload(model: Model<"openai-responses">, context: Context, options?: OpenAIResponsesOptions): Record<string, unknown> {
   const input: Array<Record<string, unknown>> = [];
-  if (context.systemPrompt) {
-    input.push({ role: "system", content: [{ type: "input_text", text: sanitizeSurrogates(context.systemPrompt) }] });
-  }
   for (const msg of context.messages) {
-    input.push(serializeMessage(msg));
+    for (const item of serializeMessage(msg)) input.push(item);
   }
+  // ChatGPT codex backend (chatgpt.com/backend-api/codex/responses) rejects
+  // requests without a top-level `instructions` field ("HTTP 400: Instructions
+  // are required"). The system prompt belongs here, not as a `role: system`
+  // message inside `input` — the codex backend ignores the latter and still
+  // 400s. Mirrors pi-mono's openai-codex-responses provider.
   const payload: Record<string, unknown> = {
     model: model.id,
     input,
     stream: true,
+    store: false,
+    instructions: context.systemPrompt ? sanitizeSurrogates(context.systemPrompt) : "",
   };
   if (options?.maxTokens) payload["max_output_tokens"] = options.maxTokens;
   if (options?.temperature !== undefined) payload["temperature"] = options.temperature;
-  if (options?.reasoning) payload["reasoning"] = { effort: options.reasoning };
+  if (options?.reasoning) {
+    // `summary: "auto"` is required: without it the codex backend never emits
+    // `response.reasoning_summary_*` events and the thinking stream stays
+    // empty. `include: ["reasoning.encrypted_content"]` is required because
+    // we run with `store: false` — without inlined ciphertext the next
+    // request cannot replay reasoning, leaving function_call items unpaired.
+    payload["reasoning"] = { effort: options.reasoning, summary: "auto" };
+    payload["include"] = ["reasoning.encrypted_content"];
+  }
   if (context.tools && context.tools.length > 0) {
     payload["tools"] = context.tools.map((t) => ({
       type: "function",
@@ -108,33 +120,64 @@ function buildPayload(model: Model<"openai-responses">, context: Context, option
   return payload;
 }
 
-function serializeMessage(msg: Message): Record<string, unknown> {
+// Each AOS `Message` may expand into multiple Responses-API input items:
+// reasoning, message, and function_call are all top-level items, not content
+// blocks of a single message. Only `output_text` is a valid assistant
+// content-block type — sending `{type:"reasoning"}` inside `content` triggers
+// `Invalid value: 'reasoning'` (HTTP 400) from the codex backend.
+function serializeMessage(msg: Message): Record<string, unknown>[] {
   if (msg.role === "user") {
     const content = typeof msg.content === "string"
       ? [{ type: "input_text", text: sanitizeSurrogates(msg.content) }]
       : msg.content.map((b) => b.type === "text"
           ? { type: "input_text", text: sanitizeSurrogates(b.text) }
           : { type: "input_image", image_url: `data:${b.mimeType};base64,${b.data}` });
-    return { role: "user", content };
+    return [{ role: "user", content }];
   }
   if (msg.role === "assistant") {
-    const content: Record<string, unknown>[] = [];
+    // Preserve the original block order — reasoning items must precede the
+    // function_call items they paired with on output, otherwise the codex
+    // backend treats the function_call as unpaired.
+    const items: Record<string, unknown>[] = [];
     for (const block of msg.content) {
       if (block.type === "text") {
-        content.push({ type: "output_text", text: sanitizeSurrogates(block.text) });
+        items.push({
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: sanitizeSurrogates(block.text), annotations: [] }],
+        });
       } else if (block.type === "thinking") {
-        content.push({ type: "reasoning", text: sanitizeSurrogates(block.thinking), signature: block.thinkingSignature });
+        // Replay reasoning only if we captured the full upstream item in the
+        // signature; without `encrypted_content` the codex backend rejects a
+        // synthesized reasoning item, so we drop it here. A present-but-malformed
+        // signature is a bug in the capture path — let JSON.parse throw loudly.
+        if (block.thinkingSignature) {
+          items.push(JSON.parse(block.thinkingSignature) as Record<string, unknown>);
+        }
       } else if (block.type === "toolCall") {
-        content.push({ type: "function_call", call_id: block.id, name: block.name, arguments: JSON.stringify(block.arguments) });
+        items.push({
+          type: "function_call",
+          call_id: block.id,
+          name: block.name,
+          arguments: JSON.stringify(block.arguments),
+        });
       }
     }
-    return { role: "assistant", content };
+    return items;
   }
-  // toolResult
-  const content = msg.content.map((b) => b.type === "text"
-    ? { type: "input_text", text: sanitizeSurrogates(b.text) }
-    : { type: "input_image", image_url: `data:${b.mimeType};base64,${b.data}` });
-  return { type: "function_call_output", call_id: msg.toolCallId, output: content };
+  // toolResult — `function_call_output.output` is a string by spec; only the
+  // image-bearing variant uses the structured list form.
+  const textParts = msg.content.filter((b): b is import("../types").TextContent => b.type === "text").map((b) => b.text);
+  const hasImage = msg.content.some((b) => b.type === "image");
+  let output: unknown;
+  if (hasImage) {
+    output = msg.content.map((b) => b.type === "text"
+      ? { type: "input_text", text: sanitizeSurrogates(b.text) }
+      : { type: "input_image", image_url: `data:${b.mimeType};base64,${b.data}` });
+  } else {
+    output = sanitizeSurrogates(textParts.join("\n"));
+  }
+  return [{ type: "function_call_output", call_id: msg.toolCallId, output }];
 }
 
 function mapStopReason(status: string | undefined, incompleteReason: string | undefined): "stop" | "length" | "toolUse" | "error" {
@@ -255,6 +298,12 @@ export const streamOpenaiResponses: StreamFunction<"openai-responses", OpenAIRes
       cleanupPartials(output);
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
       output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+      // Typed auth error: surface `errorReason` so the agent loop can project
+      // to `provider.statusChanged` without scraping the message string.
+      if (error instanceof AuthInvalidatedError) {
+        output.errorReason = "authInvalidated";
+        output.errorProviderId = error.providerId;
+      }
       stream.push({ type: "error", reason: output.stopReason, error: output });
       stream.end();
     }
@@ -283,8 +332,10 @@ function mapResponsesEventToAssistantEvent(
   stream: AssistantMessageEventStream,
 ): void {
   if (!ev.event || !ev.data) return;
-  let payload: Record<string, unknown> = {};
-  try { payload = JSON.parse(ev.data); } catch { return; }
+  // SSE data for the Responses API is always JSON; parse failure is a
+  // protocol violation, not a recoverable case — let it throw and surface
+  // through the outer dispatcher's stderr log.
+  const payload: Record<string, unknown> = JSON.parse(ev.data);
 
   const type = ev.event;
 
@@ -296,12 +347,16 @@ function mapResponsesEventToAssistantEvent(
 
   if (type === "response.output_item.added") {
     const item = payload["item"] as Record<string, unknown> | undefined;
-    const itemId = String(payload["item_id"] ?? item?.["id"] ?? "");
-    const itemType = String(item?.["type"] ?? "");
+    if (!item) throw new Error("response.output_item.added missing `item`");
+    const itemId = item["id"];
+    if (typeof itemId !== "string" || itemId.length === 0) {
+      throw new Error("response.output_item.added missing `item.id`");
+    }
+    const itemType = item["type"];
     const contentIndex = output.content.length;
-    if (itemId) itemIndexToContent.set(itemId, contentIndex);
+    itemIndexToContent.set(itemId, contentIndex);
 
-    if (itemType === "message" || itemType === "output_text") {
+    if (itemType === "message") {
       const block: TextContent = { type: "text", text: "" };
       output.content.push(block);
       blocks.set(contentIndex, { kind: "text" });
@@ -312,70 +367,81 @@ function mapResponsesEventToAssistantEvent(
       blocks.set(contentIndex, { kind: "thinking" });
       stream.push({ type: "thinking_start", contentIndex, partial: output });
     } else if (itemType === "function_call") {
-      const block: ToolCall = {
-        type: "toolCall",
-        id: String(item?.["call_id"] ?? item?.["id"] ?? ""),
-        name: String(item?.["name"] ?? ""),
-        arguments: {},
-      };
+      const callId = item["call_id"];
+      const name = item["name"];
+      if (typeof callId !== "string" || typeof name !== "string") {
+        throw new Error("response.output_item.added function_call missing `call_id` or `name`");
+      }
+      const block: ToolCall = { type: "toolCall", id: callId, name, arguments: {} };
       output.content.push(block);
       blocks.set(contentIndex, { kind: "toolCall", partialJson: "" });
       stream.push({ type: "toolcall_start", contentIndex, partial: output });
+    } else {
+      throw new Error(`response.output_item.added unknown item.type: ${String(itemType)}`);
     }
     return;
   }
 
-  if (type === "response.output_text.delta") {
-    const itemId = String(payload["item_id"] ?? "");
+  // Helper: every per-item event must reference an item we already saw
+  // via `output_item.added`. A miss is a protocol violation, not a no-op.
+  const requireBlock = <K extends "text" | "thinking" | "toolCall">(kind: K): { idx: number; meta: { kind: "text" | "thinking" | "toolCall"; partialJson?: string } } => {
+    const itemId = payload["item_id"];
+    if (typeof itemId !== "string") throw new Error(`${type} missing string \`item_id\``);
     const idx = itemIndexToContent.get(itemId);
-    if (idx === undefined) return;
-    const delta = String(payload["delta"] ?? "");
-    const block = output.content[idx] as TextContent;
-    block.text += delta;
+    if (idx === undefined) throw new Error(`${type} references unknown item_id: ${itemId}`);
+    const meta = blocks.get(idx);
+    if (!meta || meta.kind !== kind) throw new Error(`${type} expected block kind ${kind}, got ${meta?.kind}`);
+    return { idx, meta };
+  };
+
+  if (type === "response.output_text.delta") {
+    const { idx } = requireBlock("text");
+    const delta = String(payload["delta"]);
+    (output.content[idx] as TextContent).text += delta;
     stream.push({ type: "text_delta", contentIndex: idx, delta, partial: output });
     return;
   }
 
   if (type === "response.output_text.done") {
-    const itemId = String(payload["item_id"] ?? "");
-    const idx = itemIndexToContent.get(itemId);
-    if (idx === undefined) return;
-    const block = output.content[idx] as TextContent;
-    const text = String(payload["text"] ?? block.text);
-    block.text = text;
+    const { idx } = requireBlock("text");
+    const text = String(payload["text"]);
+    (output.content[idx] as TextContent).text = text;
     stream.push({ type: "text_end", contentIndex: idx, content: text, partial: output });
     return;
   }
 
-  if (type === "response.reasoning_text.delta" || type === "response.reasoning_summary_text.delta") {
-    const itemId = String(payload["item_id"] ?? "");
-    const idx = itemIndexToContent.get(itemId);
-    if (idx === undefined) return;
-    const delta = String(payload["delta"] ?? "");
-    const block = output.content[idx] as ThinkingContent;
-    block.thinking += delta;
+  // The codex backend emits reasoning text exclusively through
+  // `reasoning_summary_*` (gated on `reasoning.summary: "auto"`). The older
+  // `response.reasoning_text.*` events are a different OpenAI surface and
+  // never fire on this endpoint — handling them was dead code.
+  if (type === "response.reasoning_summary_part.added") {
+    // No text yet, just acknowledge the part. The reasoning block was
+    // already created by `output_item.added`.
+    requireBlock("thinking");
+    return;
+  }
+
+  if (type === "response.reasoning_summary_text.delta") {
+    const { idx } = requireBlock("thinking");
+    const delta = String(payload["delta"]);
+    (output.content[idx] as ThinkingContent).thinking += delta;
     stream.push({ type: "thinking_delta", contentIndex: idx, delta, partial: output });
     return;
   }
 
-  if (type === "response.reasoning_text.done" || type === "response.reasoning_summary_text.done") {
-    const itemId = String(payload["item_id"] ?? "");
-    const idx = itemIndexToContent.get(itemId);
-    if (idx === undefined) return;
-    const block = output.content[idx] as ThinkingContent;
-    const text = String(payload["text"] ?? block.thinking);
-    block.thinking = text;
-    stream.push({ type: "thinking_end", contentIndex: idx, content: text, partial: output });
+  if (type === "response.reasoning_summary_part.done") {
+    // Multiple summary parts in one reasoning item are separated by a blank
+    // line in the visible thinking stream. The block-level `thinking_end`
+    // is emitted from `response.output_item.done`.
+    const { idx } = requireBlock("thinking");
+    (output.content[idx] as ThinkingContent).thinking += "\n\n";
+    stream.push({ type: "thinking_delta", contentIndex: idx, delta: "\n\n", partial: output });
     return;
   }
 
   if (type === "response.function_call_arguments.delta") {
-    const itemId = String(payload["item_id"] ?? "");
-    const idx = itemIndexToContent.get(itemId);
-    if (idx === undefined) return;
-    const meta = blocks.get(idx);
-    if (!meta || meta.kind !== "toolCall") return;
-    const delta = String(payload["delta"] ?? "");
+    const { idx, meta } = requireBlock("toolCall");
+    const delta = String(payload["delta"]);
     meta.partialJson = (meta.partialJson ?? "") + delta;
     const block = output.content[idx] as ToolCall;
     block.arguments = parseStreamingJson(meta.partialJson) as Record<string, unknown>;
@@ -384,15 +450,38 @@ function mapResponsesEventToAssistantEvent(
   }
 
   if (type === "response.function_call_arguments.done") {
-    const itemId = String(payload["item_id"] ?? "");
-    const idx = itemIndexToContent.get(itemId);
-    if (idx === undefined) return;
-    const meta = blocks.get(idx);
-    if (!meta || meta.kind !== "toolCall") return;
-    const final = String(payload["arguments"] ?? meta.partialJson ?? "");
+    const { idx, meta } = requireBlock("toolCall");
+    const final = payload["arguments"];
+    if (typeof final !== "string") throw new Error("response.function_call_arguments.done missing string `arguments`");
+    meta.partialJson = final;
     const block = output.content[idx] as ToolCall;
-    try { block.arguments = JSON.parse(final); } catch { block.arguments = parseStreamingJson(final) as Record<string, unknown>; }
+    block.arguments = JSON.parse(final) as Record<string, unknown>;
     stream.push({ type: "toolcall_end", contentIndex: idx, toolCall: block, partial: output });
+    return;
+  }
+
+  if (type === "response.output_item.done") {
+    const item = payload["item"] as Record<string, unknown> | undefined;
+    if (!item) throw new Error("response.output_item.done missing `item`");
+    const itemId = item["id"];
+    if (typeof itemId !== "string") throw new Error("response.output_item.done missing `item.id`");
+    const idx = itemIndexToContent.get(itemId);
+    if (idx === undefined) throw new Error(`response.output_item.done references unknown item_id: ${itemId}`);
+
+    if (item["type"] === "reasoning") {
+      // Reconcile thinking text from the canonical summary parts and capture
+      // the full item (with `encrypted_content`) into `thinkingSignature` so
+      // the next request can replay it verbatim. Without this, function_call
+      // items from reasoning models become unpaired on replay.
+      const summary = item["summary"] as Array<{ text: string }> | undefined;
+      const text = summary ? summary.map((s) => s.text).join("\n\n") : "";
+      const block = output.content[idx] as ThinkingContent;
+      block.thinking = text;
+      block.thinkingSignature = JSON.stringify(item);
+      stream.push({ type: "thinking_end", contentIndex: idx, content: text, partial: output });
+    }
+    // `message` and `function_call` finalization is already covered by
+    // `output_text.done` and `function_call_arguments.done` respectively.
     return;
   }
 

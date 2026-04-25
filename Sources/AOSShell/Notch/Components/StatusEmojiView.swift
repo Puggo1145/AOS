@@ -3,15 +3,21 @@ import SwiftUI
 // MARK: - StatusEmojiView
 //
 // AgentStatus → text-emoji mapping per notch-ui.md "AgentStatus → 颜文字映射".
-// Two sizes:
-//   - `large = false`: the closed-bar variant, 16pt
-//   - `large = true`:  the opened-panel variant, 64pt
+// Three sizes:
+//   - `.small`:  closed-bar variant, 16pt
+//   - `.medium`: opened-panel variant, 32pt — sized to align with the
+//                two-row "context + input" header.
+//   - `.large`:  reserved for hero contexts, 64pt
 // Always monospaced so the different glyph widths (`:)` vs `>_<`) don't
 // shift surrounding layout.
 
 struct StatusEmojiView: View {
     let status: AgentStatus
-    let large: Bool
+    let size: Size
+
+    enum Size {
+        case small, medium, large
+    }
 
     private var text: String {
         switch status {
@@ -25,13 +31,21 @@ struct StatusEmojiView: View {
         }
     }
 
+    private var fontSize: CGFloat {
+        switch size {
+        case .small: return 16
+        case .medium: return 32
+        case .large: return 64
+        }
+    }
+
+    private var weight: Font.Weight {
+        size == .small ? .medium : .bold
+    }
+
     var body: some View {
         Text(text)
-            .font(
-                large
-                    ? .system(size: 64, weight: .bold, design: .monospaced)
-                    : .system(size: 16, weight: .medium, design: .monospaced)
-            )
+            .font(.system(size: fontSize, weight: weight, design: .monospaced))
             .foregroundStyle(.white)
             .accessibilityLabel(Text("Agent status: \(status)"))
     }

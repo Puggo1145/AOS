@@ -218,10 +218,11 @@ bun run sidecar/src/auth/oauth/chatgpt-plan.ts login
 - 用户首次使用 AOS 前手动跑一次
 - 多次执行会覆盖现有 token 文件
 
-sidecar **运行时永不发起 login**。运行时只调 `readChatGPTToken()`。这条边界保证：
+**修订（onboarding 设计）**：sidecar 运行时**允许**发起 OAuth login，承接来自 Shell 的 `provider.startLogin` 请求。原约束（"sidecar 运行时永不发起 login"，"避免与 stdio RPC 冲突"）不成立——loopback HTTP 是独立 socket，与 stdio NDJSON 物理隔离；浏览器由 Shell 通过 `NSWorkspace.open` 打开，sidecar 进程内只 `listen 127.0.0.1:0` 接 callback。
 
-- 主进程不需要打开浏览器 / loopback server，避免与 RPC stdio 冲突
-- 鉴权失败的反馈路径只有一条：`ui.error`
+CLI login 入口（`bun run sidecar/src/auth/cli.ts login`）仍保留，作为开发期 / 排障路径。
+
+详细 runtime 协议见 `docs/designs/rpc-protocol.md` §"provider.* namespace" 与 `docs/plans/onboarding.md`。
 
 ## Token → Provider 桥接
 
@@ -244,9 +245,9 @@ getEnvApiKey(provider: string): string | undefined {
 
 | 场景 | 行为 |
 |---|---|
-| `chatgpt.json` 不存在 | agent loop 在收到首个 `agent.submit` 时 push `ui.error { turnId, code: -32003 (ErrPermissionDenied), message: "ChatGPT 订阅未授权，请运行 aos login" }`，**不发起 stream** |
-| token 存在但 refresh 失败 | 同上 message 改为 "ChatGPT 订阅授权已失效，请重新登录"，code 仍 -32003 |
-| stream 中途 401 | provider 流内 catch → `error` 事件 → agent loop 转 `ui.error { code: -32003 }`；用户需手动重跑 login |
+| `chatgpt.json` 不存在 | `provider.status` 直接返回 `unauthenticated`，Shell opened 态展示 onboard 面板；agent loop 不会被触发（Shell 在 unauthenticated 状态禁止 `agent.submit`） |
+| token 存在但 refresh 失败 | runtime `readChatGPTToken()` 把失效文件 `rename` 到 `chatgpt.json.invalid` 并抛 `AuthInvalidatedError`；agent loop 同时发 `ui.error { code: -32003 }` 与 `provider.statusChanged { state: unauthenticated, reason: authInvalidated }`，Shell 切回 onboard |
+| stream 中途 401 | provider 流内 catch → `error` 事件携带 `errorReason: "authInvalidated"` → agent loop 转 `ui.error { code: -32003 }` + `provider.statusChanged`；用户需通过 onboard 重新登录 |
 
 ErrPermissionDenied 码段定义参见 `docs/designs/rpc-protocol.md` §"错误模型"。
 

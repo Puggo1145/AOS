@@ -34,10 +34,61 @@ public final class NotchViewModel {
     public var screenRect: CGRect
     public var deviceNotchRect: CGRect
     public var inputFocused: Bool = false
+    /// Settings panel overlay. Reachable from the gear button in
+    /// OpenedPanelView; reset to false on close.
+    public var showSettings: Bool = false
 
     // MARK: - Constants
 
-    public let notchOpenedSize = CGSize(width: 500, height: 240)
+    /// Width is fixed; height grows with the conversation while the agent
+    /// loop is active. `compact` fits exactly: top safe inset + context chips
+    /// + 1-line input + bottom padding (room for the gear). `max` is the
+    /// hosting NSWindow's strip height — the silhouette never grows past it,
+    /// instead the history ScrollView starts scrolling.
+    public let notchOpenedWidth: CGFloat = 500
+    public let notchOpenedCompactHeight: CGFloat = 170
+    public let notchOpenedMaxHeight: CGFloat = 480
+    /// Settings panel uses a fixed 240pt budget — provider/model/effort
+    /// cards + quit button were laid out for this height and don't benefit
+    /// from the conversation panel's larger max.
+    public let notchOpenedSettingsHeight: CGFloat = 240
+
+    /// Vertical chrome around the dynamic content inside OpenedPanelView:
+    /// top safe inset + spacing(8) between history and composer + bottom
+    /// padding(16). Kept here so `notchOpenedSize` can clamp the panel's
+    /// natural size without re-deriving the layout's paddings.
+    public var openedContentVerticalChrome: CGFloat {
+        deviceNotchRect.height + 8 + 16
+    }
+
+    /// Measured natural heights of the two stacks inside OpenedPanelView.
+    /// The view writes these via PreferenceKey on every layout pass; we
+    /// derive `notchOpenedSize.height` from them so the silhouette grows
+    /// alongside the streamed reply, capped at `notchOpenedMaxHeight`.
+    public var historyContentHeight: CGFloat = 0
+    public var composerContentHeight: CGFloat = 0
+
+    public var notchOpenedSize: CGSize {
+        // Settings always needs the full panel — provider/model/effort cards
+        // plus the quit button don't fit in compact height.
+        if showSettings {
+            return CGSize(width: notchOpenedWidth, height: notchOpenedSettingsHeight)
+        }
+        guard isAgentLoopActive else {
+            return CGSize(width: notchOpenedWidth, height: notchOpenedCompactHeight)
+        }
+        let desired = openedContentVerticalChrome + historyContentHeight + composerContentHeight
+        let clamped = min(max(desired, notchOpenedCompactHeight), notchOpenedMaxHeight)
+        return CGSize(width: notchOpenedWidth, height: clamped)
+    }
+
+    /// True once the conversation has at least one turn. Drives the panel
+    /// height switch (compact → expanded) so the history scroll has room to
+    /// render. Cleared by `AgentService.resetSession()` (the "+" header
+    /// button) or implicitly when no turn has been submitted yet.
+    public var isAgentLoopActive: Bool {
+        !agentService.turns.isEmpty
+    }
     public let inset: CGFloat
     public let animation: Animation = .interactiveSpring(
         duration: 0.5,
@@ -49,6 +100,8 @@ public final class NotchViewModel {
 
     public let senseStore: SenseStore
     public let agentService: AgentService
+    public let providerService: ProviderService
+    public let configService: ConfigService
 
     // Combine cancellables for the event-bridge subscriptions registered in
     // NotchViewModel+Events.swift.
@@ -60,11 +113,15 @@ public final class NotchViewModel {
     public init(
         senseStore: SenseStore,
         agentService: AgentService,
+        providerService: ProviderService,
+        configService: ConfigService,
         screenRect: CGRect,
         deviceNotchRect: CGRect
     ) {
         self.senseStore = senseStore
         self.agentService = agentService
+        self.providerService = providerService
+        self.configService = configService
         self.screenRect = screenRect
         self.deviceNotchRect = deviceNotchRect
         // Per design: -4 if there is a real notch, 0 otherwise — expands the
@@ -159,6 +216,7 @@ public final class NotchViewModel {
 
     public func notchClose() {
         status = .closed
+        showSettings = false
         broadcastStatus()
     }
 

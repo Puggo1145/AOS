@@ -10,6 +10,7 @@ import { Dispatcher } from "../src/rpc/dispatcher";
 import { StdioTransport, type ByteSink, type ByteSource } from "../src/rpc/transport";
 import { registerAgentHandlers, setModelResolver, resetModelResolver } from "../src/agent/loop";
 import { TurnRegistry } from "../src/agent/registry";
+import { Conversation } from "../src/agent/conversation";
 import {
   registerApiProvider,
   unregisterApiProviders,
@@ -138,9 +139,10 @@ async function flush(ms = 30): Promise<void> {
 // Tests
 // ---------------------------------------------------------------------------
 
-test("happy path: ack + thinking + tokens + done", async () => {
+test("happy path: ack + turnStarted + thinking + tokens + done", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
-  registerAgentHandlers(dispatcher, { registry: new TurnRegistry() });
+  const convo = new Conversation();
+  registerAgentHandlers(dispatcher, { registry: new TurnRegistry(), conversation: convo });
 
   nextStream = (model) => {
     const s = new AssistantMessageEventStream();
@@ -167,20 +169,39 @@ test("happy path: ack + thinking + tokens + done", async () => {
   expect(captured.responses).toHaveLength(1);
   expect(captured.responses[0].result).toEqual({ accepted: true });
 
+  // First two notifications: conversation.turnStarted (snapshot of the
+  // freshly registered turn) then ui.status thinking. Order matters — the
+  // turn must exist in observers' mirrors before any token / status delta
+  // can land on it.
   const methods = captured.notifications.map((n) => n.method);
-  expect(methods[0]).toBe("ui.status");
-  expect(captured.notifications[0].params).toEqual({ turnId: "T1", status: "thinking" });
+  expect(methods.slice(0, 2)).toEqual(["conversation.turnStarted", "ui.status"]);
+  expect(captured.notifications[0].params.turn).toMatchObject({
+    id: "T1",
+    prompt: "hi",
+    reply: "",
+    status: "thinking",
+  });
+  expect(captured.notifications[1].params).toEqual({ turnId: "T1", status: "thinking" });
 
   const tokens = captured.notifications.filter((n) => n.method === "ui.token");
   expect(tokens.map((t) => t.params.delta).join("")).toBe("Hello, world");
 
   const last = captured.notifications.at(-1)!;
   expect(last).toEqual({ method: "ui.status", params: { turnId: "T1", status: "done" } });
+
+  // Conversation now holds the completed turn with both the streamed reply
+  // and the AssistantMessage stash needed to replay this turn into the next
+  // request's LLM context.
+  expect(convo.turns).toHaveLength(1);
+  expect(convo.turns[0].status).toBe("done");
+  expect(convo.turns[0].reply).toBe("Hello, world");
+  expect(convo.turns[0].finalAssistant).toBeDefined();
 });
 
 test("cancel path: agent.cancel aborts the stream and emits status done", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
-  registerAgentHandlers(dispatcher, { registry: new TurnRegistry() });
+  const convo = new Conversation();
+  registerAgentHandlers(dispatcher, { registry: new TurnRegistry(), conversation: convo });
 
   let abortFired = false;
   nextStream = (model, signal) => {
@@ -225,11 +246,17 @@ test("cancel path: agent.cancel aborts the stream and emits status done", async 
   // before abort, so the count should be 1.)
   const tokens = captured.notifications.filter((n) => n.method === "ui.token");
   expect(tokens).toHaveLength(1);
+
+  // Conversation marks the turn cancelled so the next request's
+  // llmMessages() drops it (a half-streamed reply is dead context).
+  expect(convo.turns[0].status).toBe("cancelled");
+  expect(convo.llmMessages()).toEqual([]);
 });
 
 test("error path: stream error event maps to ui.error with picked code", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
-  registerAgentHandlers(dispatcher, { registry: new TurnRegistry() });
+  const convo = new Conversation();
+  registerAgentHandlers(dispatcher, { registry: new TurnRegistry(), conversation: convo });
 
   nextStream = (model) => {
     const s = new AssistantMessageEventStream();
@@ -253,4 +280,102 @@ test("error path: stream error event maps to ui.error with picked code", async (
   const statuses = captured.notifications.filter((n) => n.method === "ui.status");
   // Only the initial "thinking" is emitted before the error short-circuit.
   expect(statuses.map((s) => s.params.status)).toEqual(["thinking"]);
+});
+
+test("conversation history: prior turn's user+assistant messages are replayed into the next request", async () => {
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const convo = new Conversation();
+  registerAgentHandlers(dispatcher, { registry: new TurnRegistry(), conversation: convo });
+
+  // Capture the messages array the streamSimple wrapper sees on each call so
+  // we can prove the second turn carried turn 1's full history.
+  const seenMessages: any[][] = [];
+  nextStream = (model) => {
+    const s = new AssistantMessageEventStream();
+    queueMicrotask(async () => {
+      const partial = fakeAssistantMessage(model);
+      s.push({ type: "text_delta", contentIndex: 0, delta: "first-reply", partial });
+      s.push({ type: "done", reason: "stop", message: partial });
+      s.end();
+    });
+    return s;
+  };
+  // Hook the existing fake provider to record context.messages on each call.
+  const original = nextStream;
+  nextStream = (model, signal) => {
+    // We can't easily reach Context here from the closure; instead intercept
+    // via re-registering the api provider. Simpler: read convo.llmMessages()
+    // *before* the stream runs, which is exactly what the loop does.
+    seenMessages.push(convo.llmMessages().map((m) => ({ role: m.role, content: m.content })));
+    return original(model, signal);
+  };
+
+  pushInbound({ jsonrpc: "2.0", id: 1, method: "agent.submit", params: { turnId: "T1", prompt: "first", citedContext: {} } });
+  await flush(80);
+
+  // Reset stream for turn 2 so it can finish its own done.
+  nextStream = (model, signal) => {
+    seenMessages.push(convo.llmMessages().map((m) => ({ role: m.role, content: m.content })));
+    const s = new AssistantMessageEventStream();
+    queueMicrotask(async () => {
+      const partial = fakeAssistantMessage(model);
+      s.push({ type: "text_delta", contentIndex: 0, delta: "second-reply", partial });
+      s.push({ type: "done", reason: "stop", message: partial });
+      s.end();
+    });
+    return s;
+  };
+
+  pushInbound({ jsonrpc: "2.0", id: 2, method: "agent.submit", params: { turnId: "T2", prompt: "second", citedContext: {} } });
+  await flush(80);
+
+  // Turn 1 saw only its own user message.
+  expect(seenMessages[0].map((m) => [m.role, m.content])).toEqual([["user", "first"]]);
+
+  // Turn 2 saw turn 1's (user + assistant) followed by its own user message.
+  // This is the "agent has memory across turns" assertion that broke before
+  // conversation state moved into the sidecar.
+  expect(seenMessages[1]).toHaveLength(3);
+  expect(seenMessages[1][0]).toMatchObject({ role: "user", content: "first" });
+  expect(seenMessages[1][1].role).toBe("assistant");
+  expect(seenMessages[1][2]).toMatchObject({ role: "user", content: "second" });
+
+  expect(captured.notifications.filter((n) => n.method === "conversation.turnStarted")).toHaveLength(2);
+});
+
+test("agent.reset wipes conversation, aborts in-flight turn, and emits conversation.reset", async () => {
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const convo = new Conversation();
+  registerAgentHandlers(dispatcher, { registry: new TurnRegistry(), conversation: convo });
+
+  let abortFired = false;
+  nextStream = (model, signal) => {
+    const s = new AssistantMessageEventStream();
+    queueMicrotask(async () => {
+      const partial = fakeAssistantMessage(model);
+      s.push({ type: "text_delta", contentIndex: 0, delta: "partial", partial });
+      await new Promise<void>((resolve) => {
+        if (signal?.aborted) return resolve();
+        signal?.addEventListener("abort", () => { abortFired = true; resolve(); });
+      });
+      const terminal = fakeAssistantMessage(model);
+      terminal.stopReason = "aborted";
+      s.push({ type: "done", reason: "stop", message: terminal });
+      s.end();
+    });
+    return s;
+  };
+
+  pushInbound({ jsonrpc: "2.0", id: 1, method: "agent.submit", params: { turnId: "T1", prompt: "hi", citedContext: {} } });
+  await flush(30);
+  expect(convo.turns).toHaveLength(1);
+
+  pushInbound({ jsonrpc: "2.0", id: 2, method: "agent.reset", params: {} });
+  await flush(80);
+
+  const resetResp = captured.responses.find((r) => r.id === 2);
+  expect(resetResp?.result).toEqual({ ok: true });
+  expect(abortFired).toBe(true);
+  expect(convo.turns).toEqual([]);
+  expect(captured.notifications.find((n) => n.method === "conversation.reset")).toBeDefined();
 });

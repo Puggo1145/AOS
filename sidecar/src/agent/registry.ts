@@ -35,6 +35,13 @@ export class TurnRegistry {
     this.turns.delete(turnId);
   }
 
+  /// Abort every live turn. Used by `agent.reset` to ensure no stream
+  /// continues writing into a conversation that's about to be wiped.
+  abortAll(): void {
+    for (const c of this.turns.values()) c.abort();
+    this.turns.clear();
+  }
+
   /// Test helper.
   get size(): number {
     return this.turns.size;

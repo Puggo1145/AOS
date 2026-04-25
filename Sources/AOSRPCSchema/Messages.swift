@@ -121,6 +121,13 @@ public enum RPCErrorCode {
     public static let payloadTooLarge: Int = -32001
     public static let timeout: Int = -32002
     public static let permissionDenied: Int = -32003
+
+    /// Auth segment (provider OAuth login). Per onboarding plan.
+    public static let loginInProgress: Int = -32200
+    public static let loginCancelled: Int = -32201
+    public static let loginTimeout: Int = -32202
+    public static let unknownProvider: Int = -32203
+    public static let loginNotConfigured: Int = -32204
 }
 
 // MARK: - Method name constants
@@ -131,9 +138,20 @@ public enum RPCMethod {
     public static let rpcPing = "rpc.ping"
     public static let agentSubmit = "agent.submit"
     public static let agentCancel = "agent.cancel"
+    public static let agentReset = "agent.reset"
+    public static let conversationTurnStarted = "conversation.turnStarted"
+    public static let conversationReset = "conversation.reset"
     public static let uiToken = "ui.token"
     public static let uiStatus = "ui.status"
     public static let uiError = "ui.error"
+    public static let providerStatus = "provider.status"
+    public static let providerStartLogin = "provider.startLogin"
+    public static let providerCancelLogin = "provider.cancelLogin"
+    public static let providerLoginStatus = "provider.loginStatus"
+    public static let providerStatusChanged = "provider.statusChanged"
+    public static let configGet = "config.get"
+    public static let configSet = "config.set"
+    public static let configSetEffort = "config.setEffort"
 }
 
 // MARK: - JSONValue

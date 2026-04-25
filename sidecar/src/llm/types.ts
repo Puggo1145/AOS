@@ -115,6 +115,11 @@ export interface AssistantMessage {
   usage: Usage;
   stopReason: StopReason;
   errorMessage?: string;
+  /// Open-ended typed error reason. Currently used by the agent loop to
+  /// detect `"authInvalidated"` and project to `provider.statusChanged`.
+  /// Per docs/plans/onboarding.md §"typed auth error 传播".
+  errorReason?: "authInvalidated" | "contextOverflow" | "permissionDenied";
+  errorProviderId?: string;
   timestamp: number;
 }
 

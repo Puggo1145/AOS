@@ -27,6 +27,8 @@ public final class CompositionRoot {
     public let sidecarProcess: SidecarProcess
     public private(set) var rpcClient: RPCClient?
     public private(set) var agentService: AgentService?
+    public private(set) var providerService: ProviderService?
+    public private(set) var configService: ConfigService?
     public private(set) var notchWindowController: NotchWindowController?
 
     /// Latest fatal error surfaced during boot (e.g. handshake mismatch,
@@ -67,13 +69,18 @@ public final class CompositionRoot {
         client.start()
         self.rpcClient = client
 
-        // 3. Construct AgentService (handler registration runs in init).
+        // 3. Construct ProviderService (notification handler registration only,
+        //    no RPC issued yet), ConfigService, and AgentService.
+        let provider = ProviderService(rpc: client)
+        self.providerService = provider
+        let config = ConfigService(rpc: client)
+        self.configService = config
         let agent = AgentService(rpc: client)
         self.agentService = agent
 
         // 4. Mount the notch window before awaiting handshake so the user
-        //    sees the bar immediately. If handshake fails, the panel surfaces
-        //    the error.
+        //    sees the bar immediately. ProviderService starts in `unknown`
+        //    state — onboard renders a loading affordance until step 6.
         mountWindow()
 
         // 5. Await handshake. MAJOR mismatch from the sidecar terminates it
@@ -87,9 +94,21 @@ public final class CompositionRoot {
             )
             fatalBootError = "RPC handshake failed: \(error)"
             sidecarProcess.terminate()
+            EventMonitors.shared.start()
+            return
         }
 
-        // 6. Start global event monitors (closed/popping/opened state machine).
+        // 6. After handshake: refresh provider status so the onboard panel
+        //    can flip to either the "ready" branch (input panel) or the
+        //    actual onboard cards. Failure is logged only — UI stays on the
+        //    loading affordance, which is the right signal in that case.
+        //    Pull config in parallel so the settings panel has data on first
+        //    open (catalog snapshot + saved selection).
+        async let providerRefresh: () = provider.refreshStatus()
+        async let configRefresh: () = config.refresh()
+        _ = await (providerRefresh, configRefresh)
+
+        // 7. Start global event monitors (closed/popping/opened state machine).
         EventMonitors.shared.start()
     }
 
@@ -115,17 +134,19 @@ public final class CompositionRoot {
             )
             return
         }
-        guard let agent = agentService else {
-            // mountWindow may be called before the agentService is built (when
-            // the sidecar fails to spawn). The notch UI is useful even then —
-            // we surface the boot error via the panel. Construct a no-op
-            // AgentService backed by a dummy RPC; this is *only* the boot-fail
-            // path, not a stub for missing functionality.
+        guard let agent = agentService,
+              let provider = providerService,
+              let config = configService else {
+            // mountWindow may be called before agent/provider/config services are
+            // built (sidecar failed to spawn). Skip rather than partially
+            // render — the boot path surfaces the error via fatalBootError.
             return
         }
         notchWindowController = NotchWindowController(
             senseStore: senseStore,
             agentService: agent,
+            providerService: provider,
+            configService: config,
             screen: screen
         )
     }
@@ -136,6 +157,9 @@ public final class CompositionRoot {
         notchWindowController = nil
         rpcClient?.stop()
         rpcClient = nil
+        providerService = nil
+        configService = nil
+        agentService = nil
         sidecarProcess.terminate()
         senseStore.stop()
     }

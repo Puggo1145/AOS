@@ -97,16 +97,38 @@ function directionOf(method: string): Direction {
       return "both";
     case "agent":
     case "settings":
+    case "config":
       return "shellToBun";
     case "computerUse":
     case "ui":
+    case "conversation":
       return "bunToShell";
+    case "provider":
+      // Method-level direction: status/startLogin/cancelLogin are Shell→Bun
+      // (inbound requests we handle), while loginStatus/statusChanged are
+      // Bun→Shell notifications. The namespace is `both`; the per-method
+      // restriction is enforced via PROVIDER_METHOD_DIRECTIONS below so
+      // dispatcher.notify("provider.status", ...) throws (request method
+      // shouldn't be sent as a notification).
+      return "both";
     default:
       // Unknown namespace: be conservative — treat as "no direction allowed".
       // Inbound: MethodNotFound; outbound: programmer error.
       return "shellToBun"; // accept inbound; outbound will hit handler-not-found
   }
 }
+
+/// Per-method direction within `provider.*`. Requests are Shell→Bun;
+/// notifications are Bun→Shell. Unknown methods fall through to
+/// MethodNotFound on the inbound side and a programmer-error on outbound.
+type ProviderMethodKind = "request" | "notification";
+const PROVIDER_METHOD_KINDS: Record<string, ProviderMethodKind> = {
+  "provider.status": "request",
+  "provider.startLogin": "request",
+  "provider.cancelLogin": "request",
+  "provider.loginStatus": "notification",
+  "provider.statusChanged": "notification",
+};
 
 // ---------------------------------------------------------------------------
 // Dispatcher
@@ -206,6 +228,12 @@ export class Dispatcher {
     const dir = directionOf(method);
     if (dir === "shellToBun") {
       throw new Error(`programmer error: Bun cannot send notification '${method}' (direction shellToBun)`);
+    }
+    // provider.* is `both` at namespace level, but request methods must not
+    // be sent as notifications (and vice versa).
+    const kind = PROVIDER_METHOD_KINDS[method];
+    if (kind === "request") {
+      throw new Error(`programmer error: '${method}' is a request method, cannot be sent as notification`);
     }
     const frame: RPCNotification<object> = { jsonrpc: "2.0", method, params };
     this.transport.writeLine(JSON.stringify(frame)).catch((err) => {

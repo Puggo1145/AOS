@@ -8,11 +8,12 @@
 // wired this round.
 
 import { hasChatGPTPlanToken } from "./oauth/storage";
+import { PROVIDER_IDS } from "../models/catalog";
 
 export const AUTHENTICATED_SENTINEL = "<authenticated>";
 
 export function getEnvApiKey(provider: string): string | undefined {
-  if (provider === "chatgpt-plan") {
+  if (provider === PROVIDER_IDS.chatgptPlan) {
     return hasChatGPTPlanToken() ? AUTHENTICATED_SENTINEL : undefined;
   }
   if (provider === "openai") return process.env.OPENAI_API_KEY;

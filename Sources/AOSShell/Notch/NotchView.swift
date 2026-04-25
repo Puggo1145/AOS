@@ -71,6 +71,11 @@ struct NotchView: View {
         .offset(x: notchHorizontalOffset)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(statusAnimation, value: viewModel.status)
+        // Height changes as the agent loop activates / completes. Drive the
+        // silhouette + content frame interpolation off the size value so the
+        // bottom edge eases down (or back up) instead of snapping.
+        .animation(.smooth(duration: 0.32, extraBounce: 0.05),
+                   value: viewModel.notchOpenedSize.height)
     }
 
     /// Closing back to the device notch must not overshoot — a bouncy spring
@@ -88,12 +93,9 @@ struct NotchView: View {
     private var content: some View {
         ZStack(alignment: .top) {
             if viewModel.status == .opened {
-                OpenedPanelView(
-                    viewModel: viewModel,
-                    senseStore: viewModel.senseStore,
-                    agentService: viewModel.agentService
-                )
-                .transition(.identity)
+                openedContent
+                    .animation(.smooth(duration: 0.32), value: viewModel.showSettings)
+                    .animation(.smooth(duration: 0.32), value: viewModel.providerService.hasReadyProvider)
             }
 
             if viewModel.status != .opened {
@@ -106,6 +108,41 @@ struct NotchView: View {
             height: contentCanvasSize.height,
             alignment: .top
         )
+    }
+
+    /// Opened-state inner content. Switching among Onboard / Opened /
+    /// Settings uses `.blurReplace` so the *contents* dissolve through a
+    /// Gaussian blur cross-fade while the silhouette itself stays rock
+    /// steady (the silhouette has its own animation driven by `status`).
+    @ViewBuilder
+    private var openedContent: some View {
+        ZStack {
+            if viewModel.showSettings {
+                SettingsPanelView(
+                    configService: viewModel.configService,
+                    topSafeInset: viewModel.deviceNotchRect.height,
+                    onClose: { viewModel.showSettings = false }
+                )
+                .frame(width: viewModel.notchOpenedSize.width,
+                       height: viewModel.notchOpenedSize.height)
+                .transition(.blurReplace)
+            } else if viewModel.providerService.hasReadyProvider {
+                OpenedPanelView(
+                    viewModel: viewModel,
+                    senseStore: viewModel.senseStore,
+                    agentService: viewModel.agentService
+                )
+                .transition(.blurReplace)
+            } else {
+                OnboardPanelView(
+                    providerService: viewModel.providerService,
+                    topSafeInset: viewModel.deviceNotchRect.height
+                )
+                .frame(width: viewModel.notchOpenedSize.width,
+                       height: viewModel.notchOpenedSize.height)
+                .transition(.blurReplace)
+            }
+        }
     }
 
     private var closedBar: some View {

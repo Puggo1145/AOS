@@ -123,6 +123,43 @@ final class RoundtripTests: XCTestCase {
         )
     }
 
+    // MARK: - provider.*
+
+    func testProviderStatusRoundtrip() throws {
+        try assertRoundtrip(
+            fixture: "provider.status.json",
+            as: RPCRequest<ProviderStatusParams>.self
+        )
+    }
+
+    func testProviderStartLoginRoundtrip() throws {
+        try assertRoundtrip(
+            fixture: "provider.startLogin.json",
+            as: RPCRequest<ProviderStartLoginParams>.self
+        )
+    }
+
+    func testProviderCancelLoginRoundtrip() throws {
+        try assertRoundtrip(
+            fixture: "provider.cancelLogin.json",
+            as: RPCRequest<ProviderCancelLoginParams>.self
+        )
+    }
+
+    func testProviderLoginStatusRoundtrip() throws {
+        try assertRoundtrip(
+            fixture: "provider.loginStatus.json",
+            as: RPCNotification<ProviderLoginStatusParams>.self
+        )
+    }
+
+    func testProviderStatusChangedRoundtrip() throws {
+        try assertRoundtrip(
+            fixture: "provider.statusChanged.json",
+            as: RPCNotification<ProviderStatusChangedParams>.self
+        )
+    }
+
     // MARK: - Schema invariants
 
     func testProtocolVersionConstant() {

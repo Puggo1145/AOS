@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","method":"provider.statusChanged","params":{"providerId":"chatgpt-plan","reason":"authInvalidated","state":"unauthenticated"}}

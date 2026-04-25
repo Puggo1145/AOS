@@ -12,7 +12,7 @@ Together they form a Read + Write loop that lets the agent collaborate with the 
 Architecture:
 
 - **Shell** (Swift / SwiftUI, parent process) — hosts the Notch UI and all macOS-native kits (`AOSOSSenseKit`, `AOSComputerUseKit`).
-- **Sidecar** (Bun / TypeScript, child process) — agent loop, tool dispatch, context management, LLM orchestration.
+- **Sidecar** (Bun / TypeScript, child process) — All agent functionalities and businesses including agent loop, session management, tool dispatch, context management, LLM orchestration.
 - **Channel** — single stdio JSON-RPC 2.0 between Shell and Sidecar. Swift `Codable` is the schema source of truth; TS types are generated.
 
 Feature-level plans live in `docs/plans/`.

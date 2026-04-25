@@ -21,7 +21,10 @@ export interface ChatGPTPlanToken {
   accessToken: string;
   refreshToken: string;
   expiresAt: number; // unix ms
-  accountId?: string;
+  /// Required. A token persisted without `accountId` cannot authorize
+  /// downstream Codex API calls; treat such files as malformed and refuse
+  /// to load them (the caller will surface unauthenticated to the UI).
+  accountId: string;
 }
 
 export function chatgptTokenPath(): string {
@@ -51,7 +54,9 @@ export function readChatGPTPlanToken(): ChatGPTPlanToken | null {
     if (
       typeof parsed?.accessToken === "string" &&
       typeof parsed?.refreshToken === "string" &&
-      typeof parsed?.expiresAt === "number"
+      typeof parsed?.expiresAt === "number" &&
+      typeof parsed?.accountId === "string" &&
+      parsed.accountId.length > 0
     ) {
       return parsed as ChatGPTPlanToken;
     }

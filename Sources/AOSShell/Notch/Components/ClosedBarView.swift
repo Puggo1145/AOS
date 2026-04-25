@@ -27,7 +27,7 @@ struct ClosedBarView: View {
                 .frame(width: h, height: h)
             Spacer(minLength: 0)
                 .frame(width: deviceNotchRect.width, height: h)
-            StatusEmojiView(status: agentStatus, large: false)
+            StatusEmojiView(status: agentStatus, size: .small)
                 .frame(width: h, height: h)
         }
         .frame(width: deviceNotchRect.width + h * 2, height: h)

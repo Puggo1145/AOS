@@ -42,6 +42,90 @@ public struct AgentCancelResult: Codable, Sendable, Equatable {
     }
 }
 
+// MARK: - agent.reset
+//
+// `agent.reset` clears the entire conversation kept in the sidecar (cancels
+// any in-flight turn first). The sidecar follows up with a
+// `conversation.reset` notification so all observers can drop their mirrors.
+// Empty-params are encoded as `{}`.
+
+public struct AgentResetParams: Codable, Sendable, Equatable {
+    public init() {}
+}
+
+public struct AgentResetResult: Codable, Sendable, Equatable {
+    public let ok: Bool
+
+    public init(ok: Bool) {
+        self.ok = ok
+    }
+}
+
+// MARK: - conversation.* (Sidecar → Shell notifications)
+//
+// The sidecar owns the canonical conversation state (turns array + the LLM
+// history derived from it). Shell mirrors it from these notifications:
+//   - `conversation.turnStarted { turn }` once per `agent.submit` after the
+//     sidecar has registered the turn. Carries the snapshot the sidecar
+//     persisted (initial empty reply, status: thinking).
+//   - `conversation.reset` after `agent.reset` wipes the store.
+//   - reply token deltas keep flowing over the existing `ui.token` so tight
+//     streaming doesn't pay a serialization cost per character.
+//   - per-turn status changes flow over `ui.status` / `ui.error`.
+
+public enum TurnStatus: String, Codable, Sendable, Equatable {
+    case thinking
+    case working
+    case waiting
+    case done
+    case error
+    case cancelled
+}
+
+public struct ConversationTurnWire: Codable, Sendable, Equatable {
+    public let id: String
+    public let prompt: String
+    public let citedContext: CitedContext
+    public let reply: String
+    public let status: TurnStatus
+    public let errorMessage: String?
+    public let errorCode: Int?
+    /// Milliseconds since epoch.
+    public let startedAt: Int
+
+    public init(
+        id: String,
+        prompt: String,
+        citedContext: CitedContext,
+        reply: String,
+        status: TurnStatus,
+        errorMessage: String? = nil,
+        errorCode: Int? = nil,
+        startedAt: Int
+    ) {
+        self.id = id
+        self.prompt = prompt
+        self.citedContext = citedContext
+        self.reply = reply
+        self.status = status
+        self.errorMessage = errorMessage
+        self.errorCode = errorCode
+        self.startedAt = startedAt
+    }
+}
+
+public struct ConversationTurnStartedParams: Codable, Sendable, Equatable {
+    public let turn: ConversationTurnWire
+
+    public init(turn: ConversationTurnWire) {
+        self.turn = turn
+    }
+}
+
+public struct ConversationResetParams: Codable, Sendable, Equatable {
+    public init() {}
+}
+
 // MARK: - CitedContext
 //
 // Wire-only projection of `SenseContext`. Live model fields that hold

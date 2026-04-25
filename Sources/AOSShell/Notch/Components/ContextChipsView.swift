@@ -9,30 +9,22 @@ import AOSOSSenseKit
 //   chips = behaviors[] + windowChip
 //
 // In Stage 0 the `behaviors` list is always empty (no GeneralProbe / no
-// adapters registered yet), so the only rendered chip is the derived
-// window chip "<App> · <Window Title>". This is the design's degraded
-// path — when later stages start producing behaviors the row populates
-// without code change.
+// adapters registered yet), so the only rendered chip is the frontmost
+// app chip — its icon + the app's display name in a borderless rounded
+// rect. Window titles are intentionally omitted; the icon already carries
+// the app identity and dropping the title keeps the row compact.
 
 struct ContextChipsView: View {
     let senseStore: SenseStore
-
-    private var windowChipSummary: String? {
-        guard let app = senseStore.context.app else { return nil }
-        if let title = senseStore.context.window?.title, !title.isEmpty {
-            return "\(app.name) · \(title)"
-        }
-        return app.name
-    }
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(senseStore.context.behaviors, id: \.id) { envelope in
-                    chip(text: envelope.displaySummary)
+                    textChip(text: envelope.displaySummary)
                 }
-                if let summary = windowChipSummary {
-                    chip(text: summary)
+                if let app = senseStore.context.app {
+                    appChip(name: app.name, icon: app.icon)
                 }
             }
             .padding(.vertical, 4)
@@ -40,18 +32,41 @@ struct ContextChipsView: View {
         .frame(height: 32)
     }
 
+    /// App identity chip: 16pt icon + app name, no border, soft fill.
     @ViewBuilder
-    private func chip(text: String) -> some View {
+    private func appChip(name: String, icon: NSImage?) -> some View {
+        HStack(spacing: 6) {
+            if let icon {
+                Image(nsImage: icon)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 16, height: 16)
+            }
+            Text(name)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.85))
+                .lineLimit(1)
+        }
+        .padding(.leading, 6)
+        .padding(.trailing, 10)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.white.opacity(0.08))
+        )
+    }
+
+    /// Generic text chip used for behavior envelopes from later stages.
+    @ViewBuilder
+    private func textChip(text: String) -> some View {
         Text(text)
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(.white.opacity(0.8))
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(.white.opacity(0.85))
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .background(
-                Capsule().fill(Color.white.opacity(0.08))
-            )
-            .overlay(
-                Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.white.opacity(0.08))
             )
             .lineLimit(1)
     }

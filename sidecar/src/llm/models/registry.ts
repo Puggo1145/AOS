@@ -3,7 +3,7 @@
 // via direct mutation (out of scope for this round).
 
 import type { Api, Model } from "../types";
-import { MODELS } from "./catalog";
+import { DEFAULT_MODEL_PER_PROVIDER, MODELS, type KnownProvider } from "./catalog";
 
 const modelRegistry: Map<string, Map<string, Model<Api>>> = new Map();
 
@@ -34,6 +34,12 @@ export function getModels(provider: string): Model<Api>[] {
   const inner = modelRegistry.get(provider);
   if (!inner) return [];
   return [...inner.values()];
+}
+
+export function getDefaultModel<TApi extends Api = Api>(provider: string): Model<TApi> {
+  const id = (DEFAULT_MODEL_PER_PROVIDER as Record<string, string | undefined>)[provider];
+  if (!id) throw new Error(`No default model registered for provider: ${provider}`);
+  return getModel<TApi>(provider, id);
 }
 
 export function modelsAreEqual(a: Model<Api>, b: Model<Api>): boolean {

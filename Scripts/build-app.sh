@@ -15,6 +15,7 @@ swift build -c debug --product AOSShell
 mkdir -p AOS.app/Contents/MacOS AOS.app/Contents/Resources
 cp .build/debug/AOSShell AOS.app/Contents/MacOS/AOS
 cp Sources/AOSShellResources/Info.plist AOS.app/Contents/Info.plist
+rm -rf AOS.app/Contents/Resources/sidecar
 cp -R sidecar AOS.app/Contents/Resources/sidecar
 
 echo "Built AOS.app at $REPO_ROOT/AOS.app"

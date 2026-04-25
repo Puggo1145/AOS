@@ -26,6 +26,11 @@ import {
   type UITokenParams,
   type UIStatusParams,
   type UIErrorParams,
+  type ProviderStatusParams,
+  type ProviderStartLoginParams,
+  type ProviderCancelLoginParams,
+  type ProviderLoginStatusParams,
+  type ProviderStatusChangedParams,
 } from "../src/rpc/rpc-types";
 
 // Resolve repo root by walking up from this test file.
@@ -128,6 +133,47 @@ test("ui.error fixture roundtrips byte-equal", () => {
   const note = parsed as RPCNotification<UIErrorParams>;
   expect(note.method).toBe(RPCMethod.uiError);
   expect(typeof note.params.code).toBe("number");
+});
+
+test("provider.status fixture roundtrips byte-equal", () => {
+  assertRoundtrip("provider.status.json");
+  const { parsed } = loadFixture("provider.status.json");
+  const req = parsed as RPCRequest<ProviderStatusParams>;
+  expect(req.method).toBe(RPCMethod.providerStatus);
+});
+
+test("provider.startLogin fixture roundtrips byte-equal", () => {
+  assertRoundtrip("provider.startLogin.json");
+  const { parsed } = loadFixture("provider.startLogin.json");
+  const req = parsed as RPCRequest<ProviderStartLoginParams>;
+  expect(req.method).toBe(RPCMethod.providerStartLogin);
+  expect(req.params.providerId).toBe("chatgpt-plan");
+});
+
+test("provider.cancelLogin fixture roundtrips byte-equal", () => {
+  assertRoundtrip("provider.cancelLogin.json");
+  const { parsed } = loadFixture("provider.cancelLogin.json");
+  const req = parsed as RPCRequest<ProviderCancelLoginParams>;
+  expect(req.method).toBe(RPCMethod.providerCancelLogin);
+  expect(typeof req.params.loginId).toBe("string");
+});
+
+test("provider.loginStatus fixture roundtrips byte-equal", () => {
+  assertRoundtrip("provider.loginStatus.json");
+  const { parsed } = loadFixture("provider.loginStatus.json");
+  const note = parsed as RPCNotification<ProviderLoginStatusParams>;
+  expect(note.method).toBe(RPCMethod.providerLoginStatus);
+  expect(["awaitingCallback", "exchanging", "success", "failed"]).toContain(
+    note.params.state
+  );
+});
+
+test("provider.statusChanged fixture roundtrips byte-equal", () => {
+  assertRoundtrip("provider.statusChanged.json");
+  const { parsed } = loadFixture("provider.statusChanged.json");
+  const note = parsed as RPCNotification<ProviderStatusChangedParams>;
+  expect(note.method).toBe(RPCMethod.providerStatusChanged);
+  expect(["ready", "unauthenticated"]).toContain(note.params.state);
 });
 
 test("AOS_PROTOCOL_VERSION equals 1.0.0", () => {
