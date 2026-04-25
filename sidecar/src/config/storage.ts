@@ -8,13 +8,17 @@
 // can never produce a torn file. Schema is intentionally minimal — this
 // round only persists the user's selected provider/model.
 //
-// Fail-fast contract (P2.4):
+// Read contract:
 //   - file does not exist → return {} (first-run path; documented default)
-//   - file exists but JSON parse fails OR a present field has the wrong type
-//     → throw `MalformedConfigError`. Silently returning {} would let a
-//     corrupt config silently swap the user's selected model — exactly the
-//     kind of "fallback inside business state" AGENTS.md "Coding tastes"
-//     forbids.
+//   - file content is invalid (JSON parse fail OR field with wrong type)
+//     → throw `MalformedConfigError(kind: "parse" | "schema")`. The config.get
+//     handler turns this into an explicit, user-visible reset (banner +
+//     fresh `{}`); it is NOT a silent fallback.
+//   - file IO fails (permission denied, disk error, …)
+//     → throw `MalformedConfigError(kind: "read")`. Callers MUST NOT treat
+//     this as content corruption — auto-resetting on a transient IO error
+//     could destroy a still-good config. `config.get` lets these propagate
+//     so the user sees the error.
 //   - missing optional fields with valid surrounding JSON → return without
 //     them populated (still treated as not-set).
 
@@ -52,11 +56,20 @@ export interface UserConfig {
   hasCompletedOnboarding?: boolean;
 }
 
-/// Raised when the on-disk config file exists but cannot be parsed or
-/// contains a field whose type does not match the schema. Distinct from
-/// "file missing" so callers can surface the corruption to the user.
+/// Raised when the on-disk config file exists but cannot be loaded.
+/// `kind` tells callers what failed: `read` is an IO error (permission /
+/// disk), `parse` is JSON malformed, `schema` is JSON valid but a field
+/// has the wrong type. `config.get` auto-recovers `parse`/`schema` (the
+/// content is unrecoverable anyway) but propagates `read` (the file may
+/// still be intact — don't overwrite blindly).
+export type MalformedConfigKind = "read" | "parse" | "schema";
+
 export class MalformedConfigError extends Error {
-  constructor(message: string, public readonly cause?: unknown) {
+  constructor(
+    public readonly kind: MalformedConfigKind,
+    message: string,
+    public readonly cause?: unknown,
+  ) {
     super(message);
     this.name = "MalformedConfigError";
   }
@@ -78,6 +91,7 @@ export function readUserConfig(): UserConfig {
     raw = readFileSync(path, "utf-8");
   } catch (err) {
     throw new MalformedConfigError(
+      "read",
       `Failed to read config at ${path}: ${err instanceof Error ? err.message : String(err)}`,
       err,
     );
@@ -88,6 +102,7 @@ export function readUserConfig(): UserConfig {
     parsed = JSON.parse(raw);
   } catch (err) {
     throw new MalformedConfigError(
+      "parse",
       `Config file ${path} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
       err,
     );
@@ -95,6 +110,7 @@ export function readUserConfig(): UserConfig {
 
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new MalformedConfigError(
+      "schema",
       `Config file ${path} must be a JSON object at the top level`,
     );
   }
@@ -107,12 +123,14 @@ export function readUserConfig(): UserConfig {
     const sel = obj.selection;
     if (sel === null || typeof sel !== "object") {
       throw new MalformedConfigError(
+        "schema",
         `Config "selection" must be an object with { providerId, modelId }`,
       );
     }
     const s = sel as Record<string, unknown>;
     if (typeof s.providerId !== "string" || typeof s.modelId !== "string") {
       throw new MalformedConfigError(
+        "schema",
         `Config "selection" requires string providerId and modelId`,
       );
     }
@@ -123,6 +141,7 @@ export function readUserConfig(): UserConfig {
   if (obj.effort !== undefined) {
     if (typeof obj.effort !== "string" || !(EFFORT_LEVELS as readonly string[]).includes(obj.effort)) {
       throw new MalformedConfigError(
+        "schema",
         `Config "effort" must be one of ${EFFORT_LEVELS.join("|")}, got: ${JSON.stringify(obj.effort)}`,
       );
     }
@@ -133,6 +152,7 @@ export function readUserConfig(): UserConfig {
   if (obj.hasCompletedOnboarding !== undefined) {
     if (typeof obj.hasCompletedOnboarding !== "boolean") {
       throw new MalformedConfigError(
+        "schema",
         `Config "hasCompletedOnboarding" must be boolean, got: ${JSON.stringify(obj.hasCompletedOnboarding)}`,
       );
     }

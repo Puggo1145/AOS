@@ -83,19 +83,25 @@ public struct ConfigGetResult: Codable, Sendable, Equatable {
     /// to the onboard panels even if a permission or provider drops —
     /// failures surface as inline warnings + Settings affordances.
     public let hasCompletedOnboarding: Bool
+    /// `true` iff this `config.get` just discovered a malformed config
+    /// file and reset it to `{}`. Shell shows a one-time banner so the
+    /// user understands why their settings were wiped.
+    public let recoveredFromCorruption: Bool
 
     public init(
         selection: ConfigSelection?,
         effort: ConfigEffort?,
         defaultEffort: ConfigEffort,
         providers: [ConfigProviderEntry],
-        hasCompletedOnboarding: Bool
+        hasCompletedOnboarding: Bool,
+        recoveredFromCorruption: Bool
     ) {
         self.selection = selection
         self.effort = effort
         self.defaultEffort = defaultEffort
         self.providers = providers
         self.hasCompletedOnboarding = hasCompletedOnboarding
+        self.recoveredFromCorruption = recoveredFromCorruption
     }
 }
 

@@ -28,6 +28,11 @@ public final class ConfigService {
     /// stops sending the user back to the onboard panels even if a
     /// permission or provider drops.
     public private(set) var hasCompletedOnboarding: Bool = false
+    /// Set to `true` for one app session if `config.get` reported that
+    /// `~/.aos/config.json` was malformed and reset to `{}`. The Notch
+    /// reads this to show a one-time banner; `dismissCorruptionNotice()`
+    /// clears it (e.g., when the user closes the banner).
+    public private(set) var recoveredFromCorruption: Bool = false
 
     /// Effective selection used by the agent loop: explicit user pick if set,
     /// else the default of the first provider (which mirrors the sidecar's
@@ -72,6 +77,12 @@ public final class ConfigService {
             effort = result.effort
             defaultEffort = result.defaultEffort
             hasCompletedOnboarding = result.hasCompletedOnboarding
+            // Only flip `true` — never flip back via a later refresh.
+            // The flag is a one-shot session notice; the sidecar will
+            // report `recoveredFromCorruption: false` on every subsequent
+            // call now that the file is valid again, but the user still
+            // hasn't acknowledged the original reset.
+            if result.recoveredFromCorruption { recoveredFromCorruption = true }
             loaded = true
             lastError = nil
         } catch {
@@ -140,5 +151,11 @@ public final class ConfigService {
                 Data("[config] markOnboardingCompleted failed: \(error)\n".utf8)
             )
         }
+    }
+
+    /// Clear the corruption banner after the user has acknowledged it.
+    /// Local-only — there's nothing to persist on disk.
+    public func dismissCorruptionNotice() {
+        recoveredFromCorruption = false
     }
 }

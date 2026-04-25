@@ -58,17 +58,29 @@ function isKnownEffort(value: unknown): value is Effort {
 
 export function registerConfigHandlers(dispatcher: Dispatcher): void {
   dispatcher.registerRequest(RPCMethod.configGet, async (): Promise<ConfigGetResult> => {
+    // Auto-recover from corruption: AOS's user config is small (selection
+    // / effort / onboarding flag) and trivially re-set, so a one-shot
+    // reset + banner is a better UX than blocking the user behind a parse
+    // error they can't read. The Shell shows a notice via
+    // `recoveredFromCorruption` so the data loss isn't silent.
     let cfg: ReturnType<typeof readUserConfig>;
+    let recoveredFromCorruption = false;
     try {
       cfg = readUserConfig();
     } catch (err) {
-      // Malformed config surfaces as a typed RPC error so the Shell can show
-      // a "your config file is corrupt" affordance instead of silently
-      // restoring defaults. Per P2.4 fail-fast contract.
-      if (err instanceof MalformedConfigError) {
+      // Only auto-reset content corruption (`parse` / `schema`). A `read`
+      // failure means the file may still be intact (permission glitch,
+      // disk error, …); overwriting it could destroy valid data, so we
+      // surface the error and let the user investigate.
+      if (err instanceof MalformedConfigError && err.kind !== "read") {
+        writeUserConfig({});
+        cfg = {};
+        recoveredFromCorruption = true;
+      } else if (err instanceof MalformedConfigError) {
         throw new RPCMethodError(RPCErrorCode.agentConfigInvalid, err.message);
+      } else {
+        throw err;
       }
-      throw err;
     }
     return {
       selection: cfg.selection ?? null,
@@ -76,6 +88,7 @@ export function registerConfigHandlers(dispatcher: Dispatcher): void {
       defaultEffort: DEFAULT_EFFORT,
       providers: buildProviderCatalog(),
       hasCompletedOnboarding: cfg.hasCompletedOnboarding ?? false,
+      recoveredFromCorruption,
     };
   });
 

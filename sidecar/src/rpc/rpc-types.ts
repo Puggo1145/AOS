@@ -407,6 +407,11 @@ export interface ConfigGetResult {
   /// runtime permissions granted AND a ready provider. After that the
   /// Shell stops routing back to onboard panels.
   hasCompletedOnboarding: boolean;
+  /// `true` iff this `config.get` just discovered a malformed config file
+  /// and reset it to `{}`. The Shell uses this to surface a one-time
+  /// banner ("Settings file was corrupt and has been reset.") so the user
+  /// understands why they were sent back through onboarding.
+  recoveredFromCorruption: boolean;
 }
 
 export interface ConfigSetParams {

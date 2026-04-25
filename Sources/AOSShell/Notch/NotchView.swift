@@ -171,6 +171,16 @@ struct NotchView: View {
                 await viewModel.configService.markOnboardingCompleted()
             }
         }
+        .overlay(alignment: .top) {
+            if viewModel.configService.recoveredFromCorruption {
+                ConfigCorruptionBanner(
+                    topSafeInset: viewModel.deviceNotchRect.height,
+                    onDismiss: { viewModel.configService.dismissCorruptionNotice() }
+                )
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.smooth(duration: 0.32), value: viewModel.configService.recoveredFromCorruption)
     }
 
     /// Both onboard prerequisites first satisfied while config has

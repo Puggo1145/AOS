@@ -66,8 +66,10 @@ test("markOnboardingCompleted preserves existing selection and effort", async ()
 });
 
 test("markOnboardingCompleted refuses to overwrite a malformed config", async () => {
-  // A corrupt file would lose `selection`/`effort` if the handler fell back
-  // to `{}`. The latch is automatic, not a user recovery action — must throw.
+  // Defensive edge case: in normal flow `config.get` runs at startup and
+  // auto-resets corruption, so this handler should never see a malformed
+  // file. But if the user manually corrupts it mid-session, the latch
+  // must NOT silently rewrite (would lose selection/effort).
   writeRaw('{ "selection": { "providerId": 42, "modelId": "gpt-5.5" } }');
 
   const handlers = captureHandlers();
@@ -81,6 +83,36 @@ test("markOnboardingCompleted refuses to overwrite a malformed config", async ()
   }
   expect(threw).toBeInstanceOf(RPCMethodError);
   expect((threw as RPCMethodError).code).toBe(RPCErrorCode.agentConfigInvalid);
+});
+
+test("configGet auto-resets a malformed config and signals recoveredFromCorruption", async () => {
+  writeRaw('{ "effort": "ludicrous" }');
+
+  const handlers = captureHandlers();
+  const handler = handlers.get(RPCMethod.configGet)!;
+  const result = await handler({}, { id: "1" });
+
+  expect(result.recoveredFromCorruption).toBe(true);
+  expect(result.selection).toBe(null);
+  expect(result.effort).toBe(null);
+  expect(result.hasCompletedOnboarding).toBe(false);
+  // File on disk should now be valid empty config.
+  expect(readUserConfig()).toEqual({});
+});
+
+test("configGet on a healthy config does not signal recovery", async () => {
+  writeUserConfig({
+    selection: { providerId: "chatgpt-plan", modelId: "gpt-5.5" },
+    effort: "high",
+  });
+
+  const handlers = captureHandlers();
+  const handler = handlers.get(RPCMethod.configGet)!;
+  const result = await handler({}, { id: "1" });
+
+  expect(result.recoveredFromCorruption).toBe(false);
+  expect(result.selection).toEqual({ providerId: "chatgpt-plan", modelId: "gpt-5.5" });
+  expect(result.effort).toBe("high");
 });
 
 test("markOnboardingCompleted is idempotent on already-completed config", async () => {
