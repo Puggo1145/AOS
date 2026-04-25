@@ -72,6 +72,9 @@ export const RPCErrorCode = {
   loginTimeout: -32202,
   unknownProvider: -32203,
   loginNotConfigured: -32204,
+  // agent.* segment — agent-loop-level failures
+  agentContextOverflow: -32300,
+  agentConfigInvalid: -32301,
 } as const;
 
 export type RPCErrorCodeName = keyof typeof RPCErrorCode;

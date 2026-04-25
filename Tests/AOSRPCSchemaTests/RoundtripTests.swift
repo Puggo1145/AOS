@@ -38,9 +38,9 @@ final class RoundtripTests: XCTestCase {
     }
 
     private func canonicalEncode<T: Encodable>(_ value: T) throws -> Data {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        return try encoder.encode(value)
+        // Use the package's canonical encoder so any drift in output flags
+        // shows up in both runtime + tests at once.
+        try CanonicalJSON.encode(value)
     }
 
     private func assertRoundtrip<T: Codable & Equatable>(
@@ -97,6 +97,52 @@ final class RoundtripTests: XCTestCase {
         try assertRoundtrip(
             fixture: "agent.cancel.json",
             as: RPCRequest<AgentCancelParams>.self
+        )
+    }
+
+    func testAgentResetRoundtrip() throws {
+        try assertRoundtrip(
+            fixture: "agent.reset.json",
+            as: RPCRequest<AgentResetParams>.self
+        )
+    }
+
+    // MARK: - conversation.*
+
+    func testConversationTurnStartedRoundtrip() throws {
+        try assertRoundtrip(
+            fixture: "conversation.turnStarted.json",
+            as: RPCNotification<ConversationTurnStartedParams>.self
+        )
+    }
+
+    func testConversationResetRoundtrip() throws {
+        try assertRoundtrip(
+            fixture: "conversation.reset.json",
+            as: RPCNotification<ConversationResetParams>.self
+        )
+    }
+
+    // MARK: - config.*
+
+    func testConfigGetRoundtrip() throws {
+        try assertRoundtrip(
+            fixture: "config.get.json",
+            as: RPCRequest<ConfigGetParams>.self
+        )
+    }
+
+    func testConfigSetRoundtrip() throws {
+        try assertRoundtrip(
+            fixture: "config.set.json",
+            as: RPCRequest<ConfigSetParams>.self
+        )
+    }
+
+    func testConfigSetEffortRoundtrip() throws {
+        try assertRoundtrip(
+            fixture: "config.setEffort.json",
+            as: RPCRequest<ConfigSetEffortParams>.self
         )
     }
 

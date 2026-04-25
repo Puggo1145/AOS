@@ -31,6 +31,11 @@ struct OnboardPanelView: View {
 
     private var headline: String {
         guard let session = providerService.loginSession else {
+            if !providerService.statusLoaded {
+                return providerService.statusError == nil
+                    ? "Loading sign-in options…"
+                    : "Couldn't reach sidecar"
+            }
             return "Choose a sign-in method"
         }
         switch session.state {
@@ -50,8 +55,8 @@ struct OnboardPanelView: View {
                 ProviderCard(
                     name: p.name,
                     subtitle: subtitle(for: p),
-                    style: .normal,
-                    enabled: p.state == .unauthenticated,
+                    style: cardStyle(for: p),
+                    enabled: providerService.canStartLogin && p.state == .unauthenticated,
                     onTap: {
                         Task { await providerService.startLogin(providerId: p.id) }
                     }
@@ -63,8 +68,20 @@ struct OnboardPanelView: View {
     private func subtitle(for p: ProviderService.Provider) -> String {
         switch p.state {
         case .ready: return "Signed in"
-        case .unauthenticated: return "Click to sign in"
+        case .unauthenticated:
+            return providerService.canStartLogin ? "Click to sign in" : "Loading…"
+        case .unknown:
+            // First-paint state before sidecar replies. Render a loading copy
+            // rather than a clickable affordance.
+            return providerService.statusError ?? "Loading…"
         }
+    }
+
+    private func cardStyle(for p: ProviderService.Provider) -> ProviderCard.Style {
+        if !providerService.canStartLogin || p.state == .unknown {
+            return .loading
+        }
+        return .normal
     }
 
     @ViewBuilder

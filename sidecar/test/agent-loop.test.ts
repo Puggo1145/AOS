@@ -253,7 +253,10 @@ test("cancel path: agent.cancel aborts the stream and emits status done", async 
   expect(convo.llmMessages()).toEqual([]);
 });
 
-test("error path: stream error event maps to ui.error with picked code", async () => {
+test("error path: typed authInvalidated reason maps to permissionDenied", async () => {
+  // Per P3.8: pickErrorCode trusts only the typed `errorReason` field. The
+  // provider MUST tag auth failures with `errorReason: "authInvalidated"`;
+  // a free-text "401" in `errorMessage` no longer takes a special path.
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const convo = new Conversation();
   registerAgentHandlers(dispatcher, { registry: new TurnRegistry(), conversation: convo });
@@ -261,7 +264,9 @@ test("error path: stream error event maps to ui.error with picked code", async (
   nextStream = (model) => {
     const s = new AssistantMessageEventStream();
     queueMicrotask(async () => {
-      const errMsg = fakeAssistantMessage(model, { errorMessage: "401 unauthorized: token expired" });
+      const errMsg = fakeAssistantMessage(model, { errorMessage: "token expired" });
+      errMsg.errorReason = "authInvalidated";
+      errMsg.errorProviderId = "chatgpt-plan";
       s.push({ type: "error", reason: "error", error: errMsg });
       s.end();
     });
@@ -274,12 +279,46 @@ test("error path: stream error event maps to ui.error with picked code", async (
   const errs = captured.notifications.filter((n) => n.method === "ui.error");
   expect(errs).toHaveLength(1);
   expect(errs[0].params.code).toBe(RPCErrorCode.permissionDenied);
-  expect(errs[0].params.message).toContain("401");
 
-  // No ui.status done after error path returns early.
-  const statuses = captured.notifications.filter((n) => n.method === "ui.status");
+  // The agent loop also projects the typed reason to provider.statusChanged
+  // so the Shell's onboard panel can flip to unauthenticated.
+  const statusChanges = captured.notifications.filter((n) => n.method === "provider.statusChanged");
+  expect(statusChanges).toHaveLength(1);
+  expect(statusChanges[0].params).toMatchObject({
+    providerId: "chatgpt-plan",
+    state: "unauthenticated",
+    reason: "authInvalidated",
+  });
+
   // Only the initial "thinking" is emitted before the error short-circuit.
+  const statuses = captured.notifications.filter((n) => n.method === "ui.status");
   expect(statuses.map((s) => s.params.status)).toEqual(["thinking"]);
+});
+
+test("error path: untyped errors fall through to internalError", async () => {
+  // No regex tail anymore: a stream error without `errorReason` is plain
+  // internalError. Providers that wrap auth must tag the typed reason.
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const convo = new Conversation();
+  registerAgentHandlers(dispatcher, { registry: new TurnRegistry(), conversation: convo });
+
+  nextStream = (model) => {
+    const s = new AssistantMessageEventStream();
+    queueMicrotask(async () => {
+      const errMsg = fakeAssistantMessage(model, { errorMessage: "ECONNREFUSED 8443" });
+      s.push({ type: "error", reason: "error", error: errMsg });
+      s.end();
+    });
+    return s;
+  };
+
+  pushInbound({ jsonrpc: "2.0", id: 1, method: "agent.submit", params: { turnId: "T4", prompt: "hi", citedContext: {} } });
+  await flush(60);
+
+  const errs = captured.notifications.filter((n) => n.method === "ui.error");
+  expect(errs).toHaveLength(1);
+  expect(errs[0].params.code).toBe(RPCErrorCode.internalError);
+  expect(captured.notifications.find((n) => n.method === "provider.statusChanged")).toBeUndefined();
 });
 
 test("conversation history: prior turn's user+assistant messages are replayed into the next request", async () => {

@@ -7,6 +7,16 @@
 // Atomic-write pattern (sibling tmpfile + rename) so a crash during write
 // can never produce a torn file. Schema is intentionally minimal — this
 // round only persists the user's selected provider/model.
+//
+// Fail-fast contract (P2.4):
+//   - file does not exist → return {} (first-run path; documented default)
+//   - file exists but JSON parse fails OR a present field has the wrong type
+//     → throw `MalformedConfigError`. Silently returning {} would let a
+//     corrupt config silently swap the user's selected model — exactly the
+//     kind of "fallback inside business state" AGENTS.md "Coding tastes"
+//     forbids.
+//   - missing optional fields with valid surrounding JSON → return without
+//     them populated (still treated as not-set).
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, chmodSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -35,6 +45,16 @@ export interface UserConfig {
   effort?: Effort;
 }
 
+/// Raised when the on-disk config file exists but cannot be parsed or
+/// contains a field whose type does not match the schema. Distinct from
+/// "file missing" so callers can surface the corruption to the user.
+export class MalformedConfigError extends Error {
+  constructor(message: string, public readonly cause?: unknown) {
+    super(message);
+    this.name = "MalformedConfigError";
+  }
+}
+
 function ensureDir(path: string): void {
   const dir = dirname(path);
   if (!existsSync(dir)) {
@@ -45,24 +65,64 @@ function ensureDir(path: string): void {
 export function readUserConfig(): UserConfig {
   const path = userConfigPath();
   if (!existsSync(path)) return {};
+
+  let raw: string;
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
-    const out: UserConfig = {};
-    const sel = parsed.selection as Record<string, unknown> | undefined;
-    if (
-      sel &&
-      typeof sel.providerId === "string" &&
-      typeof sel.modelId === "string"
-    ) {
-      out.selection = { providerId: sel.providerId, modelId: sel.modelId };
-    }
-    if (typeof parsed.effort === "string" && (EFFORT_LEVELS as readonly string[]).includes(parsed.effort)) {
-      out.effort = parsed.effort as Effort;
-    }
-    return out;
-  } catch {
-    return {};
+    raw = readFileSync(path, "utf-8");
+  } catch (err) {
+    throw new MalformedConfigError(
+      `Failed to read config at ${path}: ${err instanceof Error ? err.message : String(err)}`,
+      err,
+    );
   }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new MalformedConfigError(
+      `Config file ${path} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+      err,
+    );
+  }
+
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new MalformedConfigError(
+      `Config file ${path} must be a JSON object at the top level`,
+    );
+  }
+
+  const obj = parsed as Record<string, unknown>;
+  const out: UserConfig = {};
+
+  // selection: either undefined OR a fully-formed { providerId, modelId } object.
+  if (obj.selection !== undefined) {
+    const sel = obj.selection;
+    if (sel === null || typeof sel !== "object") {
+      throw new MalformedConfigError(
+        `Config "selection" must be an object with { providerId, modelId }`,
+      );
+    }
+    const s = sel as Record<string, unknown>;
+    if (typeof s.providerId !== "string" || typeof s.modelId !== "string") {
+      throw new MalformedConfigError(
+        `Config "selection" requires string providerId and modelId`,
+      );
+    }
+    out.selection = { providerId: s.providerId, modelId: s.modelId };
+  }
+
+  // effort: undefined OR one of EFFORT_LEVELS.
+  if (obj.effort !== undefined) {
+    if (typeof obj.effort !== "string" || !(EFFORT_LEVELS as readonly string[]).includes(obj.effort)) {
+      throw new MalformedConfigError(
+        `Config "effort" must be one of ${EFFORT_LEVELS.join("|")}, got: ${JSON.stringify(obj.effort)}`,
+      );
+    }
+    out.effort = obj.effort as Effort;
+  }
+
+  return out;
 }
 
 export function writeUserConfig(cfg: UserConfig): void {

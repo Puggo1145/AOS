@@ -1,0 +1,1 @@
+{"id":6,"jsonrpc":"2.0","method":"config.set","params":{"modelId":"gpt-5.5","providerId":"chatgpt-plan"}}

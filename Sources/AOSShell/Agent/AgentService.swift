@@ -17,6 +17,44 @@ public enum AgentStatus: Sendable, Equatable {
     case done
     case waiting
     case error
+
+    // MARK: - Centralized wire ↔ view mapping
+    //
+    // The Shell carries three status enums that all describe the same agent:
+    //   - `AOSRPCSchema.UIStatus`   — `ui.status` notification payload
+    //   - `AOSRPCSchema.TurnStatus` — per-turn state inside a `ConversationTurnWire`
+    //   - `AgentService.AgentStatus` — the view-facing status (adds idle / listening)
+    //
+    // Mapping was previously duplicated in two places inside `AgentService`. We
+    // centralize both projections here so any future status name change has a
+    // single edit site and the mapping rules stay in one file.
+
+    /// Project a sidecar `ui.status` value to the view-facing enum. The wire
+    /// vocabulary is smaller — `idle` / `listening` / `error` are view-local
+    /// states the sidecar never emits.
+    public static func from(uiStatus: UIStatus) -> AgentStatus {
+        switch uiStatus {
+        case .thinking:     return .thinking
+        case .toolCalling:  return .working
+        case .waitingInput: return .waiting
+        case .done:         return .done
+        }
+    }
+
+    /// Project a sidecar `TurnStatus` (snapshot inside `ConversationTurnWire`)
+    /// to the view-facing enum. `cancelled` collapses to `.idle` because the
+    /// view does not have a dedicated cancelled glyph — the closed-bar emoji
+    /// goes back to its resting state.
+    public static func from(turnStatus: TurnStatus) -> AgentStatus {
+        switch turnStatus {
+        case .thinking: return .thinking
+        case .working:  return .working
+        case .waiting:  return .waiting
+        case .done:     return .done
+        case .error:    return .error
+        case .cancelled: return .idle
+        }
+    }
 }
 
 // MARK: - ConversationTurn (Shell display projection)
@@ -189,7 +227,7 @@ public final class AgentService {
             prompt: p.turn.prompt,
             context: snapshot,
             reply: p.turn.reply,
-            status: AgentService.map(turnStatus: p.turn.status),
+            status: AgentStatus.from(turnStatus: p.turn.status),
             errorMessage: p.turn.errorMessage
         )
         // Defensive: if the sidecar reuses an id (it won't in normal flow),
@@ -218,13 +256,7 @@ public final class AgentService {
 
     internal func handleStatus(_ p: UIStatusParams) {
         guard let idx = turns.lastIndex(where: { $0.id == p.turnId }) else { return }
-        let mapped: AgentStatus
-        switch p.status {
-        case .thinking: mapped = .thinking
-        case .toolCalling: mapped = .working
-        case .waitingInput: mapped = .waiting
-        case .done: mapped = .done
-        }
+        let mapped = AgentStatus.from(uiStatus: p.status)
         turns[idx].status = mapped
         status = mapped
         switch p.status {
@@ -239,17 +271,6 @@ public final class AgentService {
         turns[idx].errorMessage = p.message
         status = .error
         scheduleErrorRevert()
-    }
-
-    private static func map(turnStatus: TurnStatus) -> AgentStatus {
-        switch turnStatus {
-        case .thinking: return .thinking
-        case .working: return .working
-        case .waiting: return .waiting
-        case .done: return .done
-        case .error: return .error
-        case .cancelled: return .idle
-        }
     }
 
     private func scheduleDoneRevert() {

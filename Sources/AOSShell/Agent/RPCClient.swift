@@ -213,9 +213,10 @@ public final class RPCClient: @unchecked Sendable {
     }
 
     private static func encodeLine<T: Encodable>(_ value: T) throws -> Data {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        return try encoder.encode(value)
+        // Canonical encoder shared with the fixture roundtrip tests so the
+        // wire bytes the Shell actually emits are the same bytes the
+        // conformance harness pins. See `AOSRPCSchema/CanonicalEncoder.swift`.
+        try CanonicalJSON.encode(value)
     }
 
     // MARK: - Reader loop

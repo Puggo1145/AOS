@@ -6,14 +6,19 @@ import AOSRPCSchema
 //
 // Per docs/plans/onboarding.md §"Shell — ProviderService + Onboard UI".
 // Owns three pieces of UI-facing state:
-//   1. `providers`: per-provider summary; seeded so the onboard card is
-//      never blank during the first refreshStatus().
-//   2. `statusLoaded`: gates `hasReadyProvider` so we never flip to opened
-//      input panel before the first status query completes.
+//   1. `providers`: per-provider summary, each in `ready` / `unauthenticated` /
+//      `unknown`. `unknown` is the **Shell-local** loading state that gates
+//      every action on the first `provider.status` reply.
+//   2. `statusLoaded`: flips true the first time `refreshStatus` succeeds.
+//      Until that flip, `hasReadyProvider` returns false AND `startLogin`
+//      refuses to run. This restores the boundary "Shell may not act on
+//      provider state until the sidecar has spoken first."
 //   3. `loginSession`: in-progress OAuth login, drives the onboard sub-states.
 //
 // `unknown` is a Shell-LOCAL state ONLY — it never appears on the wire. The
-// wire schema (`ProviderState`) has only `ready` and `unauthenticated`.
+// wire schema (`AOSRPCSchema.ProviderState`) has only `ready` and
+// `unauthenticated`. Mapping happens in `applyStatusResult` /
+// `handleStatusChanged`.
 //
 // Notification handlers update local state. RPC requests are issued via
 // the supplied `RPCClient`. The view layer reads via @Observable; mutation
@@ -26,6 +31,9 @@ public final class ProviderService {
     public enum State: Sendable, Equatable {
         case ready
         case unauthenticated
+        /// Shell-local loading state. NEVER serialized over the wire. Holds
+        /// until the first `provider.status` reply lands.
+        case unknown
     }
 
     public struct Provider: Equatable, Sendable, Identifiable {
@@ -62,21 +70,33 @@ public final class ProviderService {
         }
     }
 
-    /// Startup seed — onboard cards are immediately clickable. `provider.status`
-    /// is a local disk check, so we treat "no provider configured" as the
-    /// default until a refresh confirms `ready` (which then flips the UI to
-    /// the input panel via `hasReadyProvider`).
+    /// Seed entry: id stays stable so the onboard list has *something* to
+    /// render before the first status reply, but `state == .unknown` until
+    /// `refreshStatus` confirms. The display name is intentionally the
+    /// neutral provider id rather than a hardcoded marketing string —
+    /// `applyStatusResult` overwrites it with the sidecar's authoritative
+    /// `ProviderInfo.name` on first success.
     public private(set) var providers: [Provider] = [
-        Provider(id: "chatgpt-plan",
-                 name: "Codex Subscription",
-                 state: .unauthenticated)
+        Provider(id: "chatgpt-plan", name: "chatgpt-plan", state: .unknown)
     ]
     public private(set) var loginSession: LoginSession?
 
-    /// `ready` only after refreshStatus / statusChanged confirms it. Default
-    /// (no token on disk) → false → onboard panel shows.
+    /// Flips `true` the first time `refreshStatus()` returns successfully.
+    /// `false` means "we have not yet heard back from the sidecar — do not
+    /// claim provider state, do not allow `startLogin`."
+    public private(set) var statusLoaded: Bool = false
+
+    /// Last `refreshStatus` failure surfaced to the UI. Cleared on the next
+    /// successful refresh. Drives the onboard loading affordance copy when
+    /// the first refresh fails.
+    public private(set) var statusError: String?
+
+    /// Only true once the sidecar has confirmed at least one provider in
+    /// `ready` state. Returns false in the `unknown` (loading) phase so the
+    /// onboard view does not render the "ready, take input" branch from
+    /// stale Shell-local guesses.
     public var hasReadyProvider: Bool {
-        providers.contains { $0.state == .ready }
+        statusLoaded && providers.contains { $0.state == .ready }
     }
 
     private let rpc: RPCClient
@@ -106,17 +126,34 @@ public final class ProviderService {
                 as: ProviderStatusResult.self
             )
             applyStatusResult(result)
+            statusLoaded = true
+            statusError = nil
         } catch {
             FileHandle.standardError.write(
                 Data("[provider] refreshStatus failed: \(error)\n".utf8)
             )
-            // Keep `statusLoaded == false` so the onboard panel surfaces the
-            // "still trying to talk to sidecar" loading affordance rather
-            // than silently flipping to either branch.
+            statusError = String(describing: error)
+            // Keep `statusLoaded == false` so the onboard panel renders the
+            // loading affordance rather than a guess. UI distinguishes
+            // "loading" (statusError == nil) from "couldn't reach sidecar"
+            // (statusError != nil).
         }
     }
 
     public func startLogin(providerId: String) async {
+        // Hard gate: never drive `provider.startLogin` while the Shell has
+        // not yet observed the sidecar's authoritative provider state. The
+        // onboard UI also disables its tap target via `canStartLogin` so
+        // this is a defense-in-depth check.
+        guard statusLoaded else {
+            loginSession = LoginSession(
+                loginId: "",
+                providerId: providerId,
+                state: .failed,
+                message: "Provider status not yet loaded"
+            )
+            return
+        }
         do {
             let result = try await rpc.request(
                 method: RPCMethod.providerStartLogin,
@@ -151,6 +188,9 @@ public final class ProviderService {
             )
         }
     }
+
+    /// True iff the onboard UI should let the user click a provider card.
+    public var canStartLogin: Bool { statusLoaded }
 
     public func cancelLogin() async {
         guard let session = loginSession, !session.loginId.isEmpty else {
@@ -205,6 +245,12 @@ public final class ProviderService {
         if let idx = providers.firstIndex(where: { $0.id == p.providerId }) {
             providers[idx].state = mappedState
         }
+        // A push from the sidecar is sufficient evidence that we have
+        // authoritative state for this provider. Flip the gate so subsequent
+        // `startLogin` clicks are allowed without waiting for an explicit
+        // `refreshStatus`.
+        statusLoaded = true
+        statusError = nil
     }
 
     // MARK: - Helpers
@@ -226,5 +272,8 @@ public final class ProviderService {
     internal func _testSetLoginSession(_ s: LoginSession?) { loginSession = s }
     internal func _testSetProviders(_ ps: [Provider]) {
         providers = ps
+    }
+    internal func _testSetStatusLoaded(_ loaded: Bool) {
+        statusLoaded = loaded
     }
 }

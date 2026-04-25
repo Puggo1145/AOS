@@ -23,6 +23,12 @@ import {
   type PingParams,
   type AgentSubmitParams,
   type AgentCancelParams,
+  type AgentResetParams,
+  type ConversationTurnStartedParams,
+  type ConversationResetParams,
+  type ConfigGetParams,
+  type ConfigSetParams,
+  type ConfigSetEffortParams,
   type UITokenParams,
   type UIStatusParams,
   type UIErrorParams,
@@ -107,6 +113,52 @@ test("agent.cancel fixture roundtrips byte-equal", () => {
   const req = parsed as RPCRequest<AgentCancelParams>;
   expect(req.method).toBe(RPCMethod.agentCancel);
   expect(typeof req.params.turnId).toBe("string");
+});
+
+test("agent.reset fixture roundtrips byte-equal", () => {
+  assertRoundtrip("agent.reset.json");
+  const { parsed } = loadFixture("agent.reset.json");
+  const req = parsed as RPCRequest<AgentResetParams>;
+  expect(req.method).toBe(RPCMethod.agentReset);
+});
+
+test("conversation.turnStarted fixture roundtrips byte-equal", () => {
+  assertRoundtrip("conversation.turnStarted.json");
+  const { parsed } = loadFixture("conversation.turnStarted.json");
+  const note = parsed as RPCNotification<ConversationTurnStartedParams>;
+  expect(note.method).toBe(RPCMethod.conversationTurnStarted);
+  expect(note.params.turn.status).toBe("thinking");
+});
+
+test("conversation.reset fixture roundtrips byte-equal", () => {
+  assertRoundtrip("conversation.reset.json");
+  const { parsed } = loadFixture("conversation.reset.json");
+  const note = parsed as RPCNotification<ConversationResetParams>;
+  expect(note.method).toBe(RPCMethod.conversationReset);
+});
+
+test("config.get fixture roundtrips byte-equal", () => {
+  assertRoundtrip("config.get.json");
+  const { parsed } = loadFixture("config.get.json");
+  const req = parsed as RPCRequest<ConfigGetParams>;
+  expect(req.method).toBe(RPCMethod.configGet);
+});
+
+test("config.set fixture roundtrips byte-equal", () => {
+  assertRoundtrip("config.set.json");
+  const { parsed } = loadFixture("config.set.json");
+  const req = parsed as RPCRequest<ConfigSetParams>;
+  expect(req.method).toBe(RPCMethod.configSet);
+  expect(req.params.providerId).toBe("chatgpt-plan");
+  expect(req.params.modelId).toBe("gpt-5.5");
+});
+
+test("config.setEffort fixture roundtrips byte-equal", () => {
+  assertRoundtrip("config.setEffort.json");
+  const { parsed } = loadFixture("config.setEffort.json");
+  const req = parsed as RPCRequest<ConfigSetEffortParams>;
+  expect(req.method).toBe(RPCMethod.configSetEffort);
+  expect(req.params.effort).toBe("medium");
 });
 
 test("ui.token fixture roundtrips byte-equal", () => {

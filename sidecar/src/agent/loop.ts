@@ -52,13 +52,24 @@ const SYSTEM_PROMPT = "You are AOS, an AI agent embedded in macOS via the notch 
 
 type ModelResolver = () => Model<Api>;
 
+/// Resolve the model the agent loop should drive.
+///
+/// Per P2.4: stale and malformed config are different. A *missing* selection
+/// (user has never picked) silently falls back to the catalog default — that
+/// is the documented first-run path. A *stale* selection (saved id no longer
+/// in the catalog) throws so `runTurn`'s top-level catch surfaces it as a
+/// `ui.error`. Malformed config also throws (raised by `readUserConfig`).
+/// Both error paths reach the user instead of silently swapping their model.
 const defaultResolver: ModelResolver = () => {
   const cfg = readUserConfig();
   if (cfg.selection) {
     try {
       return getModel(cfg.selection.providerId, cfg.selection.modelId);
     } catch {
-      // Selection points at a removed provider/model; fall through.
+      throw new Error(
+        `Configured model "${cfg.selection.providerId}/${cfg.selection.modelId}" is no longer available. ` +
+          `Open Settings and pick a model.`,
+      );
     }
   }
   return getDefaultModel(PROVIDER_IDS.chatgptPlan);
@@ -79,14 +90,16 @@ export function resetModelResolver(): void {
 
 /// Per design risk note: ErrPermissionDenied (-32003) covers auth failures
 /// (missing/expired ChatGPT token, 401 from upstream). Everything else is
-/// surfaced as a generic InternalError until the agent.* error segment
-/// (-32300 ~ -32399) is finalized.
+/// surfaced as the generic agent-segment internal error.
+///
+/// We trust the typed `errorReason` field exclusively. Provider implementations
+/// MUST tag auth failures with `errorReason: "authInvalidated"`; relying on
+/// regex over `errorMessage` would let provider wording drift silently change
+/// the surfaced code. If an auth failure slips through without the typed tag,
+/// it will surface as InternalError — the right pressure to make providers
+/// emit the typed reason.
 export function pickErrorCode(msg: AssistantMessage): number {
   if (msg.errorReason === "authInvalidated") return RPCErrorCode.permissionDenied;
-  const text = msg.errorMessage ?? "";
-  if (/auth|unauthorized|401|<authenticated>/i.test(text)) {
-    return RPCErrorCode.permissionDenied;
-  }
   return RPCErrorCode.internalError;
 }
 
@@ -140,10 +153,10 @@ export function registerAgentHandlers(dispatcher: Dispatcher, opts: RegisterAgen
     }
     const cancelled = reg.abort(turnId);
     if (cancelled) {
-      // Mark the turn so future llmMessages() builds know to skip it.
-      // Wrapped in try/catch because the turn may already have transitioned
-      // out of an active state by the time the cancel reaches us.
-      try { convo.setStatus(turnId, "cancelled"); } catch { /* ignore */ }
+      // Mark the turn cancelled so future `llmMessages()` builds skip it.
+      // The boolean return is an `unknown turnId` no-op — only happens if
+      // the turn was concurrently reset, which is a tolerated race.
+      convo.setStatus(turnId, "cancelled");
     }
     return { cancelled };
   });
@@ -170,12 +183,19 @@ export async function runTurn(
   dispatcher.notify(RPCMethod.uiStatus, { turnId, status: "thinking" });
 
   let model: Model<Api>;
+  let cfg: ReturnType<typeof readUserConfig>;
   try {
     model = modelResolver();
+    cfg = readUserConfig();
   } catch (err) {
+    // Covers both `modelResolver` failures (missing model, malformed config
+    // raised inside its own readUserConfig call) and the bare `readUserConfig`
+    // call below. The boolean return signals whether the durable mutation
+    // landed; we ALWAYS notify on this top-level boot failure because the
+    // turn was just registered and the caller deserves a visible error.
     const message = err instanceof Error ? err.message : String(err);
-    logger.error("model resolution failed", { turnId, err: String(err) });
-    try { convo.setError(turnId, RPCErrorCode.internalError, message); } catch { /* ignore */ }
+    logger.error("model/config resolution failed", { turnId, err: String(err) });
+    convo.setError(turnId, RPCErrorCode.internalError, message);
     dispatcher.notify(RPCMethod.uiError, {
       turnId,
       code: RPCErrorCode.internalError,
@@ -188,7 +208,6 @@ export async function runTurn(
   // Non-reasoning models drop effort entirely; the provider further clamps
   // (e.g. xhigh→high) per `clampReasoning` for models that don't support
   // the highest tier.
-  const cfg = readUserConfig();
   const effort: Effort | undefined = model.reasoning ? (cfg.effort ?? DEFAULT_EFFORT) : undefined;
 
   try {
@@ -209,50 +228,51 @@ export async function runTurn(
     for await (const ev of eventStream) {
       if (signal.aborted) break;
       if (ev.type === "text_delta") {
-        // Dual write: append to the durable Conversation AND push the
-        // streaming notification. See top-of-file note on why.
-        try { convo.appendDelta(turnId, ev.delta); } catch { /* turn may have been wiped by reset */ }
-        dispatcher.notify(RPCMethod.uiToken, { turnId, delta: ev.delta });
+        // Dual write: durable Conversation first, then streaming notify.
+        // The boolean tells us whether the turn still exists — false means
+        // it was wiped by `agent.reset` / advanced past by `agent.cancel`,
+        // which is the only legitimate race. In that case we MUST NOT emit
+        // a `ui.token` for a turn the Shell mirror has already dropped, or
+        // the two views diverge.
+        if (convo.appendDelta(turnId, ev.delta)) {
+          dispatcher.notify(RPCMethod.uiToken, { turnId, delta: ev.delta });
+        }
       } else if (ev.type === "done") {
         final = ev.message;
       } else if (ev.type === "error") {
         const code = pickErrorCode(ev.error);
         const message = ev.error.errorMessage ?? "agent error";
-        try { convo.setError(turnId, code, message); } catch { /* ignore */ }
-        dispatcher.notify(RPCMethod.uiError, {
-          turnId,
-          code,
-          message,
-        });
-        // Project typed auth invalidation to provider.statusChanged so Shell
-        // ProviderService flips to unauthenticated and the next opened-state
-        // shows the onboard panel. Per docs/plans/onboarding.md "typed auth
-        // error 传播": llm/ does not import dispatcher; the projection lives
-        // here at the agent loop boundary.
-        if (ev.error.errorReason === "authInvalidated" && ev.error.errorProviderId) {
-          dispatcher.notify(RPCMethod.providerStatusChanged, {
-            providerId: ev.error.errorProviderId,
-            state: "unauthenticated",
-            reason: "authInvalidated",
-            message,
-          });
+        if (convo.setError(turnId, code, message)) {
+          dispatcher.notify(RPCMethod.uiError, { turnId, code, message });
+          // Project typed auth invalidation to provider.statusChanged so the
+          // Shell ProviderService flips to unauthenticated and the next
+          // opened-state shows the onboard panel. Per docs/plans/onboarding.md
+          // "typed auth error 传播": llm/ does not import dispatcher; the
+          // projection lives here at the agent loop boundary.
+          if (ev.error.errorReason === "authInvalidated" && ev.error.errorProviderId) {
+            dispatcher.notify(RPCMethod.providerStatusChanged, {
+              providerId: ev.error.errorProviderId,
+              state: "unauthenticated",
+              reason: "authInvalidated",
+              message,
+            });
+          }
         }
         return;
       }
     }
 
     if (final && isContextOverflow(final, model.contextWindow)) {
-      try {
-        convo.setError(turnId, RPCErrorCode.invalidParams, "Context too long");
-      } catch { /* ignore */ }
-      dispatcher.notify(RPCMethod.uiError, {
-        turnId,
-        // TBD: agent.* error segment (-32300 ~ -32399) per rpc-protocol.md
-        // risk note. Until that's allocated, surface as InvalidParams so the
-        // Shell-side error UI distinguishes it from a generic internal fault.
-        code: RPCErrorCode.invalidParams,
-        message: "Context too long",
-      });
+      // Allocated agent.* segment (-32300 ~ -32399) per rpc-protocol.md.
+      // contextOverflow = -32300; distinguishes overflow from generic
+      // internal faults so the Shell error UI can render a tailored message.
+      if (convo.setError(turnId, RPCErrorCode.agentContextOverflow, "Context too long")) {
+        dispatcher.notify(RPCMethod.uiError, {
+          turnId,
+          code: RPCErrorCode.agentContextOverflow,
+          message: "Context too long",
+        });
+      }
       return;
     }
 
@@ -263,17 +283,21 @@ export async function runTurn(
     //     llmMessages() skips it. We still emit `ui.status done` so the
     //     Notch UI reaches the same terminal emoji state.
     if (final && !signal.aborted) {
-      try { convo.markDone(turnId, final); } catch { /* ignore */ }
+      convo.markDone(turnId, final);
     }
+    // `ui.status done` is the terminal signal regardless of whether the turn
+    // is still in the conversation — Shell may want to clear its emoji even
+    // if the turn was reset. We notify unconditionally here.
     dispatcher.notify(RPCMethod.uiStatus, { turnId, status: "done" });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.error("runTurn failed", { turnId, err: String(err) });
-    try { convo.setError(turnId, RPCErrorCode.internalError, message); } catch { /* ignore */ }
-    dispatcher.notify(RPCMethod.uiError, {
-      turnId,
-      code: RPCErrorCode.internalError,
-      message,
-    });
+    if (convo.setError(turnId, RPCErrorCode.internalError, message)) {
+      dispatcher.notify(RPCMethod.uiError, {
+        turnId,
+        code: RPCErrorCode.internalError,
+        message,
+      });
+    }
   }
 }

@@ -128,6 +128,11 @@ public enum RPCErrorCode {
     public static let loginTimeout: Int = -32202
     public static let unknownProvider: Int = -32203
     public static let loginNotConfigured: Int = -32204
+
+    /// Agent segment (agent loop runtime). Per docs/designs/rpc-protocol.md
+    /// "错误模型" allocation `-32300 ~ -32399`.
+    public static let agentContextOverflow: Int = -32300
+    public static let agentConfigInvalid: Int = -32301
 }
 
 // MARK: - Method name constants

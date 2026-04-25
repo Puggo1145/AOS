@@ -26,7 +26,7 @@ import {
 } from "../llm/models/catalog";
 import { supportsXhigh } from "../llm/models/capabilities";
 import type { Api, Model } from "../llm/types";
-import { readUserConfig, writeUserConfig } from "./storage";
+import { readUserConfig, writeUserConfig, MalformedConfigError } from "./storage";
 
 function buildProviderCatalog(): ConfigProviderEntry[] {
   return (Object.keys(MODELS) as KnownProvider[]).map((id) => {
@@ -57,7 +57,18 @@ function isKnownEffort(value: unknown): value is Effort {
 
 export function registerConfigHandlers(dispatcher: Dispatcher): void {
   dispatcher.registerRequest(RPCMethod.configGet, async (): Promise<ConfigGetResult> => {
-    const cfg = readUserConfig();
+    let cfg: ReturnType<typeof readUserConfig>;
+    try {
+      cfg = readUserConfig();
+    } catch (err) {
+      // Malformed config surfaces as a typed RPC error so the Shell can show
+      // a "your config file is corrupt" affordance instead of silently
+      // restoring defaults. Per P2.4 fail-fast contract.
+      if (err instanceof MalformedConfigError) {
+        throw new RPCMethodError(RPCErrorCode.agentConfigInvalid, err.message);
+      }
+      throw err;
+    }
     return {
       selection: cfg.selection ?? null,
       effort: cfg.effort ?? null,
@@ -78,7 +89,9 @@ export function registerConfigHandlers(dispatcher: Dispatcher): void {
       );
     }
     const selection = { providerId: params.providerId, modelId: params.modelId };
-    const existing = readUserConfig();
+    // If the existing file is corrupt, the user picking a new selection is
+    // exactly the recovery moment — write a fresh config rather than refuse.
+    const existing = readMergedConfigOrEmpty();
     writeUserConfig({ ...existing, selection });
     return { selection };
   });
@@ -91,8 +104,20 @@ export function registerConfigHandlers(dispatcher: Dispatcher): void {
         `config.setEffort requires { effort: one of ${EFFORT_LEVELS.join("|")} }`,
       );
     }
-    const existing = readUserConfig();
+    const existing = readMergedConfigOrEmpty();
     writeUserConfig({ ...existing, effort: params.effort });
     return { effort: params.effort };
   });
+}
+
+/// Used by `config.set` and `config.setEffort` to merge a user's incoming
+/// change with the existing on-disk config. If the existing file is corrupt,
+/// treat it as empty: the user's `set` action is the recovery path.
+function readMergedConfigOrEmpty(): ReturnType<typeof readUserConfig> {
+  try {
+    return readUserConfig();
+  } catch (err) {
+    if (err instanceof MalformedConfigError) return {};
+    throw err;
+  }
 }
