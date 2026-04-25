@@ -23,6 +23,11 @@ public final class ConfigService {
     public private(set) var defaultEffort: ConfigEffort = .medium
     public private(set) var loaded: Bool = false
     public private(set) var lastError: String?
+    /// Onboarding completion latch. Mirrored from `~/.aos/config.json`
+    /// via `config.get`. Once flipped to `true` the routing in NotchView
+    /// stops sending the user back to the onboard panels even if a
+    /// permission or provider drops.
+    public private(set) var hasCompletedOnboarding: Bool = false
 
     /// Effective selection used by the agent loop: explicit user pick if set,
     /// else the default of the first provider (which mirrors the sidecar's
@@ -66,6 +71,7 @@ public final class ConfigService {
             selection = result.selection
             effort = result.effort
             defaultEffort = result.defaultEffort
+            hasCompletedOnboarding = result.hasCompletedOnboarding
             loaded = true
             lastError = nil
         } catch {
@@ -105,6 +111,34 @@ public final class ConfigService {
             lastError = rpcError.message
         } catch {
             lastError = String(describing: error)
+        }
+    }
+
+    /// One-shot latch. Optimistically flips the local `hasCompletedOnboarding`
+    /// flag, then persists via RPC. The flag is monotonic — never set back
+    /// to `false` through this code path; clearing requires deleting
+    /// `~/.aos/config.json`. Calling more than once is a no-op on disk
+    /// (idempotent merge).
+    public func markOnboardingCompleted() async {
+        guard !hasCompletedOnboarding else { return }
+        hasCompletedOnboarding = true
+        do {
+            _ = try await rpc.request(
+                method: RPCMethod.configMarkOnboardingCompleted,
+                params: ConfigMarkOnboardingCompletedParams(),
+                as: ConfigMarkOnboardingCompletedResult.self
+            )
+            lastError = nil
+        } catch {
+            // Persist failure is logged but does not roll back the
+            // local flag — the next `config.get` will reconcile if the
+            // disk write actually failed; meanwhile the user shouldn't
+            // see onboarding bounce back mid-session due to a transient
+            // RPC issue.
+            lastError = String(describing: error)
+            FileHandle.standardError.write(
+                Data("[config] markOnboardingCompleted failed: \(error)\n".utf8)
+            )
         }
     }
 }

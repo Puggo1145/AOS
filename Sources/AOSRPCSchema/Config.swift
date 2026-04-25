@@ -79,17 +79,23 @@ public struct ConfigGetResult: Codable, Sendable, Equatable {
     public let effort: ConfigEffort?
     public let defaultEffort: ConfigEffort
     public let providers: [ConfigProviderEntry]
+    /// One-shot completion gate. Once `true`, NotchView stops routing
+    /// to the onboard panels even if a permission or provider drops —
+    /// failures surface as inline warnings + Settings affordances.
+    public let hasCompletedOnboarding: Bool
 
     public init(
         selection: ConfigSelection?,
         effort: ConfigEffort?,
         defaultEffort: ConfigEffort,
-        providers: [ConfigProviderEntry]
+        providers: [ConfigProviderEntry],
+        hasCompletedOnboarding: Bool
     ) {
         self.selection = selection
         self.effort = effort
         self.defaultEffort = defaultEffort
         self.providers = providers
+        self.hasCompletedOnboarding = hasCompletedOnboarding
     }
 }
 
@@ -124,6 +130,24 @@ public struct ConfigSetEffortResult: Codable, Sendable, Equatable {
 
     public init(effort: ConfigEffort) {
         self.effort = effort
+    }
+}
+
+public struct ConfigMarkOnboardingCompletedParams: Codable, Sendable, Equatable {
+    public init() {}
+    public init(from decoder: Decoder) throws {
+        _ = try decoder.container(keyedBy: EmptyCodingKey.self)
+    }
+    public func encode(to encoder: Encoder) throws {
+        _ = encoder.container(keyedBy: EmptyCodingKey.self)
+    }
+}
+
+public struct ConfigMarkOnboardingCompletedResult: Codable, Sendable, Equatable {
+    public let hasCompletedOnboarding: Bool
+
+    public init(hasCompletedOnboarding: Bool) {
+        self.hasCompletedOnboarding = hasCompletedOnboarding
     }
 }
 

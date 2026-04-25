@@ -96,6 +96,7 @@ struct NotchView: View {
                 openedContent
                     .animation(.smooth(duration: 0.32), value: viewModel.showSettings)
                     .animation(.smooth(duration: 0.32), value: viewModel.providerService.hasReadyProvider)
+                    .animation(.smooth(duration: 0.32), value: viewModel.permissionsService.allGranted)
             }
 
             if viewModel.status != .opened {
@@ -120,20 +121,31 @@ struct NotchView: View {
             if viewModel.showSettings {
                 SettingsPanelView(
                     configService: viewModel.configService,
+                    permissionsService: viewModel.permissionsService,
                     topSafeInset: viewModel.deviceNotchRect.height,
                     onClose: { viewModel.showSettings = false }
                 )
                 .frame(width: viewModel.notchOpenedSize.width,
                        height: viewModel.notchOpenedSize.height)
                 .transition(.blurReplace)
-            } else if viewModel.providerService.hasReadyProvider {
-                OpenedPanelView(
-                    viewModel: viewModel,
-                    senseStore: viewModel.senseStore,
-                    agentService: viewModel.agentService
+            } else if !viewModel.configService.hasCompletedOnboarding,
+                      !viewModel.permissionsService.allGranted {
+                // First-run permission gate. Once `hasCompletedOnboarding`
+                // flips, this branch never runs again — permission drops
+                // post-onboarding surface as inline warnings on the
+                // OpenedPanelView + a Permissions row in Settings.
+                PermissionOnboardPanelView(
+                    permissionsService: viewModel.permissionsService,
+                    topSafeInset: viewModel.deviceNotchRect.height
                 )
+                .frame(width: viewModel.notchOpenedSize.width,
+                       height: viewModel.notchOpenedSize.height)
                 .transition(.blurReplace)
-            } else {
+            } else if !viewModel.configService.hasCompletedOnboarding,
+                      !viewModel.providerService.hasReadyProvider {
+                // First-run provider sign-in. Same one-shot rule: post-
+                // onboarding logout surfaces inline (disabled input +
+                // banner) so users manage providers from Settings.
                 OnboardPanelView(
                     providerService: viewModel.providerService,
                     topSafeInset: viewModel.deviceNotchRect.height
@@ -141,8 +153,34 @@ struct NotchView: View {
                 .frame(width: viewModel.notchOpenedSize.width,
                        height: viewModel.notchOpenedSize.height)
                 .transition(.blurReplace)
+            } else {
+                OpenedPanelView(
+                    viewModel: viewModel,
+                    senseStore: viewModel.senseStore,
+                    agentService: viewModel.agentService
+                )
+                .transition(.blurReplace)
             }
         }
+        .task(id: shouldMarkOnboardingDone) {
+            // Latch: when the Shell first sees both prerequisites
+            // satisfied, persist `hasCompletedOnboarding=true` via RPC so
+            // future sessions skip onboarding even if a permission or
+            // provider drops. Idempotent — safe to fire on every change.
+            if shouldMarkOnboardingDone {
+                await viewModel.configService.markOnboardingCompleted()
+            }
+        }
+    }
+
+    /// Both onboard prerequisites first satisfied while config has
+    /// loaded and the latch is still false — i.e., the moment to flip
+    /// `hasCompletedOnboarding` for good.
+    private var shouldMarkOnboardingDone: Bool {
+        viewModel.configService.loaded
+            && !viewModel.configService.hasCompletedOnboarding
+            && viewModel.permissionsService.allGranted
+            && viewModel.providerService.hasReadyProvider
     }
 
     private var closedBar: some View {

@@ -114,6 +114,7 @@ export const RPCMethod = {
   configGet: "config.get",
   configSet: "config.set",
   configSetEffort: "config.setEffort",
+  configMarkOnboardingCompleted: "config.markOnboardingCompleted",
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -402,6 +403,10 @@ export interface ConfigGetResult {
   effort: ConfigEffort | null;
   defaultEffort: ConfigEffort;
   providers: ConfigProviderEntry[];
+  /// One-shot flag: flips `true` the first time the Shell observes both
+  /// runtime permissions granted AND a ready provider. After that the
+  /// Shell stops routing back to onboard panels.
+  hasCompletedOnboarding: boolean;
 }
 
 export interface ConfigSetParams {
@@ -419,4 +424,10 @@ export interface ConfigSetEffortParams {
 
 export interface ConfigSetEffortResult {
   effort: ConfigEffort;
+}
+
+export type ConfigMarkOnboardingCompletedParams = Record<string, never>;
+
+export interface ConfigMarkOnboardingCompletedResult {
+  hasCompletedOnboarding: true;
 }

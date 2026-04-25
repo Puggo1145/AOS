@@ -43,6 +43,13 @@ export interface UserConfig {
   /// value applied to whichever model is currently selected. Provider
   /// clamps it (or forces "off" for non-reasoning models) at request time.
   effort?: Effort;
+  /// Onboarding completion gate. Flips `true` the first time the Shell
+  /// observes both runtime permissions granted AND a ready provider.
+  /// Once `true`, the Shell stops routing the user back to the onboard
+  /// panels even if a permission or provider drops — those failures
+  /// surface as inline warnings + Settings affordances instead. Cleared
+  /// only by deleting `~/.aos/config.json`.
+  hasCompletedOnboarding?: boolean;
 }
 
 /// Raised when the on-disk config file exists but cannot be parsed or
@@ -120,6 +127,16 @@ export function readUserConfig(): UserConfig {
       );
     }
     out.effort = obj.effort as Effort;
+  }
+
+  // hasCompletedOnboarding: undefined OR boolean.
+  if (obj.hasCompletedOnboarding !== undefined) {
+    if (typeof obj.hasCompletedOnboarding !== "boolean") {
+      throw new MalformedConfigError(
+        `Config "hasCompletedOnboarding" must be boolean, got: ${JSON.stringify(obj.hasCompletedOnboarding)}`,
+      );
+    }
+    out.hasCompletedOnboarding = obj.hasCompletedOnboarding;
   }
 
   return out;

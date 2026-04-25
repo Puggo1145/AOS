@@ -102,6 +102,7 @@ public final class NotchViewModel {
     public let agentService: AgentService
     public let providerService: ProviderService
     public let configService: ConfigService
+    public let permissionsService: PermissionsService
 
     // Combine cancellables for the event-bridge subscriptions registered in
     // NotchViewModel+Events.swift.
@@ -115,6 +116,7 @@ public final class NotchViewModel {
         agentService: AgentService,
         providerService: ProviderService,
         configService: ConfigService,
+        permissionsService: PermissionsService,
         screenRect: CGRect,
         deviceNotchRect: CGRect
     ) {
@@ -122,6 +124,7 @@ public final class NotchViewModel {
         self.agentService = agentService
         self.providerService = providerService
         self.configService = configService
+        self.permissionsService = permissionsService
         self.screenRect = screenRect
         self.deviceNotchRect = deviceNotchRect
         // Per design: -4 if there is a real notch, 0 otherwise — expands the

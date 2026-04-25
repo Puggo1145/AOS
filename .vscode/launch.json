@@ -99,6 +99,26 @@
             "target": "StandaloneCursor",
             "configuration": "release",
             "preLaunchTask": "swift: Build Release StandaloneCursor (playground/open-codex-computer-use)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:aos}",
+            "name": "Debug AOSShell",
+            "target": "AOSShell",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug AOSShell"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:aos}",
+            "name": "Release AOSShell",
+            "target": "AOSShell",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release AOSShell"
         }
     ]
 }

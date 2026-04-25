@@ -1,5 +1,6 @@
 import SwiftUI
 import AOSRPCSchema
+import AOSOSSenseKit
 
 // MARK: - SettingsPanelView
 //
@@ -23,6 +24,7 @@ import AOSRPCSchema
 
 struct SettingsPanelView: View {
     let configService: ConfigService
+    let permissionsService: PermissionsService
     let topSafeInset: CGFloat
     let onClose: () -> Void
 
@@ -35,6 +37,7 @@ struct SettingsPanelView: View {
         case provider
         case model
         case effort
+        case permissions
     }
 
     var body: some View {
@@ -64,6 +67,23 @@ struct SettingsPanelView: View {
                         insertion: .move(edge: .trailing).combined(with: .opacity),
                         removal: .move(edge: .trailing).combined(with: .opacity)
                     ))
+            case .permissions:
+                permissionsPage
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .trailing).combined(with: .opacity),
+                        removal: .move(edge: .trailing).combined(with: .opacity)
+                    ))
+            }
+        }
+        .task {
+            // While Settings is open, poll so toggling in System
+            // Settings is reflected immediately. The probe is async on
+            // purpose — the screen recording arm uses
+            // SCShareableContent.current, the only live source (see
+            // PermissionsService).
+            while !Task.isCancelled {
+                await permissionsService.refresh()
+                try? await Task.sleep(nanoseconds: 500_000_000)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -114,6 +134,8 @@ struct SettingsPanelView: View {
                 }
             }
 
+            permissionsRow
+
             Spacer(minLength: 0)
 
             quitButton
@@ -121,6 +143,71 @@ struct SettingsPanelView: View {
         .padding(.top, topSafeInset)
         .padding(.horizontal, 24)
         .padding(.bottom, 20)
+    }
+
+    // MARK: - Permissions row + page
+    //
+    // The settings main page surfaces a one-line permissions summary that
+    // doubles as the entry point to the dedicated permissions sub-page.
+    // A red dot lights up when any required permission is missing, so the
+    // user has a clear at-a-glance signal even without opening the page.
+
+    private var missingPermissions: [Permission] {
+        [.screenRecording, .accessibility].filter { permissionsService.state.denied.contains($0) }
+    }
+
+    private var permissionsRow: some View {
+        Button {
+            page = .permissions
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "lock.shield")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .frame(width: 16)
+                Text("Permissions")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.92))
+                Spacer(minLength: 8)
+                if missingPermissions.isEmpty {
+                    Text("All granted")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.55))
+                } else {
+                    Circle()
+                        .fill(Color.red.opacity(0.85))
+                        .frame(width: 6, height: 6)
+                    Text("\(missingPermissions.count) missing")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.red.opacity(0.85))
+                }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.45))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.white.opacity(0.05))
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var permissionsPage: some View {
+        pickerPage(title: "Permissions") {
+            VStack(spacing: 8) {
+                ForEach([Permission.screenRecording, .accessibility], id: \.self) { p in
+                    PermissionStatusRow(
+                        permission: p,
+                        granted: !permissionsService.state.denied.contains(p),
+                        onOpenSettings: { permissionsService.openSystemSettings(for: p) }
+                    )
+                }
+            }
+        }
     }
 
     // MARK: - Quit
@@ -301,3 +388,56 @@ struct SettingsPanelView: View {
         await configService.selectModel(providerId: target.id, modelId: target.defaultModelId)
     }
 }
+
+// MARK: - PermissionStatusRow
+
+/// One row per permission inside the Permissions sub-page. Reads the
+/// live `denied` set; tap → opens the matching Privacy pane in System
+/// Settings. The state pill mirrors the convention used elsewhere
+/// (green check / red dot).
+private struct PermissionStatusRow: View {
+    let permission: Permission
+    let granted: Bool
+    let onOpenSettings: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            PermissionGlyph(permission: permission, size: 28)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(permission.displayName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.95))
+                Text(granted ? "Granted" : "Disabled")
+                    .font(.system(size: 11))
+                    .foregroundStyle(granted
+                                     ? Color.green.opacity(0.85)
+                                     : Color.red.opacity(0.85))
+            }
+
+            Spacer(minLength: 8)
+
+            Button(action: onOpenSettings) {
+                Text(granted ? "Manage" : "Open Settings")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                        Capsule()
+                            .fill(granted
+                                  ? Color.white.opacity(0.10)
+                                  : Color.accentColor.opacity(0.85))
+                    )
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+        )
+    }
+}
+

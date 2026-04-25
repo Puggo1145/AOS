@@ -14,6 +14,7 @@ import {
   type ConfigSetResult,
   type ConfigSetEffortParams,
   type ConfigSetEffortResult,
+  type ConfigMarkOnboardingCompletedResult,
 } from "../rpc/rpc-types";
 import {
   DEFAULT_EFFORT,
@@ -74,6 +75,7 @@ export function registerConfigHandlers(dispatcher: Dispatcher): void {
       effort: cfg.effort ?? null,
       defaultEffort: DEFAULT_EFFORT,
       providers: buildProviderCatalog(),
+      hasCompletedOnboarding: cfg.hasCompletedOnboarding ?? false,
     };
   });
 
@@ -107,6 +109,24 @@ export function registerConfigHandlers(dispatcher: Dispatcher): void {
     const existing = readMergedConfigOrEmpty();
     writeUserConfig({ ...existing, effort: params.effort });
     return { effort: params.effort };
+  });
+
+  dispatcher.registerRequest(RPCMethod.configMarkOnboardingCompleted, async (): Promise<ConfigMarkOnboardingCompletedResult> => {
+    // Idempotent latch fired automatically by the Shell — NOT a user
+    // recovery moment, so unlike `config.set` we must not paper over a
+    // malformed file with `{}` (would silently lose `selection`/`effort`).
+    // Surface the typed error and let the user fix the file by hand.
+    let existing: ReturnType<typeof readUserConfig>;
+    try {
+      existing = readUserConfig();
+    } catch (err) {
+      if (err instanceof MalformedConfigError) {
+        throw new RPCMethodError(RPCErrorCode.agentConfigInvalid, err.message);
+      }
+      throw err;
+    }
+    writeUserConfig({ ...existing, hasCompletedOnboarding: true });
+    return { hasCompletedOnboarding: true };
   });
 }
 

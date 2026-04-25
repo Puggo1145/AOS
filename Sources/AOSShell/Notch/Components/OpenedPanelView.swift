@@ -144,12 +144,91 @@ struct OpenedPanelView: View {
             } else {
                 Spacer(minLength: 0)
             }
+            warningBanner
             liveComposer
         }
         .padding(.top, topSafeInset)
         .padding(.horizontal, edgePadding)
         .padding(.bottom, edgePadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    // MARK: - Inline warning banner
+    //
+    // Post-onboarding routing always lands on this view; if a permission
+    // or provider has dropped since onboarding, surface a one-line
+    // banner that taps through to Settings. Permission missing wins over
+    // provider missing because the agent literally cannot operate
+    // without the OS sense / computer use surfaces.
+
+    @ViewBuilder
+    private var warningBanner: some View {
+        if !viewModel.permissionsService.allGranted {
+            warningRow(
+                icon: "exclamationmark.shield.fill",
+                tint: .orange,
+                message: missingPermissionMessage,
+                actionTitle: "Open Settings"
+            ) {
+                viewModel.showSettings = true
+            }
+        } else if !viewModel.providerService.hasReadyProvider {
+            warningRow(
+                icon: "questionmark.circle.fill",
+                tint: .yellow,
+                message: "No model configured",
+                actionTitle: "Open Settings"
+            ) {
+                viewModel.showSettings = true
+            }
+        }
+    }
+
+    private var missingPermissionMessage: String {
+        let denied = viewModel.permissionsService.state.denied
+        if denied.contains(.screenRecording) && denied.contains(.accessibility) {
+            return "Screen Recording & Accessibility disabled"
+        }
+        if denied.contains(.screenRecording) { return "Screen Recording disabled" }
+        if denied.contains(.accessibility)    { return "Accessibility disabled" }
+        return "A required permission is disabled"
+    }
+
+    private func warningRow(
+        icon: String,
+        tint: Color,
+        message: String,
+        actionTitle: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(tint)
+                Text(message)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .lineLimit(1)
+                Spacer(minLength: 6)
+                Text(actionTitle)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.95))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(tint.opacity(0.12))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(tint.opacity(0.30), lineWidth: 0.5)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 
     /// Live chips of the current SenseContext + the input field. Travels
@@ -165,6 +244,12 @@ struct OpenedPanelView: View {
                     set: { viewModel.inputFocused = $0 }
                 )
             )
+            // Disable typing + submission when no provider is configured —
+            // the agent loop has nothing to dispatch the turn to. Permission
+            // gaps don't disable the input here: the user can still queue
+            // a prompt while granting access in Settings.
+            .disabled(!viewModel.providerService.hasReadyProvider)
+            .opacity(viewModel.providerService.hasReadyProvider ? 1.0 : 0.55)
         }
         .background(
             GeometryReader { geo in

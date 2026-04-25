@@ -73,3 +73,21 @@ test("valid file with no selection / no effort returns empty object (still no fa
   writeRaw("{}");
   expect(readUserConfig()).toEqual({});
 });
+
+test("hasCompletedOnboarding with non-boolean throws MalformedConfigError", () => {
+  writeRaw('{ "hasCompletedOnboarding": "yes" }');
+  expect(() => readUserConfig()).toThrow(MalformedConfigError);
+});
+
+test("valid round trip preserves hasCompletedOnboarding alongside selection/effort", () => {
+  writeUserConfig({
+    selection: { providerId: "chatgpt-plan", modelId: "gpt-5.5" },
+    effort: "medium",
+    hasCompletedOnboarding: true,
+  });
+  expect(readUserConfig()).toEqual({
+    selection: { providerId: "chatgpt-plan", modelId: "gpt-5.5" },
+    effort: "medium",
+    hasCompletedOnboarding: true,
+  });
+});

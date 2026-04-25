@@ -147,6 +147,7 @@ public final class CompositionRoot {
             agentService: agent,
             providerService: provider,
             configService: config,
+            permissionsService: permissionsService,
             screen: screen
         )
     }
