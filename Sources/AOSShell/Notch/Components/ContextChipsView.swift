@@ -30,19 +30,14 @@ struct ContextChipsView: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
+                if let app = senseStore.context.app {
+                    appChip(name: app.name, icon: app.icon)
+                }
                 ForEach(senseStore.context.behaviors, id: \.id) { envelope in
                     selectableChip(
                         key: envelope.citationKey,
                         label: envelope.displaySummary,
                         leading: nil
-                    )
-                }
-                if let clip = senseStore.context.clipboard {
-                    selectableChip(
-                        key: ContextChipKey.clipboard,
-                        label: clipboardSummary(clip),
-                        leading: AnyView(Image(systemName: "doc.on.clipboard")
-                            .font(.system(size: 11, weight: .semibold)))
                     )
                 }
                 // Visual is on-demand: the chip indicates that pressing send
@@ -58,8 +53,13 @@ struct ContextChipsView: View {
                             .font(.system(size: 11, weight: .semibold)))
                     )
                 }
-                if let app = senseStore.context.app {
-                    appChip(name: app.name, icon: app.icon)
+                if let clip = senseStore.context.clipboard {
+                    selectableChip(
+                        key: ContextChipKey.clipboard,
+                        label: clipboardSummary(clip),
+                        leading: AnyView(Image(systemName: "doc.on.clipboard")
+                            .font(.system(size: 11, weight: .semibold)))
+                    )
                 }
             }
             .padding(.vertical, 4)
@@ -150,8 +150,8 @@ struct ContextChipsView: View {
         switch item {
         case .text(let s):
             let collapsed = s.replacingOccurrences(of: "\n", with: " ")
-            if collapsed.count <= 60 { return collapsed }
-            return String(collapsed.prefix(60)) + "…"
+            if collapsed.count <= 10 { return collapsed }
+            return String(collapsed.prefix(10)) + "…"
         case .filePaths(let urls):
             if urls.count == 1 { return urls[0].lastPathComponent }
             return "\(urls.count) files"

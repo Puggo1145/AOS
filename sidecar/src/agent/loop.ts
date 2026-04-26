@@ -318,6 +318,18 @@ export async function runTurn(
     //     Notch UI reaches the same terminal emoji state.
     if (final && !signal.aborted) {
       convo.markDone(turnId, final);
+      // Re-publish so Dev Mode reflects the full turn (user + assistant)
+      // instead of frozen pre-call input. Pull fresh `llmMessages()` so
+      // the snapshot includes the just-stored AssistantMessage.
+      observer.publish({
+        capturedAt: Date.now(),
+        turnId,
+        modelId: model.id,
+        providerId: model.provider,
+        effort: effort ?? null,
+        systemPrompt: SYSTEM_PROMPT,
+        messagesJson: ContextObserver.renderMessages(convo.llmMessages()),
+      });
     }
     // `ui.status done` is the terminal signal regardless of whether the turn
     // is still in the conversation — Shell may want to clear its emoji even

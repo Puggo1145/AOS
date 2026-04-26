@@ -236,7 +236,10 @@ struct ComposerCard: View {
         let snapshotCtx = senseStore.context
         let promptCopy = prompt
         text = ""
-        deselectedChipKeys.removeAll()
+        // Chip selection persists within the session: if the user opted out
+        // of clipboard/visual on a prior turn, the next prompt should respect
+        // that until they re-select. Per-app chip identities still reset on
+        // app switch (handled in ContextChipsView).
         Task {
             let visual: VisualMirror? = shouldCapture
                 ? await senseStore.captureVisualSnapshot()

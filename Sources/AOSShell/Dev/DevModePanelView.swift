@@ -96,7 +96,7 @@ struct DevContextSectionView: View {
                 }
                 Divider()
                 section(title: "System Prompt", body: snap.systemPrompt)
-                section(title: "Messages", body: snap.messagesJson)
+                DevMessagesView(messagesJson: snap.messagesJson)
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)

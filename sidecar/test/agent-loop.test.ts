@@ -9,6 +9,7 @@ import { test, expect, beforeEach, afterEach } from "bun:test";
 import { Dispatcher } from "../src/rpc/dispatcher";
 import { StdioTransport, type ByteSink, type ByteSource } from "../src/rpc/transport";
 import { registerAgentHandlers, setModelResolver, resetModelResolver } from "../src/agent/loop";
+import { ContextObserver, type DevContextSnapshot } from "../src/agent/context-observer";
 import { TurnRegistry } from "../src/agent/registry";
 import { Conversation } from "../src/agent/conversation";
 import {
@@ -380,6 +381,66 @@ test("conversation history: prior turn's user+assistant messages are replayed in
   expect(seenMessages[1][2]).toMatchObject({ role: "user", content: "second" });
 
   expect(captured.notifications.filter((n) => n.method === "conversation.turnStarted")).toHaveLength(2);
+});
+
+test("dev context observer: terminal publish includes the assistant reply", async () => {
+  // Regression guard for the second `observer.publish(...)` after
+  // `convo.markDone(...)`. Without it, Dev Mode would only ever see the
+  // pre-call input snapshot (user message only) and miss the assistant turn.
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const convo = new Conversation();
+  const observer = new ContextObserver();
+
+  registerAgentHandlers(dispatcher, {
+    registry: new TurnRegistry(),
+    conversation: convo,
+    contextObserver: observer,
+  });
+  // `registerAgentHandlers` installs its own sink that forwards to the
+  // dispatcher; read the published snapshots back from `dev.context.changed`
+  // notifications rather than overriding that sink.
+  const snapshots = (): DevContextSnapshot[] =>
+    captured.notifications
+      .filter((n) => n.method === "dev.context.changed")
+      .map((n) => n.params.snapshot as DevContextSnapshot);
+
+  nextStream = (model) => {
+    const s = new AssistantMessageEventStream();
+    queueMicrotask(async () => {
+      const partial = fakeAssistantMessage(model);
+      s.push({ type: "text_delta", contentIndex: 0, delta: "the-reply", partial });
+      // The terminal AssistantMessage carries the content the loop will
+      // store via `convo.markDone(...)`. Dev Mode must reflect this in the
+      // post-completion snapshot.
+      const terminal = fakeAssistantMessage(model);
+      terminal.content = [{ type: "text", text: "the-reply" }];
+      s.push({ type: "done", reason: "stop", message: terminal });
+      s.end();
+    });
+    return s;
+  };
+
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "agent.submit",
+    params: { turnId: "T1", prompt: "ping", citedContext: {} },
+  });
+  await flush(80);
+
+  // Two snapshots: pre-call (user only) and post-markDone (user + assistant).
+  const snaps = snapshots();
+  expect(snaps).toHaveLength(2);
+
+  const pre = JSON.parse(snaps[0].messagesJson);
+  expect(pre).toHaveLength(1);
+  expect(pre[0]).toMatchObject({ role: "user", content: "ping" });
+
+  const post = JSON.parse(snaps[1].messagesJson);
+  expect(post).toHaveLength(2);
+  expect(post[0]).toMatchObject({ role: "user", content: "ping" });
+  expect(post[1].role).toBe("assistant");
+  expect(post[1].content).toEqual([{ type: "text", text: "the-reply" }]);
 });
 
 test("agent.reset wipes conversation, aborts in-flight turn, and emits conversation.reset", async () => {
