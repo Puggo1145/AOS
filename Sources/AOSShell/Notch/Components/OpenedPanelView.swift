@@ -40,6 +40,13 @@ struct OpenedPanelView: View {
     let agentService: AgentService
     let visualCapturePolicyStore: VisualCapturePolicyStore
 
+    /// Last turn count observed by the history-height preference handler.
+    /// Used to distinguish streaming-token growth (count unchanged → suppress
+    /// the panel's height animation so the viewport stays in lockstep with
+    /// the content) from new-turn insertion (count changed → keep the
+    /// existing `.smooth` height animation that lets the panel ease open).
+    @State private var lastObservedTurnCount: Int = 0
+
     /// Top safe area equal to the physical notch height. The opened panel
     /// extends to the very top of the screen, so any content inside the
     /// `0..<deviceNotchRect.height` band sits behind the hardware cutout.
@@ -239,7 +246,31 @@ struct OpenedPanelView: View {
         // the user can scroll up to read older turns.
         .defaultScrollAnchor(.bottom)
         .onPreferenceChange(HistoryHeightKey.self) { h in
-            viewModel.historyContentHeight = h
+            // Per-token streaming grows the inner VStack one frame before
+            // the parent's `notchOpenedSize.height` (and thus the ScrollView
+            // viewport) catches up. NotchView animates that height change
+            // over 0.32s; during the animation the content is taller than
+            // the viewport, so `.defaultScrollAnchor(.bottom)` pins to the
+            // bottom and the older content visually scrolls up, then slides
+            // back down as the viewport finishes growing — the "上顶/回弹".
+            //
+            // Suppress the height animation only on the streaming path
+            // (turn count unchanged) so panel + viewport grow in the same
+            // frame as the content. New-turn insertion changes the count,
+            // so its preference update flows through with the normal
+            // `.smooth` height animation intact and the panel still eases
+            // open to make room.
+            let count = agentService.turns.count
+            if count == lastObservedTurnCount {
+                var txn = Transaction()
+                txn.disablesAnimations = true
+                withTransaction(txn) {
+                    viewModel.historyContentHeight = h
+                }
+            } else {
+                viewModel.historyContentHeight = h
+                lastObservedTurnCount = count
+            }
         }
     }
 
