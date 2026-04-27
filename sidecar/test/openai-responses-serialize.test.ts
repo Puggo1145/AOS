@@ -151,6 +151,7 @@ test("toolResult emits function_call_output with string output (no images)", () 
     toolCallId: "call_42",
     toolName: "do_thing",
     content: [{ type: "text", text: "result-text" }],
+    isError: false,
     timestamp: 0,
   };
   const payload = buildPayload(makeModel(), makeContext([tr]));
@@ -207,7 +208,7 @@ test("reasoning_summary_* events feed thinking; output_item.done captures signat
   ];
 
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => sseResponse(events)) as typeof fetch;
+  globalThis.fetch = (async () => sseResponse(events)) as unknown as typeof fetch;
   try {
     const stream = streamOpenaiResponses(
       makeModel(),
@@ -236,13 +237,12 @@ test("delta event referencing unknown item_id throws (no silent skip)", async ()
   ];
   const errors: string[] = [];
   const originalWrite = process.stderr.write.bind(process.stderr);
-  // @ts-expect-error -- monkey-patch for test isolation
-  process.stderr.write = (chunk: string | Uint8Array) => {
+  process.stderr.write = ((chunk: string | Uint8Array) => {
     errors.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
     return true;
-  };
+  }) as typeof process.stderr.write;
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => sseResponse(events)) as typeof fetch;
+  globalThis.fetch = (async () => sseResponse(events)) as unknown as typeof fetch;
   try {
     const stream = streamOpenaiResponses(
       makeModel(),

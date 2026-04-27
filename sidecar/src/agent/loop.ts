@@ -1,5 +1,6 @@
 // Agent turn loop — bridges `agent.submit` / `agent.cancel` / `agent.reset`
-// to the sidecar's `Conversation` store and the `llm/` stream.
+// to the sidecar's `Conversation` store, the `llm/` stream, and the tool
+// registry.
 //
 // Per docs/designs/rpc-protocol.md §"流式语义":
 //   1. agent.submit Request returns { accepted: true } immediately. The actual
@@ -7,20 +8,44 @@
 //      we register the turn into the Conversation and broadcast
 //      `conversation.turnStarted` so observers see the turn appear before any
 //      streamed token.
-//   2. While streaming, ui.token / ui.status / ui.error notifications are
-//      pushed AND the matching turn in the Conversation is mutated in place.
-//      This dual write is intentional: ui.token is the cheap streaming
-//      transport (no full snapshot per character); the Conversation is the
-//      durable store that drives the next request's LLM context.
+//   2. While streaming, ui.token / ui.thinking / ui.toolCall / ui.status /
+//      ui.error notifications are pushed AND the matching turn in the
+//      Conversation is mutated in place. This dual write is intentional:
+//      ui.token is the cheap streaming transport (no full snapshot per
+//      character); the Conversation is the durable store that drives the
+//      next request's LLM context.
 //   3. agent.cancel triggers the per-turn AbortController; the stream loop
 //      observes `signal.aborted`, breaks out, and emits `ui.status done`.
 //   4. agent.reset aborts every live stream, wipes the Conversation, and
 //      emits `conversation.reset` so observers can drop their mirrors.
 //
+// Tool-use sub-loop (s02):
+//   When the model returns `stopReason: "toolUse"`, we execute every tool
+//   call from that assistant message, push each result back into the
+//   conversation as a `ToolResultMessage`, and re-issue `streamSimple` with
+//   the updated history. Loop until the model returns `stopReason: "stop"`
+//   (terminal) or hits `MAX_TOOL_ROUNDS` (safety cap; surfaces as an
+//   internal error to break runaway tool-call cycles).
+//
 // Per docs/designs/llm-provider.md §"包边界" the loop only depends on the
 // public surface re-exported from `../llm`.
 
-import { streamSimple, getDefaultModel, getModel, isContextOverflow, PROVIDER_IDS, effectiveEffort, type AssistantMessage, type Model, type Api } from "../llm";
+import {
+  streamSimple,
+  getDefaultModel,
+  getModel,
+  isContextOverflow,
+  PROVIDER_IDS,
+  effectiveEffort,
+  validateToolArguments,
+  type AssistantMessage,
+  type Model,
+  type Api,
+  type ToolCall,
+  type ToolResultMessage,
+  type ToolResultContent,
+  type Message,
+} from "../llm";
 import { readUserConfig } from "../config/storage";
 import {
   RPCErrorCode,
@@ -29,16 +54,23 @@ import {
   type AgentSubmitResult,
   type AgentCancelParams,
   type AgentCancelResult,
+  type AgentResetParams,
   type AgentResetResult,
+  type JSONValue,
 } from "../rpc/rpc-types";
 import { Dispatcher, RPCMethodError } from "../rpc/dispatcher";
 import { TurnRegistry } from "./registry";
 import { Conversation } from "./conversation";
 import { contextObserver as defaultContextObserver, ContextObserver } from "./context-observer";
 import { SessionManager } from "./session/manager";
+import { toolRegistry, ToolUserError, type ToolHandler, type ToolExecResult } from "./tools";
+import { buildSystemPrompt } from "./system-prompt";
 import { logger } from "../log";
 
-const SYSTEM_PROMPT = "You are AOS, an AI agent embedded in macOS via the notch UI. Be concise and helpful.";
+/// Hard ceiling on tool-call rounds inside a single turn. Prevents a model
+/// stuck in a self-call cycle from looping forever. 25 is generous — real
+/// tasks rarely exceed 5–10. Surfaces as `internalError` when hit.
+const MAX_TOOL_ROUNDS = 25;
 
 // ---------------------------------------------------------------------------
 // Test injection point.
@@ -164,6 +196,21 @@ export function registerAgentHandlers(dispatcher: Dispatcher, opts: RegisterAgen
       throw new RPCMethodError(RPCErrorCode.invalidRequest, `turnId already active: ${turnId}`);
     }
 
+    // Single-active-turn invariant. `Conversation` stores each turn's LLM
+    // history as a contiguous `[messageStart, messageEnd)` range over a
+    // shared `_messages` array; interleaving two turns on the same session
+    // would let T1's range absorb T2's user message, producing duplicated /
+    // cross-turn content on the next `llmMessages()`. The Shell currently
+    // serializes user submits per session, but the sidecar RPC boundary must
+    // hold its own invariant so any future caller (or a misbehaving Shell)
+    // cannot corrupt the conversation store.
+    if (reg.size > 0) {
+      throw new RPCMethodError(
+        RPCErrorCode.invalidRequest,
+        `session ${session.id} already has an in-flight turn; cancel or wait before submitting another`,
+      );
+    }
+
     // Register the turn in the Conversation *before* the ack so any
     // observer that subscribes after seeing the ack still finds the turn
     // in the store. The notification is fired here too — it is part of the
@@ -272,13 +319,26 @@ export async function runTurn(
     return;
   }
 
-  // Resolve the effort once via the catalog-driven helper. Non-reasoning
-  // models return `undefined` (the field is then dropped from the wire
-  // payload). Reasoning models get the user's pick clamped onto the
-  // model's supported effort list, with the per-model / global default
-  // filled in when the user has never chosen. All effort policy lives in
-  // `models/effort.ts` — do not branch on `model.reasoning` here.
   const effort: string | undefined = effectiveEffort(model, cfg.effort);
+  const systemPrompt = buildSystemPrompt();
+
+  // Snapshot the available tools once per turn. The same set is reused on
+  // every LLM round inside the tool sub-loop — reading the registry mid-turn
+  // would let tool-pack hot-swaps happen between rounds, which is a footgun
+  // for callers; freezing per turn keeps the model's view stable.
+  const tools = toolRegistry.list();
+  const toolSpecs = tools.map((t) => t.spec);
+  const toolByName = new Map(tools.map((t) => [t.spec.name, t] as const));
+
+  // Per-call validation outcome cache, populated at `toolcall_end` time and
+  // consumed by the dispatch loop after streaming completes. We validate
+  // up-front so the wire's `called` / `rejected` decision is made before the
+  // notification fires — preserving the strict per-phase invariant that
+  // `called` only ever ships validated args.
+  type CallOutcome =
+    | { kind: "ready"; args: Record<string, unknown>; handler: ToolHandler<any, any> }
+    | { kind: "rejected"; errorMessage: string };
+  const callOutcomes = new Map<string, CallOutcome>();
 
   // Tracks whether a reasoning block has been opened on the wire and not yet
   // closed. The provider stream's `thinking_end` is the happy-path closer,
@@ -287,8 +347,7 @@ export async function runTurn(
   // emits `thinking_end`. In every one of those terminal paths we MUST
   // synthesize a `{ kind: "end" }` before the terminal `ui.error` /
   // `ui.status done`, otherwise the Shell's shimmer keeps animating
-  // indefinitely (we removed the implicit-close fallbacks on the Shell side
-  // when the lifecycle moved to an explicit channel).
+  // indefinitely.
   let thinkingOpen = false;
   const closeThinkingIfOpen = (): void => {
     if (!thinkingOpen) return;
@@ -296,18 +355,7 @@ export async function runTurn(
     dispatcher.notify(RPCMethod.uiThinking, { sessionId, turnId, kind: "end" });
   };
 
-  try {
-    // Pull the rolling LLM history from the Conversation. This is the
-    // single change that gives the LLM cross-turn memory: prior successful
-    // turns contribute their (user, assistant) pair; the just-started turn
-    // contributes its user message; errored/cancelled turns are skipped.
-    const messages = convo.llmMessages();
-
-    // Dev-mode observability: capture the exact (systemPrompt, messages)
-    // pair we are about to hand to the LLM. Publish BEFORE the network
-    // call so a Dev Mode window opened mid-turn always sees the latest
-    // input, not a stale snapshot. The observer swallows sink failures
-    // — observation must never break the turn.
+  const publishContext = (): void => {
     observer.publish({
       capturedAt: Date.now(),
       sessionId,
@@ -315,126 +363,290 @@ export async function runTurn(
       modelId: model.id,
       providerId: model.provider,
       effort: effort ?? null,
-      systemPrompt: SYSTEM_PROMPT,
-      messagesJson: ContextObserver.renderMessages(messages),
+      systemPrompt,
+      messagesJson: ContextObserver.renderMessages(convo.llmMessages()),
     });
+  };
 
-    const eventStream = streamSimple(
-      model,
-      {
-        systemPrompt: SYSTEM_PROMPT,
-        messages,
-      },
-      { signal, reasoning: effort },
-    );
+  try {
+    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      const messages = convo.llmMessages();
 
-    let final: AssistantMessage | undefined;
-    for await (const ev of eventStream) {
-      if (signal.aborted) break;
-      if (ev.type === "thinking_delta") {
-        // Forward reasoning-trace deltas verbatim. Not persisted in the
-        // Conversation store: thinking is display-only and never replayed
-        // into the next turn's LLM context (cross-source providers strip
-        // it anyway). The Shell renders these in a separate affordance.
-        thinkingOpen = true;
-        dispatcher.notify(RPCMethod.uiThinking, {
-          sessionId,
-          turnId,
-          kind: "delta",
-          delta: ev.delta,
-        });
-      } else if (ev.type === "thinking_end") {
-        // Explicit lifecycle end of the current reasoning block. Forwarded
-        // so the Shell can stamp `thinkingEndedAt` without inferring it
-        // from the first `ui.token` (which never arrives for tool-call-
-        // only turns or when reasoning ends right at completion).
-        closeThinkingIfOpen();
-      } else if (ev.type === "text_delta") {
-        // Dual write: durable Conversation first, then streaming notify.
-        // The boolean tells us whether the turn still exists — false means
-        // it was wiped by `agent.reset` / advanced past by `agent.cancel`,
-        // which is the only legitimate race. In that case we MUST NOT emit
-        // a `ui.token` for a turn the Shell mirror has already dropped, or
-        // the two views diverge.
-        if (convo.appendDelta(turnId, ev.delta)) {
-          dispatcher.notify(RPCMethod.uiToken, { sessionId, turnId, delta: ev.delta });
+      // Dev-mode observability: capture the exact (systemPrompt, messages)
+      // pair we are about to hand to the LLM. Publish BEFORE the network
+      // call so a Dev Mode window opened mid-turn always sees the latest
+      // input, not a stale snapshot.
+      publishContext();
+
+      const eventStream = streamSimple(
+        model,
+        {
+          systemPrompt,
+          messages,
+          tools: toolSpecs.length > 0 ? toolSpecs : undefined,
+        },
+        { signal, reasoning: effort },
+      );
+
+      let final: AssistantMessage | undefined;
+      let bailed = false;
+      for await (const ev of eventStream) {
+        if (signal.aborted) {
+          bailed = true;
+          break;
         }
-      } else if (ev.type === "done") {
-        final = ev.message;
-      } else if (ev.type === "error") {
-        const code = pickErrorCode(ev.error);
-        const message = ev.error.errorMessage ?? "agent error";
-        // Close any open reasoning block first — the Shell stamps
-        // `thinkingEndedAt` on this and stops the shimmer.
-        closeThinkingIfOpen();
-        if (convo.setError(turnId, code, message)) {
-          dispatcher.notify(RPCMethod.uiError, { sessionId, turnId, code, message });
-          // Project typed auth invalidation to provider.statusChanged so the
-          // Shell ProviderService flips to unauthenticated and the next
-          // opened-state shows the onboard panel. Per docs/plans/onboarding.md
-          // "typed auth error 传播": llm/ does not import dispatcher; the
-          // projection lives here at the agent loop boundary.
-          if (ev.error.errorReason === "authInvalidated" && ev.error.errorProviderId) {
-            dispatcher.notify(RPCMethod.providerStatusChanged, {
-              providerId: ev.error.errorProviderId,
-              state: "unauthenticated",
-              reason: "authInvalidated",
-              message,
+        if (ev.type === "thinking_delta") {
+          thinkingOpen = true;
+          dispatcher.notify(RPCMethod.uiThinking, {
+            sessionId,
+            turnId,
+            kind: "delta",
+            delta: ev.delta,
+          });
+        } else if (ev.type === "thinking_end") {
+          closeThinkingIfOpen();
+        } else if (ev.type === "text_delta") {
+          // Dual write: durable Conversation first, then streaming notify.
+          // The boolean tells us whether the turn still exists — false means
+          // it was wiped by `agent.reset` / advanced past by `agent.cancel`,
+          // which is the only legitimate race. In that case we MUST NOT emit
+          // a `ui.token` for a turn the Shell mirror has already dropped.
+          if (convo.appendDelta(turnId, ev.delta)) {
+            dispatcher.notify(RPCMethod.uiToken, { sessionId, turnId, delta: ev.delta });
+          }
+        } else if (ev.type === "toolcall_end") {
+          // Validate up-front so the wire's `called` vs `rejected` decision
+          // is made before the notification fires. The Shell's strict per-
+          // phase invariant says `called` only ships validated args; sending
+          // raw args here would leak unverified shapes into the UI's tool
+          // presenter and drift the contract.
+          const outcome = prepareToolCall(ev.toolCall, toolByName);
+          callOutcomes.set(ev.toolCall.id, outcome);
+          if (outcome.kind === "ready") {
+            dispatcher.notify(RPCMethod.uiToolCall, {
+              sessionId,
+              turnId,
+              phase: "called",
+              toolCallId: ev.toolCall.id,
+              toolName: ev.toolCall.name,
+              args: outcome.args as JSONValue,
+            });
+          } else {
+            // `rejected` — handler will not run. Send the model's raw args so
+            // the UI can show what was attempted, plus the validator's
+            // message. The Shell mirror synthesizes a completed isError
+            // record from this single frame.
+            dispatcher.notify(RPCMethod.uiToolCall, {
+              sessionId,
+              turnId,
+              phase: "rejected",
+              toolCallId: ev.toolCall.id,
+              toolName: ev.toolCall.name,
+              args: (ev.toolCall.arguments ?? {}) as JSONValue,
+              errorMessage: outcome.errorMessage,
             });
           }
+        } else if (ev.type === "done") {
+          final = ev.message;
+        } else if (ev.type === "error") {
+          const code = pickErrorCode(ev.error);
+          const message = ev.error.errorMessage ?? "agent error";
+          closeThinkingIfOpen();
+          if (convo.setError(turnId, code, message)) {
+            dispatcher.notify(RPCMethod.uiError, { sessionId, turnId, code, message });
+            // Project typed auth invalidation to provider.statusChanged so the
+            // Shell ProviderService flips to unauthenticated and the next
+            // opened-state shows the onboard panel.
+            if (ev.error.errorReason === "authInvalidated" && ev.error.errorProviderId) {
+              dispatcher.notify(RPCMethod.providerStatusChanged, {
+                providerId: ev.error.errorProviderId,
+                state: "unauthenticated",
+                reason: "authInvalidated",
+                message,
+              });
+            }
+          }
+          return;
+        }
+      }
+
+      if (bailed || signal.aborted) {
+        // Cancellation path. `agent.cancel` already flipped the turn to
+        // `cancelled` and the visible reply has been mirrored via ui.token.
+        // Close the reasoning block (if any) and surface the terminal
+        // status; do NOT call `markDone` (we didn't complete normally) and
+        // do NOT call `onDone` (turnCount stays put).
+        closeThinkingIfOpen();
+        dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId, status: "done" });
+        return;
+      }
+
+      if (!final) {
+        // Stream ended without a `done` event — provider bug. Treat as
+        // internal error rather than silently dropping the turn.
+        closeThinkingIfOpen();
+        const message = "stream ended without a final assistant message";
+        if (convo.setError(turnId, RPCErrorCode.internalError, message)) {
+          dispatcher.notify(RPCMethod.uiError, {
+            sessionId,
+            turnId,
+            code: RPCErrorCode.internalError,
+            message,
+          });
         }
         return;
       }
-    }
 
-    if (final && isContextOverflow(final, model.contextWindow)) {
-      // Allocated agent.* segment (-32300 ~ -32399) per rpc-protocol.md.
-      // contextOverflow = -32300; distinguishes overflow from generic
-      // internal faults so the Shell error UI can render a tailored message.
-      closeThinkingIfOpen();
-      if (convo.setError(turnId, RPCErrorCode.agentContextOverflow, "Context too long")) {
-        dispatcher.notify(RPCMethod.uiError, {
-          sessionId,
-          turnId,
-          code: RPCErrorCode.agentContextOverflow,
-          message: "Context too long",
-        });
+      if (isContextOverflow(final, model.contextWindow)) {
+        // Allocated agent.* segment (-32300 ~ -32399) per rpc-protocol.md.
+        // contextOverflow = -32300; distinguishes overflow from generic
+        // internal faults so the Shell error UI can render a tailored message.
+        closeThinkingIfOpen();
+        if (convo.setError(turnId, RPCErrorCode.agentContextOverflow, "Context too long")) {
+          dispatcher.notify(RPCMethod.uiError, {
+            sessionId,
+            turnId,
+            code: RPCErrorCode.agentContextOverflow,
+            message: "Context too long",
+          });
+        }
+        return;
       }
-      return;
+
+      // Persist the assistant message into the flat history regardless of
+      // whether it carries tool calls or not. For tool-call rounds it is
+      // the bridge to the next round; for the terminal round it is the
+      // final reply.
+      if (!convo.appendAssistant(turnId, final)) {
+        // Turn was reset/cancelled mid-flight. Silently drop the message —
+        // matches the appendDelta race policy.
+        return;
+      }
+
+      const toolCalls = extractToolCalls(final);
+
+      if (toolCalls.length === 0) {
+        // Terminal: model produced text-only output. Mark done, republish
+        // the dev snapshot so the post-call view includes the assistant
+        // turn, then fire the visible-status closer.
+        const ok = convo.markDone(turnId);
+        publishContext();
+        closeThinkingIfOpen();
+        dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId, status: "done" });
+        if (ok) params.onDone?.();
+        return;
+      }
+
+      // Tool round. Switch the visible status so the Notch UI can swap to
+      // a "tool calling" affordance. We also close any open thinking block
+      // here — between rounds, reasoning ends and a fresh trace will open
+      // on the next streamSimple call if the model resumes thinking.
+      closeThinkingIfOpen();
+      dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId, status: "tool_calling" });
+
+      // Sequential execution per s02. Each tool gets the parent turn's
+      // signal so `agent.cancel` propagates into long-running subprocesses.
+      for (const tc of toolCalls) {
+        if (signal.aborted) break;
+        // toolcall_end always populates the outcome map for every emitted
+        // call. A miss would mean the streaming loop dropped a tool call
+        // event — surface it as a synthesized rejection so the model still
+        // gets feedback rather than a silent gap in the transcript.
+        const outcome = callOutcomes.get(tc.id) ?? {
+          kind: "rejected" as const,
+          errorMessage: `internal: missing call outcome for ${tc.id}`,
+        };
+        let result: ToolExecResult;
+        if (outcome.kind === "rejected") {
+          // Validation already failed; the wire `rejected` notification has
+          // been sent. Skip the handler entirely but STILL appendToolResult
+          // so the model sees the validator's message on the next round and
+          // can self-correct. We do NOT emit a `result` notification — the
+          // `rejected` frame is the terminal UI event for this call.
+          result = {
+            content: [{ type: "text", text: outcome.errorMessage }],
+            isError: true,
+          };
+        } else {
+          try {
+            result = await runTool(outcome.handler, outcome.args, tc.name, {
+              sessionId,
+              turnId,
+              toolCallId: tc.id,
+              signal,
+            });
+          } catch (err) {
+            // `runTool` only re-throws unexpected exceptions (non-
+            // ToolUserError). The wire already announced `phase: "called"`
+            // for this id; without a terminal frame the Shell mirror would
+            // leave the row stuck in `.calling` forever even after the
+            // turn-level `ui.error` lands. Emit a closing `result` so the
+            // tool row visibly fails, THEN re-throw so runTurn's top-level
+            // catch fires `ui.error` and ends the turn — fail-fast intact.
+            const message = err instanceof Error ? err.message : String(err);
+            dispatcher.notify(RPCMethod.uiToolCall, {
+              sessionId,
+              turnId,
+              phase: "result",
+              toolCallId: tc.id,
+              toolName: tc.name,
+              isError: true,
+              outputText: message,
+            });
+            throw err;
+          }
+        }
+        const toolResultMsg: ToolResultMessage = {
+          role: "toolResult",
+          toolCallId: tc.id,
+          toolName: tc.name,
+          content: result.content,
+          isError: result.isError,
+          timestamp: Date.now(),
+        };
+        if (!convo.appendToolResult(turnId, toolResultMsg)) {
+          // Turn went away mid-tool. Drop the result and exit; the cancel
+          // path already published its terminal events.
+          return;
+        }
+        if (outcome.kind === "ready") {
+          dispatcher.notify(RPCMethod.uiToolCall, {
+            sessionId,
+            turnId,
+            phase: "result",
+            toolCallId: tc.id,
+            toolName: tc.name,
+            isError: result.isError,
+            outputText: renderResultForWire(result.content),
+          });
+        }
+      }
+
+      if (signal.aborted) {
+        // Cancellation surfaced during tool execution. Close out the same
+        // way as the streaming-cancel path above.
+        dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId, status: "done" });
+        return;
+      }
+
+      // Loop back: the next round's `streamSimple` will see the appended
+      // tool results in `llmMessages()` and either produce more tool calls
+      // or a terminal text response.
+      dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId, status: "thinking" });
     }
 
-    // Natural completion vs. cancellation:
-    //   - natural: store the final AssistantMessage so the next request
-    //     replays this turn into the LLM context.
-    //   - cancellation: leave status in `cancelled` (set by agent.cancel) so
-    //     llmMessages() skips it. We still emit `ui.status done` so the
-    //     Notch UI reaches the same terminal emoji state.
-    if (final && !signal.aborted) {
-      const ok = convo.markDone(turnId, final);
-      // Re-publish so Dev Mode reflects the full turn (user + assistant)
-      // instead of frozen pre-call input. Pull fresh `llmMessages()` so
-      // the snapshot includes the just-stored AssistantMessage.
-      observer.publish({
-        capturedAt: Date.now(),
+    // Tool-round budget exhausted — bail loud. This is almost always a
+    // model loop, not a real workload.
+    closeThinkingIfOpen();
+    const overflowMsg = `tool-call budget exceeded (${MAX_TOOL_ROUNDS} rounds)`;
+    if (convo.setError(turnId, RPCErrorCode.internalError, overflowMsg)) {
+      dispatcher.notify(RPCMethod.uiError, {
         sessionId,
         turnId,
-        modelId: model.id,
-        providerId: model.provider,
-        effort: effort ?? null,
-        systemPrompt: SYSTEM_PROMPT,
-        messagesJson: ContextObserver.renderMessages(convo.llmMessages()),
+        code: RPCErrorCode.internalError,
+        message: overflowMsg,
       });
-      // turnCount + lastActivityAt advanced — surface to the history list.
-      // Skip when `markDone` returned false (turn was reset/cancelled mid-flight).
-      if (ok) params.onDone?.();
     }
-    // `ui.status done` is the terminal signal regardless of whether the turn
-    // is still in the conversation — Shell may want to clear its emoji even
-    // if the turn was reset. We notify unconditionally here. Cancel paths
-    // also land here (loop break on `signal.aborted`) — closing the thinking
-    // block first keeps the cancel-mid-thinking UX consistent with errors.
-    closeThinkingIfOpen();
-    dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId, status: "done" });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.error("runTurn failed", { turnId, err: String(err) });
@@ -449,3 +661,109 @@ export async function runTurn(
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Tool dispatch
+// ---------------------------------------------------------------------------
+
+function extractToolCalls(msg: AssistantMessage): ToolCall[] {
+  const out: ToolCall[] = [];
+  for (const c of msg.content) {
+    if (c.type === "toolCall") out.push(c);
+  }
+  return out;
+}
+
+interface ToolDispatchCtx {
+  sessionId: string;
+  turnId: string;
+  toolCallId: string;
+  signal: AbortSignal;
+}
+
+/// Resolve a tool call's handler and validate its arguments without running
+/// anything. Returns `ready` with the validated args + handler on success,
+/// or `rejected` with a human-readable failure on missing-tool / schema
+/// violation. The agent loop calls this at `toolcall_end` time so the wire
+/// can decide between `ui.toolCall.called` and `ui.toolCall.rejected` before
+/// the dispatch round even starts.
+function prepareToolCall(
+  call: ToolCall,
+  byName: ReadonlyMap<string, ToolHandler<any, any>>,
+):
+  | { kind: "ready"; args: Record<string, unknown>; handler: ToolHandler<any, any> }
+  | { kind: "rejected"; errorMessage: string } {
+  const handler = byName.get(call.name);
+  if (!handler) {
+    const known = Array.from(byName.keys()).join(", ") || "<none>";
+    return {
+      kind: "rejected",
+      errorMessage: `Unknown tool "${call.name}". Available tools: ${known}.`,
+    };
+  }
+  try {
+    const args = validateToolArguments(handler.spec, call) as Record<string, unknown>;
+    return { kind: "ready", args, handler };
+  } catch (err) {
+    return {
+      kind: "rejected",
+      errorMessage: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/// Run a pre-validated tool call. The args + handler come from
+/// `prepareToolCall`; this function only owns the handler's runtime
+/// behavior.
+///
+/// Error policy (P2-1, AGENTS.md fail-fast):
+///   - Handler returns `{ isError: true }` → recoverable; surfaced to the
+///     model as the tool's output.
+///   - Handler throws `ToolUserError` → recoverable; same path, the message
+///     becomes the model-visible text. Sugar for handlers that prefer
+///     throwing over building the envelope.
+///   - Handler throws anything else → harness/programmer fault. We RE-THROW
+///     so `runTurn`'s top-level catch surfaces it as a `ui.error` (turn
+///     terminates). Swallowing it would let a real bug masquerade as
+///     model-correctable feedback and silently corrupt subsequent rounds.
+async function runTool(
+  handler: ToolHandler<any, any>,
+  args: Record<string, unknown>,
+  toolName: string,
+  ctx: ToolDispatchCtx,
+): Promise<ToolExecResult> {
+  try {
+    return await handler.execute(args, ctx);
+  } catch (err) {
+    if (err instanceof ToolUserError) {
+      return {
+        content: [{ type: "text", text: err.message }],
+        isError: true,
+      };
+    }
+    // Unexpected — let runTurn handle it. Annotate the message so the
+    // ui.error surface still tells the user which tool blew up.
+    const inner = err instanceof Error ? err : new Error(String(err));
+    const wrapped = new Error(`Tool "${toolName}" threw: ${inner.message}`);
+    (wrapped as Error & { cause?: unknown }).cause = inner;
+    throw wrapped;
+  }
+}
+
+/// Render a tool result's content blocks down to a single string for the
+/// Shell's `ui.toolCall` notification. Concatenates text blocks and replaces
+/// images with a placeholder — Shell renders raw text in the panel today,
+/// and image bytes have no place on this notification (the model already
+/// got them via the ToolResultMessage).
+function renderResultForWire(content: ToolResultContent[]): string {
+  const out: string[] = [];
+  for (const c of content) {
+    if (c.type === "text") out.push(c.text);
+    else if (c.type === "image") out.push(`[image ${c.mimeType}]`);
+  }
+  return out.join("\n");
+}
+
+// Re-export for tests that touch llmMessages-derived behavior without
+// caring about the broader surface.
+export type { Message };

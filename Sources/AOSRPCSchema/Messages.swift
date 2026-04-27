@@ -156,6 +156,7 @@ public enum RPCMethod {
     public static let conversationReset = "conversation.reset"
     public static let uiToken = "ui.token"
     public static let uiThinking = "ui.thinking"
+    public static let uiToolCall = "ui.toolCall"
     public static let uiStatus = "ui.status"
     public static let uiError = "ui.error"
     public static let providerStatus = "provider.status"

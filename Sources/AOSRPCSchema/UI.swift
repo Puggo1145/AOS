@@ -115,6 +115,246 @@ public struct UIThinkingParams: Codable, Sendable, Equatable {
     }
 }
 
+// `ui.toolCall` carries the lifecycle of one tool invocation, tagged by `phase`
+// so each frame is self-describing on the wire:
+//   - `.called`   — the assistant emitted a tool call AND its arguments
+//                   passed schema validation. Carries `toolCallId`,
+//                   `toolName`, and the validated `args` payload (opaque
+//                   JSON; the sidecar has already shape-checked it against
+//                   the tool's schema). The handler is about to run.
+//   - `.result`   — the tool finished executing (success OR runtime error).
+//                   Carries `toolCallId`, `toolName`, `isError`, and a
+//                   one-shot text rendering of the result content
+//                   (`outputText`). Structured details stay sidecar-side.
+//   - `.rejected` — argument validation failed; the handler never ran.
+//                   Carries `toolCallId`, `toolName`, the model's raw
+//                   `args` (so the UI can surface what was attempted), and
+//                   `errorMessage` (the validation failure shown to both
+//                   the user and the model on the next round). MUST NOT
+//                   carry `isError` / `outputText`: phase IS the failure
+//                   signal, and there is no tool output to render.
+// Lives on its own channel (separate from `ui.token` / `ui.thinking`) so the
+// Notch panel can render tool activity distinctly from the visible reply.
+//
+// Rationale for the dedicated `.rejected` phase (vs overloading `.result`):
+// the Shell's `ConversationMirror.applyToolCall(.result)` deliberately drops
+// frames whose `toolCallId` is unknown — that's how it tolerates the
+// `agent.reset` / in-flight tool race. Validation failure happens BEFORE any
+// `.called` is emitted (no record yet), so reusing `.result` would make the
+// rejection invisible. A separate phase keeps the per-phase field invariants
+// strict on both sides while still letting the mirror synthesize an errored
+// record in one well-defined place.
+public struct UIToolCallParams: Codable, Sendable, Equatable {
+    public enum Phase: String, Codable, Sendable, Equatable {
+        case called
+        case result
+        case rejected
+    }
+
+    public let sessionId: String
+    public let turnId: String
+    public let phase: Phase
+    public let toolCallId: String
+    public let toolName: String
+    /// Set iff `phase == .called` or `phase == .rejected`.
+    public let args: JSONValue?
+    /// Set iff `phase == .result`.
+    public let isError: Bool?
+    /// Set iff `phase == .result`.
+    public let outputText: String?
+    /// Set iff `phase == .rejected`. Human-readable validation failure.
+    public let errorMessage: String?
+
+    public init(
+        sessionId: String,
+        turnId: String,
+        phase: Phase,
+        toolCallId: String,
+        toolName: String,
+        args: JSONValue? = nil,
+        isError: Bool? = nil,
+        outputText: String? = nil,
+        errorMessage: String? = nil
+    ) {
+        self.sessionId = sessionId
+        self.turnId = turnId
+        self.phase = phase
+        self.toolCallId = toolCallId
+        self.toolName = toolName
+        self.args = args
+        self.isError = isError
+        self.outputText = outputText
+        self.errorMessage = errorMessage
+    }
+
+    // Custom Codable enforces the tagged-union invariant at the wire boundary,
+    // mirroring `UIThinkingParams` above. Synthesized Codable would happily
+    // round-trip a `.called` frame that also carries `outputText` (or a
+    // `.result` frame that also carries `args`), both of which violate the
+    // contract the TS discriminated union enforces by construction. Failing
+    // here keeps the two sides honest and surfaces wire corruption immediately.
+    //
+    // Field-presence semantics (NOT field-value): we test `contains(_:)` rather
+    // than `decodeIfPresent` so that an explicit `null` is rejected the same as
+    // an unexpected non-null value. This matches the symmetric strictness of
+    // `UIThinkingParams` and the byte-equal expectations of the fixtures.
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionId, turnId, phase, toolCallId, toolName, args, isError, outputText, errorMessage
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let sessionId = try c.decode(String.self, forKey: .sessionId)
+        let turnId = try c.decode(String.self, forKey: .turnId)
+        let phase = try c.decode(Phase.self, forKey: .phase)
+        let toolCallId = try c.decode(String.self, forKey: .toolCallId)
+        let toolName = try c.decode(String.self, forKey: .toolName)
+        switch phase {
+        case .called:
+            guard c.contains(.args) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .args, in: c,
+                    debugDescription: "ui.toolCall phase=called requires an 'args' field"
+                )
+            }
+            guard !c.contains(.isError) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .isError, in: c,
+                    debugDescription: "ui.toolCall phase=called must not carry 'isError'"
+                )
+            }
+            guard !c.contains(.outputText) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .outputText, in: c,
+                    debugDescription: "ui.toolCall phase=called must not carry 'outputText'"
+                )
+            }
+            guard !c.contains(.errorMessage) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .errorMessage, in: c,
+                    debugDescription: "ui.toolCall phase=called must not carry 'errorMessage'"
+                )
+            }
+            let args = try c.decode(JSONValue.self, forKey: .args)
+            self.init(
+                sessionId: sessionId, turnId: turnId, phase: .called,
+                toolCallId: toolCallId, toolName: toolName, args: args
+            )
+        case .result:
+            guard !c.contains(.args) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .args, in: c,
+                    debugDescription: "ui.toolCall phase=result must not carry 'args'"
+                )
+            }
+            guard c.contains(.isError) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .isError, in: c,
+                    debugDescription: "ui.toolCall phase=result requires an 'isError' boolean"
+                )
+            }
+            guard c.contains(.outputText) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .outputText, in: c,
+                    debugDescription: "ui.toolCall phase=result requires an 'outputText' string"
+                )
+            }
+            guard !c.contains(.errorMessage) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .errorMessage, in: c,
+                    debugDescription: "ui.toolCall phase=result must not carry 'errorMessage'"
+                )
+            }
+            let isError = try c.decode(Bool.self, forKey: .isError)
+            let outputText = try c.decode(String.self, forKey: .outputText)
+            self.init(
+                sessionId: sessionId, turnId: turnId, phase: .result,
+                toolCallId: toolCallId, toolName: toolName,
+                isError: isError, outputText: outputText
+            )
+        case .rejected:
+            guard c.contains(.args) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .args, in: c,
+                    debugDescription: "ui.toolCall phase=rejected requires an 'args' field"
+                )
+            }
+            guard c.contains(.errorMessage) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .errorMessage, in: c,
+                    debugDescription: "ui.toolCall phase=rejected requires an 'errorMessage' string"
+                )
+            }
+            guard !c.contains(.isError) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .isError, in: c,
+                    debugDescription: "ui.toolCall phase=rejected must not carry 'isError'"
+                )
+            }
+            guard !c.contains(.outputText) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .outputText, in: c,
+                    debugDescription: "ui.toolCall phase=rejected must not carry 'outputText'"
+                )
+            }
+            let args = try c.decode(JSONValue.self, forKey: .args)
+            let errorMessage = try c.decode(String.self, forKey: .errorMessage)
+            self.init(
+                sessionId: sessionId, turnId: turnId, phase: .rejected,
+                toolCallId: toolCallId, toolName: toolName,
+                args: args, errorMessage: errorMessage
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(sessionId, forKey: .sessionId)
+        try c.encode(turnId, forKey: .turnId)
+        try c.encode(phase, forKey: .phase)
+        try c.encode(toolCallId, forKey: .toolCallId)
+        try c.encode(toolName, forKey: .toolName)
+        switch phase {
+        case .called:
+            guard let args else {
+                throw EncodingError.invalidValue(
+                    self,
+                    EncodingError.Context(
+                        codingPath: c.codingPath,
+                        debugDescription: "UIToolCallParams.args must be set when phase == .called"
+                    )
+                )
+            }
+            try c.encode(args, forKey: .args)
+        case .result:
+            guard let isError, let outputText else {
+                throw EncodingError.invalidValue(
+                    self,
+                    EncodingError.Context(
+                        codingPath: c.codingPath,
+                        debugDescription: "UIToolCallParams.isError and .outputText must be set when phase == .result"
+                    )
+                )
+            }
+            try c.encode(isError, forKey: .isError)
+            try c.encode(outputText, forKey: .outputText)
+        case .rejected:
+            guard let args, let errorMessage else {
+                throw EncodingError.invalidValue(
+                    self,
+                    EncodingError.Context(
+                        codingPath: c.codingPath,
+                        debugDescription: "UIToolCallParams.args and .errorMessage must be set when phase == .rejected"
+                    )
+                )
+            }
+            try c.encode(args, forKey: .args)
+            try c.encode(errorMessage, forKey: .errorMessage)
+        }
+    }
+}
+
 /// Discrete agent status pushed by the sidecar agent loop.
 public enum UIStatus: String, Codable, Sendable, Equatable, CaseIterable {
     case thinking

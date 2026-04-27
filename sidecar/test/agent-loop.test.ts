@@ -201,12 +201,13 @@ test("happy path: ack + turnStarted + thinking + tokens + done", async () => {
   expect(last).toEqual({ method: "ui.status", params: { sessionId, turnId: "T1", status: "done" } });
 
   // Conversation now holds the completed turn with both the streamed reply
-  // and the AssistantMessage stash needed to replay this turn into the next
-  // request's LLM context.
+  // and the assistant AssistantMessage in the flat history (range covers it).
   expect(convo.turns).toHaveLength(1);
   expect(convo.turns[0].status).toBe("done");
   expect(convo.turns[0].reply).toBe("Hello, world");
-  expect(convo.turns[0].finalAssistant).toBeDefined();
+  // Flat-history layout (post tool-use refactor): one user, one assistant.
+  expect(convo.messages).toHaveLength(2);
+  expect(convo.messages[1].role).toBe("assistant");
 });
 
 test("thinking lifecycle: thinking_delta and thinking_end are forwarded as ui.thinking before ui.token", async () => {
@@ -679,6 +680,48 @@ test("multi-session: notifications carry the correct sessionId; reset of A does 
   const resetEvents = captured.notifications.filter((n) => n.method === "conversation.reset");
   expect(resetEvents.map((n) => n.params.sessionId)).toContain(a.id);
   expect(resetEvents.find((n) => n.params.sessionId === b.id)).toBeUndefined();
+});
+
+test("agent.submit rejects a second concurrent turn on the same session", async () => {
+  // The Conversation store relies on contiguous [messageStart, messageEnd)
+  // ranges; interleaving two turns on the same session would let one absorb
+  // the other's user message. Sidecar enforces "one active turn per session"
+  // independently of the Shell's serialization.
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const { manager, sessionId } = setupSession();
+  registerAgentHandlers(dispatcher, { manager });
+
+  // A long-hanging stream so T1 is still active when T2 lands.
+  let resolveStream: () => void = () => {};
+  nextStream = (model) => {
+    const s = new AssistantMessageEventStream();
+    queueMicrotask(() => {
+      // Hold open until the test resolves it.
+      resolveStream = () => {
+        const partial = fakeAssistantMessage(model);
+        s.push({ type: "text_delta", contentIndex: 0, delta: "ok", partial });
+        s.push({ type: "done", reason: "stop", message: partial });
+        s.end();
+      };
+    });
+    return s;
+  };
+
+  pushInbound({ jsonrpc: "2.0", id: 1, method: "agent.submit", params: { sessionId, turnId: "T1", prompt: "first", citedContext: {} } });
+  await flush(40);
+
+  pushInbound({ jsonrpc: "2.0", id: 2, method: "agent.submit", params: { sessionId, turnId: "T2", prompt: "second", citedContext: {} } });
+  await flush(40);
+
+  const r1 = captured.responses.find((r) => r.id === 1);
+  expect(r1?.result).toEqual({ accepted: true });
+  const r2 = captured.responses.find((r) => r.id === 2);
+  expect(r2?.error?.code).toBe(RPCErrorCode.invalidRequest);
+  expect(r2?.error?.message).toMatch(/in-flight turn/);
+
+  // Let T1 finish so the test cleanly winds down.
+  resolveStream();
+  await flush(40);
 });
 
 test("agent.submit / cancel / reset return unknownSession for an unknown sessionId", async () => {

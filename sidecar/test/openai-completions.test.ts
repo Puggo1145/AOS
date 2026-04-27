@@ -181,7 +181,7 @@ test("streamSimpleDeepseek translates simple `reasoning` into wire `reasoning_ef
   globalThis.fetch = (async (_url: string, init?: { body?: string }) => {
     captured = JSON.parse(init?.body ?? "{}") as Record<string, unknown>;
     return sseResponse([sseChunk({ id: "c1", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }), sseChunk("[DONE]")]);
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   try {
     const stream = streamSimpleDeepseek(
       makeDeepseekModel(),
@@ -222,7 +222,10 @@ test("default compat sends reasoning_effort for reasoning models", () => {
 // convertMessages (observed via payload.messages)
 // =============================================================================
 
-test("assistant thinking blocks are dropped on replay (chat-completions cannot replay reasoning)", () => {
+test("assistant thinking blocks are replayed via reasoning_content on DeepSeek thinking mode", () => {
+  // DeepSeek V4 thinking mode rejects the next round with HTTP 400 unless
+  // the prior assistant message carries its `reasoning_content` field.
+  // This test pins the contract for the bash-tool follow-up that broke.
   const assistant: AssistantMessage = {
     role: "assistant",
     content: [
@@ -251,8 +254,40 @@ test("assistant thinking blocks are dropped on replay (chat-completions cannot r
   expect(messages).toHaveLength(4);
   const am = messages[2]!;
   expect(am["role"]).toBe("assistant");
-  // Only the visible answer survives — thinking is gone.
   expect(am["content"]).toBe("answer");
+  expect(am["reasoning_content"]).toBe("internal monologue");
+});
+
+test("non-thinking model does not get reasoning_content even if compat declares the field", () => {
+  // Guard: the gate on `supportsThinking(model)` keeps us from sending the
+  // field to providers/models that don't accept it (e.g. vanilla OpenAI
+  // Chat Completions, where the default compat still names "reasoning_content"
+  // as the *streaming* field but the request endpoint rejects it as input).
+  const assistant: AssistantMessage = {
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "should not leak", thinkingSignature: "sig" } as ThinkingContent,
+      { type: "text", text: "answer" } as TextContent,
+    ],
+    api: "openai-completions",
+    provider: "openai",
+    model: "gpt-4o",
+    usage: emptyUsage(),
+    stopReason: "stop",
+    timestamp: 0,
+  };
+  const payload = buildPayload(
+    makeOpenAIModel(),
+    ctx([
+      { role: "user", content: "q", timestamp: 0 },
+      assistant,
+      { role: "user", content: "follow-up", timestamp: 0 },
+    ]),
+    {},
+    DEFAULT_COMPAT,
+  );
+  const messages = payload["messages"] as Array<Record<string, unknown>>;
+  const am = messages[2]!;
   expect(am).not.toHaveProperty("reasoning_content");
 });
 
@@ -322,7 +357,7 @@ test("text content delta surfaces as text_start/delta/end + done", async () => {
     sseChunk("[DONE]"),
   ];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => sseResponse(chunks)) as typeof fetch;
+  globalThis.fetch = (async () => sseResponse(chunks)) as unknown as typeof fetch;
   try {
     const stream = streamOpenAICompletions(
       makeOpenAIModel(),
@@ -355,7 +390,7 @@ test("DeepSeek reasoning_content delta surfaces as thinking_* events ahead of te
     sseChunk("[DONE]"),
   ];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => sseResponse(chunks)) as typeof fetch;
+  globalThis.fetch = (async () => sseResponse(chunks)) as unknown as typeof fetch;
   try {
     const stream = streamDeepseek(
       makeDeepseekModel(),
@@ -394,7 +429,7 @@ test("tool_calls argument streaming accumulates into final ToolCall block", asyn
     sseChunk("[DONE]"),
   ];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => sseResponse(chunks)) as typeof fetch;
+  globalThis.fetch = (async () => sseResponse(chunks)) as unknown as typeof fetch;
   try {
     const stream = streamOpenAICompletions(
       makeOpenAIModel(),
@@ -418,7 +453,7 @@ test("tool_calls argument streaming accumulates into final ToolCall block", asyn
 test("HTTP non-2xx surfaces as error event with response body in message", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async () =>
-    new Response("model overloaded", { status: 503, headers: { "content-type": "text/plain" } })) as typeof fetch;
+    new Response("model overloaded", { status: 503, headers: { "content-type": "text/plain" } })) as unknown as typeof fetch;
   try {
     const stream = streamOpenAICompletions(
       makeOpenAIModel(),
@@ -442,7 +477,7 @@ test("missing API key produces error event without making a fetch", async () => 
   globalThis.fetch = (async () => {
     fetchCalled = true;
     return new Response("", { status: 200 });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   try {
     const stream = streamOpenAICompletions(
       makeOpenAIModel(),
@@ -481,7 +516,7 @@ test("DeepSeek cost calculation reflects per-1M pricing on cache-miss + cache-hi
     sseChunk("[DONE]"),
   ];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => sseResponse(chunks)) as typeof fetch;
+  globalThis.fetch = (async () => sseResponse(chunks)) as unknown as typeof fetch;
   try {
     const stream = streamDeepseek(
       makeDeepseekModel(),

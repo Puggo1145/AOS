@@ -87,6 +87,61 @@ public final class ConversationMirror {
         }
     }
 
+    public func applyToolCall(_ p: UIToolCallParams) {
+        guard let idx = turns.lastIndex(where: { $0.id == p.turnId }) else { return }
+        switch p.phase {
+        case .called:
+            // Wire decoder rejects `.called` without `args`, so the
+            // force-unwrap matches the Codable contract — see UI.swift.
+            let record = ToolCallRecord(
+                id: p.toolCallId,
+                name: p.toolName,
+                args: p.args!,
+                status: .calling,
+                isError: nil,
+                outputText: nil
+            )
+            // Idempotent on duplicate `.called` for the same id (shouldn't
+            // happen in practice; the sidecar emits exactly once per call).
+            if let existing = turns[idx].toolCalls.firstIndex(where: { $0.id == p.toolCallId }) {
+                turns[idx].toolCalls[existing] = record
+            } else {
+                turns[idx].toolCalls.append(record)
+            }
+        case .result:
+            // `.result` for an unknown id can happen if a `conversation.reset`
+            // races with an in-flight tool call — drop silently rather than
+            // synthesizing a record without args.
+            guard let recIdx = turns[idx].toolCalls.firstIndex(where: { $0.id == p.toolCallId }) else {
+                return
+            }
+            turns[idx].toolCalls[recIdx].status = .completed
+            turns[idx].toolCalls[recIdx].isError = p.isError
+            turns[idx].toolCalls[recIdx].outputText = p.outputText
+        case .rejected:
+            // Argument validation failed in the sidecar — the handler never
+            // ran, so there is no prior `.called` record to update. Synthesize
+            // a completed isError record from this single frame so the user
+            // can see what the model tried to call and why it was refused.
+            // Wire decoder rejects `.rejected` without `args`/`errorMessage`,
+            // so the force-unwraps match the Codable contract — see UI.swift.
+            let record = ToolCallRecord(
+                id: p.toolCallId,
+                name: p.toolName,
+                args: p.args!,
+                status: .completed,
+                isError: true,
+                outputText: p.errorMessage!
+            )
+            // Idempotent on the (rare) duplicate emit.
+            if let existing = turns[idx].toolCalls.firstIndex(where: { $0.id == p.toolCallId }) {
+                turns[idx].toolCalls[existing] = record
+            } else {
+                turns[idx].toolCalls.append(record)
+            }
+        }
+    }
+
     public func applyStatus(_ p: UIStatusParams) {
         guard let idx = turns.lastIndex(where: { $0.id == p.turnId }) else { return }
         let mapped = AgentStatus.from(uiStatus: p.status)

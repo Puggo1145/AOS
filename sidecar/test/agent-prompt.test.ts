@@ -209,7 +209,8 @@ test("Conversation.llmMessages keeps the cited context on prior done turns", () 
     stopReason: "stop",
     timestamp: 1,
   };
-  convo.markDone("T1", fakeAssistant);
+  convo.appendAssistant("T1", fakeAssistant);
+  convo.markDone("T1");
   convo.startTurn({ id: "T2", prompt: "second", citedContext: {} });
 
   const msgs = convo.llmMessages();

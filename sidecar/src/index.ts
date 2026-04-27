@@ -16,6 +16,8 @@ import { SessionManager } from "./agent/session/manager";
 import { registerSessionHandlers } from "./agent/session/handlers";
 import { registerProviderHandlers } from "./auth/register";
 import { registerConfigHandlers } from "./config/handlers";
+import { registerBuiltinTools } from "./agent/tools";
+import { ensureWorkspace } from "./agent/workspace";
 import { logger } from "./log";
 import { AOS_PROTOCOL_VERSION, RPCMethod, type HelloResult } from "./rpc/rpc-types";
 
@@ -24,6 +26,12 @@ import "./llm";
 
 async function main(): Promise<void> {
   process.stderr.write(`[aos-sidecar] starting; protocol ${AOS_PROTOCOL_VERSION}\n`);
+
+  // Side-effect bootstrap: ensure ~/.aos/workspace/ exists (the agent's
+  // default scratch directory) and register every built-in tool into the
+  // global ToolRegistry before the agent loop ever runs.
+  ensureWorkspace();
+  registerBuiltinTools();
 
   const transport = new StdioTransport();
   const dispatcher = new Dispatcher(transport);

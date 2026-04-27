@@ -8,10 +8,11 @@
 //   - Anthropic cache_control / OpenRouter routing / Vercel Gateway / Copilot
 //     headers / Z.AI / Qwen / Moonshot thinking variants / prompt_cache_key
 //     plumbing / session affinity headers / reasoning_details replay.
-//   - Assistant thinking replay: chat-completions providers (notably DeepSeek)
-//     reject `reasoning_content` echoed in conversation history. We drop
-//     `thinking` blocks at convertMessages time instead of plumbing a
-//     per-provider signature field.
+//   - Reasoning details / multi-block signatures: we replay assistant thinking
+//     as a single `compat.reasoningField` string on the assistant message
+//     (DeepSeek V4 thinking-mode requires this; sending it back is a 400 if
+//     omitted). For providers whose chat-completions endpoint never produces
+//     reasoning we leave the field unset — gated by `supportsThinking(model)`.
 //
 // Design boundary: `runCompletionsStream` is generic over `Api` so a thin
 // per-provider wrapper (e.g. `deepseek.ts`) can supply its own compat profile
@@ -32,6 +33,7 @@ import type {
   StopReason,
   StreamFunction,
   TextContent,
+  ThinkingContent,
   ToolCall,
   ToolResultContent,
   ThinkingLevel,
@@ -159,6 +161,12 @@ interface ChatMessage {
   name?: string;
   tool_calls?: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }>;
   tool_call_id?: string;
+  /// Reasoning replay on assistant messages. The wire field name varies by
+  /// provider — `compat.reasoningField` picks one — so we declare all three
+  /// optional. Exactly one (or none) is set per message.
+  reasoning_content?: string;
+  reasoning?: string;
+  reasoning_text?: string;
 }
 
 function isText(b: AssistantContent | UserContentBlock): b is TextContent {
@@ -208,13 +216,15 @@ function convertMessages<TApi extends Api>(
     }
 
     if (msg.role === "assistant") {
-      // We deliberately drop `thinking` blocks — the chat-completions wire
-      // protocol has no replayable reasoning payload (see file header).
       const textParts = msg.content
         .filter(isText)
         .filter((b) => b.text.trim().length > 0)
         .map((b) => sanitizeSurrogates(b.text));
       const toolCalls = msg.content.filter((b): b is ToolCall => b.type === "toolCall");
+      const thinkingParts = msg.content
+        .filter((b): b is ThinkingContent => b.type === "thinking")
+        .map((b) => b.thinking)
+        .filter((t) => t.length > 0);
 
       const am: ChatMessage = { role: "assistant" };
       if (textParts.length > 0) am.content = textParts.join("");
@@ -228,6 +238,17 @@ function convertMessages<TApi extends Api>(
       // Skip empty assistant turns — providers reject "no content + no tools".
       if (am.content === undefined && !am.tool_calls) continue;
       if (am.content === undefined) am.content = null;
+      // Replay `reasoning_content` (or the compat-declared variant) on
+      // assistant messages whose model is in thinking mode. DeepSeek V4 in
+      // thinking mode 400s with "The reasoning_content in the thinking mode
+      // must be passed back to the API" if we omit it on the next round —
+      // this is exactly the case that broke the bash-tool follow-up turn.
+      // Gating on `supportsThinking(model)` keeps us from sending the field
+      // to OpenAI Chat Completions (which has no reasoning surface there)
+      // even though `DEFAULT_COMPAT.reasoningField` is non-null.
+      if (compat.reasoningField && supportsThinking(model) && thinkingParts.length > 0) {
+        am[compat.reasoningField] = thinkingParts.join("");
+      }
       out.push(am);
       continue;
     }

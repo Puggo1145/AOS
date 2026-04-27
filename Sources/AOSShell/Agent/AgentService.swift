@@ -87,6 +87,32 @@ public struct ConversationTurn: Identifiable {
     /// token arrives, or when the turn reaches a terminal status while
     /// thinking is still open. `nil` while thinking is in progress.
     public var thinkingEndedAt: Date?
+    /// Tool calls observed on this turn, in emit order. Each record starts
+    /// in `.calling` on `ui.toolCall { phase: "called" }` and transitions to
+    /// `.completed` on the matching `phase: "result"` frame. Empty when the
+    /// turn made no tool calls.
+    public var toolCalls: [ToolCallRecord] = []
+}
+
+/// Per-tool-invocation record mirrored from the sidecar's `ui.toolCall`
+/// lifecycle. Lives on the owning `ConversationTurn`. The Shell UI is not
+/// yet wired to render these — the data is captured here so the renderer
+/// can read it without re-plumbing the wire.
+public struct ToolCallRecord: Identifiable, Sendable, Equatable {
+    public enum Status: Sendable, Equatable {
+        case calling
+        case completed
+    }
+
+    /// `toolCallId` from the wire — stable across `.called` → `.result`.
+    public let id: String
+    public let name: String
+    public let args: JSONValue
+    public var status: Status
+    /// Set on `.result`. `nil` while the call is still in `.calling`.
+    public var isError: Bool?
+    /// One-shot text rendering of the tool's output content. Set on `.result`.
+    public var outputText: String?
 }
 
 /// Display-side snapshot of the citedContext attached to a turn. The icon is
@@ -219,6 +245,9 @@ public final class AgentService {
         rpc.registerNotificationHandler(method: RPCMethod.uiThinking) { [weak self] (params: UIThinkingParams) in
             await self?.handleThinking(params)
         }
+        rpc.registerNotificationHandler(method: RPCMethod.uiToolCall) { [weak self] (params: UIToolCallParams) in
+            await self?.handleToolCall(params)
+        }
         rpc.registerNotificationHandler(method: RPCMethod.uiStatus) { [weak self] (params: UIStatusParams) in
             await self?.handleStatus(params)
         }
@@ -331,6 +360,10 @@ public final class AgentService {
 
     internal func handleThinking(_ p: UIThinkingParams) {
         sessionStore.mirror(for: p.sessionId).applyThinking(p)
+    }
+
+    internal func handleToolCall(_ p: UIToolCallParams) {
+        sessionStore.mirror(for: p.sessionId).applyToolCall(p)
     }
 
     internal func handleStatus(_ p: UIStatusParams) {

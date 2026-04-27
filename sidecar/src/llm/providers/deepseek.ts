@@ -16,9 +16,12 @@
 //     `reasoning`).
 //   - The `max_tokens` field is the legacy spelling — DeepSeek's docs use
 //     it exclusively, `max_completion_tokens` is unrecognized.
-//   - Echoing prior-turn `reasoning_content` back into messages causes a
-//     400. We already drop assistant `thinking` blocks at convertMessages
-//     time in `openai-completions.ts`, so no extra handling here.
+//   - V4 thinking mode REQUIRES prior-turn `reasoning_content` to be echoed
+//     back on the assistant message — omitting it 400s with "The
+//     reasoning_content in the thinking mode must be passed back to the API"
+//     on the next round (most visibly on tool-call follow-ups). The replay
+//     is wired in `openai-completions.ts::convertMessages`, gated on
+//     `compat.reasoningField` + `supportsThinking(model)`.
 
 import type {
   SimpleStreamFunction,

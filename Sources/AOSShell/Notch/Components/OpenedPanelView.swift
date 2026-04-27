@@ -441,6 +441,15 @@ struct OpenedPanelView: View {
                             endedAt: turn.thinkingEndedAt
                         )
                     }
+                    // Tool calls render in emit order between thinking and
+                    // reply — same vertical column the LLM produced them in.
+                    // `id: \.id` is the wire `toolCallId`, stable across the
+                    // `.calling` → `.completed` transition so SwiftUI keeps
+                    // each row's local state (expanded/collapsed) when the
+                    // result lands.
+                    ForEach(turn.toolCalls, id: \.id) { record in
+                        ToolCallView(record: record)
+                    }
                     if !turn.reply.isEmpty {
                         // Reply is untrusted LLM output. Disable network image
                         // providers so a model-emitted `![](https://…)` cannot

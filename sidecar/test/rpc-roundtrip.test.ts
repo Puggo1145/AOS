@@ -31,6 +31,7 @@ import {
   type ConfigSetEffortParams,
   type UITokenParams,
   type UIThinkingParams,
+  type UIToolCallParams,
   type UIStatusParams,
   type UIErrorParams,
   type ProviderStatusParams,
@@ -200,6 +201,51 @@ test("ui.thinking.end fixture roundtrips byte-equal", () => {
   expect(note.params.kind).toBe("end");
   // `end` variant must not carry a `delta` field.
   expect("delta" in note.params).toBe(false);
+});
+
+test("ui.toolCall.called fixture roundtrips byte-equal", () => {
+  assertRoundtrip("ui.toolCall.called.json");
+  const { parsed } = loadFixture("ui.toolCall.called.json");
+  const note = parsed as RPCNotification<UIToolCallParams>;
+  expect(note.method).toBe(RPCMethod.uiToolCall);
+  expect(note.params.phase).toBe("called");
+  if (note.params.phase === "called") {
+    expect(note.params.toolName).toBe("bash");
+    expect(typeof note.params.args).toBe("object");
+  }
+  // `result`-only fields must not be on a called frame.
+  expect("isError" in note.params).toBe(false);
+  expect("outputText" in note.params).toBe(false);
+});
+
+test("ui.toolCall.result fixture roundtrips byte-equal", () => {
+  assertRoundtrip("ui.toolCall.result.json");
+  const { parsed } = loadFixture("ui.toolCall.result.json");
+  const note = parsed as RPCNotification<UIToolCallParams>;
+  expect(note.method).toBe(RPCMethod.uiToolCall);
+  expect(note.params.phase).toBe("result");
+  if (note.params.phase === "result") {
+    expect(note.params.isError).toBe(false);
+    expect(typeof note.params.outputText).toBe("string");
+  }
+  expect("args" in note.params).toBe(false);
+});
+
+test("ui.toolCall.rejected fixture roundtrips byte-equal", () => {
+  assertRoundtrip("ui.toolCall.rejected.json");
+  const { parsed } = loadFixture("ui.toolCall.rejected.json");
+  const note = parsed as RPCNotification<UIToolCallParams>;
+  expect(note.method).toBe(RPCMethod.uiToolCall);
+  expect(note.params.phase).toBe("rejected");
+  if (note.params.phase === "rejected") {
+    expect(note.params.toolName).toBe("bash");
+    expect(typeof note.params.errorMessage).toBe("string");
+    expect(typeof note.params.args).toBe("object");
+  }
+  // `result`-only fields must not appear on a rejected frame — phase is the
+  // failure signal.
+  expect("isError" in note.params).toBe(false);
+  expect("outputText" in note.params).toBe(false);
 });
 
 test("ui.status fixture roundtrips byte-equal", () => {

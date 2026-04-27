@@ -27,6 +27,7 @@ export type {
   TextContent,
   ThinkingContent,
   ImageContent,
+  ToolResultContent,
   ToolCall,
   Tool,
   JSONSchema,

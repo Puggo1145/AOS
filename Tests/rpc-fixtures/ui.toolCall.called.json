@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","method":"ui.toolCall","params":{"args":{"command":"echo hi","timeout":5000},"phase":"called","sessionId":"sess_01abcdef01234567","toolCallId":"tc_01HABCDEF","toolName":"bash","turnId":"01HABCDEF0123456789TURNSUBM"}}

@@ -51,7 +51,14 @@ test("markDone returns false after the turn has been wiped", () => {
   const c = new Conversation();
   c.startTurn({ id: "T1", prompt: "hi", citedContext: {} });
   c.reset();
-  expect(c.markDone("T1", fakeFinal())).toBe(false);
+  expect(c.markDone("T1")).toBe(false);
+});
+
+test("appendAssistant returns false after the turn has been wiped", () => {
+  const c = new Conversation();
+  c.startTurn({ id: "T1", prompt: "hi", citedContext: {} });
+  c.reset();
+  expect(c.appendAssistant("T1", fakeFinal())).toBe(false);
 });
 
 test("setError returns false after the turn has been wiped", () => {

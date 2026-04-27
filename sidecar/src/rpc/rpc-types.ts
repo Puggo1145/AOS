@@ -111,6 +111,7 @@ export const RPCMethod = {
   conversationReset: "conversation.reset",
   uiToken: "ui.token",
   uiThinking: "ui.thinking",
+  uiToolCall: "ui.toolCall",
   uiStatus: "ui.status",
   uiError: "ui.error",
   providerStatus: "provider.status",
@@ -325,6 +326,50 @@ export interface UITokenParams {
 export type UIThinkingParams =
   | { sessionId: string; turnId: string; kind: "delta"; delta: string }
   | { sessionId: string; turnId: string; kind: "end" };
+
+/// `ui.toolCall` carries the lifecycle of one tool invocation. Tagged union
+/// by `phase`:
+///   - `"called"`   — assistant emitted a tool call AND its arguments passed
+///                    schema validation. `args` is the parsed, validated
+///                    argument object the tool will receive.
+///   - `"result"`   — tool finished executing (success OR runtime error).
+///                    `outputText` is a one-shot text rendering of the result
+///                    content for the Shell to display; structured details
+///                    stay sidecar-side.
+///   - `"rejected"` — argument validation failed; the handler never ran.
+///                    `args` is the model's raw arguments (so the Shell can
+///                    show what was attempted) and `errorMessage` is the
+///                    validation failure surfaced to both the user and the
+///                    model on the next round.
+/// Lives on its own channel (separate from `ui.token`) so the Notch panel
+/// can render tool activity distinctly from the visible reply.
+export type UIToolCallParams =
+  | {
+      sessionId: string;
+      turnId: string;
+      phase: "called";
+      toolCallId: string;
+      toolName: string;
+      args: JSONValue;
+    }
+  | {
+      sessionId: string;
+      turnId: string;
+      phase: "result";
+      toolCallId: string;
+      toolName: string;
+      isError: boolean;
+      outputText: string;
+    }
+  | {
+      sessionId: string;
+      turnId: string;
+      phase: "rejected";
+      toolCallId: string;
+      toolName: string;
+      args: JSONValue;
+      errorMessage: string;
+    };
 
 export type UIStatus = "thinking" | "tool_calling" | "waiting_input" | "done";
 

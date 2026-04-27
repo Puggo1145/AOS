@@ -79,7 +79,7 @@ test("toListItem reflects current turnCount + lastActivityAt", () => {
   // Spin up a turn and drive it to done — turnCount should pick up the +1.
   const t = s.conversation.startTurn({ id: "t1", prompt: "hi", citedContext: {} });
   expect(s.toListItem().turnCount).toBe(0); // still thinking
-  s.conversation.markDone(t.id, {
+  s.conversation.appendAssistant(t.id, {
     role: "assistant",
     content: [],
     api: "openai-responses",
@@ -90,6 +90,7 @@ test("toListItem reflects current turnCount + lastActivityAt", () => {
     stopReason: "stop",
     timestamp: t.startedAt,
   });
+  s.conversation.markDone(t.id);
   const after = s.toListItem();
   expect(after.turnCount).toBe(1);
   expect(after.lastActivityAt).toBe(t.startedAt);

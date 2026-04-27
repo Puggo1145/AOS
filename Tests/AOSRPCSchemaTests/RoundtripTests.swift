@@ -212,6 +212,117 @@ final class RoundtripTests: XCTestCase {
         XCTAssertThrowsError(try JSONDecoder().decode(RPCNotification<UIThinkingParams>.self, from: raw))
     }
 
+    func testUIToolCallCalledRoundtrip() throws {
+        try assertRoundtrip(
+            fixture: "ui.toolCall.called.json",
+            as: RPCNotification<UIToolCallParams>.self
+        )
+    }
+
+    func testUIToolCallResultRoundtrip() throws {
+        try assertRoundtrip(
+            fixture: "ui.toolCall.result.json",
+            as: RPCNotification<UIToolCallParams>.self
+        )
+    }
+
+    /// `phase == .called` MUST omit result-only keys from the wire. The
+    /// fixture proves the positive case; this guards the negative — that we
+    /// don't accidentally emit `isError`/`outputText` on a called frame.
+    func testUIToolCallCalledOmitsResultFields() throws {
+        let called = RPCNotification(
+            method: "ui.toolCall",
+            params: UIToolCallParams(
+                sessionId: "s", turnId: "t", phase: .called,
+                toolCallId: "tc", toolName: "bash", args: .object([:])
+            )
+        )
+        let bytes = try CanonicalJSON.encode(called)
+        let s = String(data: bytes, encoding: .utf8) ?? ""
+        XCTAssertFalse(s.contains("\"isError\""), "called variant must not carry isError, got: \(s)")
+        XCTAssertFalse(s.contains("\"outputText\""), "called variant must not carry outputText, got: \(s)")
+    }
+
+    /// Symmetric guard: `phase == .result` must not encode `args`.
+    func testUIToolCallResultOmitsArgs() throws {
+        let result = RPCNotification(
+            method: "ui.toolCall",
+            params: UIToolCallParams(
+                sessionId: "s", turnId: "t", phase: .result,
+                toolCallId: "tc", toolName: "bash",
+                isError: false, outputText: "ok"
+            )
+        )
+        let bytes = try CanonicalJSON.encode(result)
+        let s = String(data: bytes, encoding: .utf8) ?? ""
+        XCTAssertFalse(s.contains("\"args\""), "result variant must not carry args, got: \(s)")
+    }
+
+    /// Decoder rejects a `phase:"called"` frame missing `args`. Mirrors the
+    /// equivalent ui.thinking guards above.
+    func testUIToolCallCalledWithoutArgsIsRejected() {
+        let raw = #"{"jsonrpc":"2.0","method":"ui.toolCall","params":{"phase":"called","sessionId":"s","toolCallId":"tc","toolName":"bash","turnId":"t"}}"#.data(using: .utf8)!
+        XCTAssertThrowsError(try JSONDecoder().decode(RPCNotification<UIToolCallParams>.self, from: raw))
+    }
+
+    /// Decoder rejects a `phase:"result"` frame that carries `args` (leftover
+    /// from a producer that forgot to clear the called-side payload).
+    func testUIToolCallResultWithArgsIsRejected() {
+        let raw = #"{"jsonrpc":"2.0","method":"ui.toolCall","params":{"args":{},"isError":false,"outputText":"x","phase":"result","sessionId":"s","toolCallId":"tc","toolName":"bash","turnId":"t"}}"#.data(using: .utf8)!
+        XCTAssertThrowsError(try JSONDecoder().decode(RPCNotification<UIToolCallParams>.self, from: raw))
+    }
+
+    /// Decoder rejects a `phase:"result"` frame missing `isError` or `outputText`.
+    func testUIToolCallResultMissingFieldsIsRejected() {
+        let raw = #"{"jsonrpc":"2.0","method":"ui.toolCall","params":{"isError":false,"phase":"result","sessionId":"s","toolCallId":"tc","toolName":"bash","turnId":"t"}}"#.data(using: .utf8)!
+        XCTAssertThrowsError(try JSONDecoder().decode(RPCNotification<UIToolCallParams>.self, from: raw))
+    }
+
+    func testUIToolCallRejectedRoundtrip() throws {
+        try assertRoundtrip(
+            fixture: "ui.toolCall.rejected.json",
+            as: RPCNotification<UIToolCallParams>.self
+        )
+    }
+
+    /// `phase == .rejected` MUST NOT carry `isError` / `outputText` — those
+    /// keys belong to `.result` and would imply the handler ran. The phase
+    /// itself is the failure signal.
+    func testUIToolCallRejectedOmitsResultFields() throws {
+        let rej = RPCNotification(
+            method: "ui.toolCall",
+            params: UIToolCallParams(
+                sessionId: "s", turnId: "t", phase: .rejected,
+                toolCallId: "tc", toolName: "bash",
+                args: .object([:]), errorMessage: "bad args"
+            )
+        )
+        let bytes = try CanonicalJSON.encode(rej)
+        let s = String(data: bytes, encoding: .utf8) ?? ""
+        XCTAssertFalse(s.contains("\"isError\""), "rejected variant must not carry isError, got: \(s)")
+        XCTAssertFalse(s.contains("\"outputText\""), "rejected variant must not carry outputText, got: \(s)")
+    }
+
+    /// Decoder rejects a `phase:"rejected"` frame missing `errorMessage`.
+    func testUIToolCallRejectedWithoutErrorMessageIsRejected() {
+        let raw = #"{"jsonrpc":"2.0","method":"ui.toolCall","params":{"args":{},"phase":"rejected","sessionId":"s","toolCallId":"tc","toolName":"bash","turnId":"t"}}"#.data(using: .utf8)!
+        XCTAssertThrowsError(try JSONDecoder().decode(RPCNotification<UIToolCallParams>.self, from: raw))
+    }
+
+    /// Decoder rejects a `phase:"rejected"` frame missing `args`.
+    func testUIToolCallRejectedWithoutArgsIsRejected() {
+        let raw = #"{"jsonrpc":"2.0","method":"ui.toolCall","params":{"errorMessage":"x","phase":"rejected","sessionId":"s","toolCallId":"tc","toolName":"bash","turnId":"t"}}"#.data(using: .utf8)!
+        XCTAssertThrowsError(try JSONDecoder().decode(RPCNotification<UIToolCallParams>.self, from: raw))
+    }
+
+    /// Decoder rejects a `phase:"rejected"` frame that smuggles in result-only
+    /// fields — guards against producers that copy/paste the result payload
+    /// shape into a rejection.
+    func testUIToolCallRejectedWithResultFieldsIsRejected() {
+        let raw = #"{"jsonrpc":"2.0","method":"ui.toolCall","params":{"args":{},"errorMessage":"x","isError":true,"phase":"rejected","sessionId":"s","toolCallId":"tc","toolName":"bash","turnId":"t"}}"#.data(using: .utf8)!
+        XCTAssertThrowsError(try JSONDecoder().decode(RPCNotification<UIToolCallParams>.self, from: raw))
+    }
+
     func testUIStatusRoundtrip() throws {
         try assertRoundtrip(
             fixture: "ui.status.json",
