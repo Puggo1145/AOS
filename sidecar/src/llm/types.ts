@@ -182,13 +182,43 @@ export interface ModelCost {
   cacheWrite: number;
 }
 
+/// One effort level for a reasoning model.
+///   - `value`  is what we put on the wire — exactly the string the
+///              provider's API expects (e.g. OpenAI `"high"`, DeepSeek
+///              `"max"`). Providers MUST forward it untouched; no
+///              cross-provider mapping table.
+///   - `label`  is the human-readable name shown in the picker UI.
+export interface EffortLevel {
+  value: string;
+  label: string;
+}
+
+/// Per-model reasoning capability. `false` for non-reasoning models;
+/// otherwise declares the model's native effort levels (each carrying
+/// both wire value and UI label) and a default. The catalog is the
+/// single source of truth — runtime code MUST NOT pattern-match on
+/// `model.id`, and providers MUST NOT translate effort strings.
+export interface ReasoningSpec {
+  /// Effort levels accepted by this model, in canonical low→high order.
+  /// Picker rows render exactly these entries; `value` goes on the wire
+  /// untouched.
+  efforts: readonly EffortLevel[];
+  /// Default effort `value` (must match one of `efforts[].value`).
+  /// Used when the user has never picked or has stale config from a
+  /// different model.
+  default: string;
+}
+
 export interface Model<TApi extends Api = Api> {
   id: string;
   name: string;
   api: TApi;
   provider: Provider;
   baseUrl: string;
-  reasoning: boolean;
+  /// `false` → non-reasoning model (effort UI disabled, no
+  /// `reasoning_effort` sent on the wire). Otherwise: which efforts the
+  /// model accepts. See `ReasoningSpec`.
+  reasoning: false | ReasoningSpec;
   input: CapabilityInput[];
   cost: ModelCost;
   contextWindow: number;
@@ -219,11 +249,16 @@ export interface StreamOptions {
 
 export type ProviderStreamOptions = StreamOptions & Record<string, unknown>;
 
-export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh";
+/// Reasoning effort is a free-form string whose value space is owned by
+/// each model's `ReasoningSpec.efforts` in the catalog. There is no
+/// universal enum — GPT models use `low|medium|high|xhigh`, DeepSeek
+/// uses `high|max`, and providers send whatever string the catalog
+/// declares straight onto the wire. `ThinkingLevel` survives as a name
+/// so older imports keep compiling, but it is just `string`.
+export type ThinkingLevel = string;
 
 export interface SimpleStreamOptions extends StreamOptions {
   reasoning?: ThinkingLevel;
-  thinkingBudgets?: Partial<Record<ThinkingLevel, number>>;
 }
 
 // ---------------------------------------------------------------------------

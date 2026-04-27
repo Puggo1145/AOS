@@ -53,8 +53,19 @@ test("selection with wrong types throws MalformedConfigError", () => {
   expect(() => readUserConfig()).toThrow(MalformedConfigError);
 });
 
-test("effort with unknown enum value throws MalformedConfigError", () => {
+test("effort accepts arbitrary strings (per-model vocab; effective resolution clamps to model default)", () => {
+  // The closed-enum gate moved out of the storage layer — each model's
+  // catalog declares its own effort vocabulary, and `effectiveEffort`
+  // falls back to the model default when the saved string isn't valid
+  // for the active model. Here we only assert storage no longer rejects
+  // it on the way in.
   writeRaw('{ "effort": "ludicrous" }');
+  const cfg = readUserConfig();
+  expect(cfg.effort).toBe("ludicrous");
+});
+
+test("effort empty string throws MalformedConfigError", () => {
+  writeRaw('{ "effort": "" }');
   expect(() => readUserConfig()).toThrow(MalformedConfigError);
 });
 

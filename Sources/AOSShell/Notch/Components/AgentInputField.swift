@@ -101,7 +101,7 @@ struct ComposerCard: View {
     private var functionRow: some View {
         HStack(spacing: 8) {
             modelMenu
-            if currentModel?.reasoning ?? false {
+            if !(currentModel?.supportedEfforts.isEmpty ?? true) {
                 effortMenu
             }
             Spacer(minLength: 8)
@@ -150,25 +150,26 @@ struct ComposerCard: View {
 
     @ViewBuilder
     private var effortMenu: some View {
-        let supportsXhigh = currentModel?.supportsXhigh ?? true
+        // Render exactly the effort levels the sidecar reported as
+        // supported for this model. Each row carries its own
+        // `value`/`label` — labels come straight from the catalog, no
+        // local mapping table.
+        let efforts = currentModel?.supportedEfforts ?? []
+        let active = configService.effort(for: currentModel)
         Menu {
-            ForEach(ConfigEffort.allCases, id: \.self) { effort in
-                if effort == .xhigh && !supportsXhigh {
-                    EmptyView()
-                } else {
-                    Button {
-                        Task { await configService.selectEffort(effort) }
-                    } label: {
-                        if configService.effectiveEffort == effort {
-                            Label(effortDisplayName(effort), systemImage: "checkmark")
-                        } else {
-                            Text(effortDisplayName(effort))
-                        }
+            ForEach(efforts) { effort in
+                Button {
+                    Task { await configService.selectEffort(effort) }
+                } label: {
+                    if active == effort {
+                        Label(effort.label, systemImage: "checkmark")
+                    } else {
+                        Text(effort.label)
                     }
                 }
             }
         } label: {
-            Text(effortDisplayName(configService.effectiveEffort))
+            Text(active?.label ?? "")
                 .font(.system(size: 12, weight: .regular))
                 .foregroundStyle(.white.opacity(0.5))
                 .padding(.vertical, 4)
@@ -211,16 +212,6 @@ struct ComposerCard: View {
     private var currentProvider: ConfigProviderEntry? {
         guard let sel = currentSelection else { return nil }
         return configService.provider(id: sel.providerId)
-    }
-
-    private func effortDisplayName(_ e: ConfigEffort) -> String {
-        switch e {
-        case .minimal: return "Minimal"
-        case .low: return "Low"
-        case .medium: return "Medium"
-        case .high: return "High"
-        case .xhigh: return "Extra High"
-        }
     }
 
     private func submit() {

@@ -19,8 +19,10 @@ public final class ConfigService {
 
     public private(set) var providers: [ConfigProviderEntry] = []
     public private(set) var selection: ConfigSelection?
-    public private(set) var effort: ConfigEffort?
-    public private(set) var defaultEffort: ConfigEffort = .medium
+    /// Last `value` the user picked, stored verbatim. The picker reads
+    /// the active model's `supportedEfforts` to render rows; this string
+    /// just decides which row gets the checkmark.
+    public private(set) var effort: String?
     public private(set) var loaded: Bool = false
     public private(set) var lastError: String?
     /// Onboarding completion latch. Mirrored from `~/.aos/config.json`
@@ -43,10 +45,22 @@ public final class ConfigService {
         return ConfigSelection(providerId: first.id, modelId: first.defaultModelId)
     }
 
-    /// Effective effort used by the picker UI: explicit user pick if set,
-    /// else `defaultEffort` reported by the sidecar.
-    public var effectiveEffort: ConfigEffort {
-        effort ?? defaultEffort
+    /// Effort to display in the picker for a given model. Returns `nil`
+    /// for non-reasoning models (the picker is hidden in that case).
+    /// Resolution mirrors the sidecar's `effectiveEffort`:
+    ///   1. user pick, if it's one of the model's supported `value`s
+    ///   2. the model's `defaultEffort`
+    ///   3. the model's first supported level
+    public func effort(for model: ConfigModelEntry?) -> ConfigEffort? {
+        guard let model, !model.supportedEfforts.isEmpty else { return nil }
+        if let pick = effort, let row = model.supportedEfforts.first(where: { $0.value == pick }) {
+            return row
+        }
+        if let def = model.defaultEffort,
+           let row = model.supportedEfforts.first(where: { $0.value == def }) {
+            return row
+        }
+        return model.supportedEfforts.first
     }
 
     public func provider(id: String) -> ConfigProviderEntry? {
@@ -75,7 +89,6 @@ public final class ConfigService {
             providers = result.providers
             selection = result.selection
             effort = result.effort
-            defaultEffort = result.defaultEffort
             hasCompletedOnboarding = result.hasCompletedOnboarding
             // Only flip `true` — never flip back via a later refresh.
             // The flag is a one-shot session notice; the sidecar will
@@ -113,7 +126,7 @@ public final class ConfigService {
         do {
             let result = try await rpc.request(
                 method: RPCMethod.configSetEffort,
-                params: ConfigSetEffortParams(effort: newEffort),
+                params: ConfigSetEffortParams(effort: newEffort.value),
                 as: ConfigSetEffortResult.self
             )
             effort = result.effort

@@ -44,7 +44,8 @@ import { mergeHeaders } from "../utils/headers";
 import { parseStreamingJson } from "../utils/json-parse";
 import { getEnvApiKey } from "../auth/env-api-keys";
 import { transformMessages } from "./transform-messages";
-import { buildBaseOptions, clampReasoning } from "./simple-options";
+import { buildBaseOptions } from "./simple-options";
+import { supportsThinking } from "../models/effort";
 
 // ---------------------------------------------------------------------------
 // Public option / compat surface
@@ -187,7 +188,7 @@ function convertMessages<TApi extends Api>(
   const transformed = transformMessages(context.messages, model, (id) => normalizeToolCallId(id, model));
 
   if (context.systemPrompt) {
-    const role = model.reasoning && compat.supportsDeveloperRole ? "developer" : "system";
+    const role = supportsThinking(model) && compat.supportsDeveloperRole ? "developer" : "system";
     out.push({ role, content: sanitizeSurrogates(context.systemPrompt) });
   }
 
@@ -289,7 +290,7 @@ export function buildPayload<TApi extends Api>(
 
   if (options?.toolChoice) payload["tool_choice"] = options.toolChoice;
 
-  if (options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
+  if (options?.reasoningEffort && supportsThinking(model) && compat.supportsReasoningEffort) {
     payload["reasoning_effort"] = options.reasoningEffort;
   }
 
@@ -522,8 +523,7 @@ export const streamSimpleOpenAICompletions: SimpleStreamFunction<"openai-complet
   simple?: SimpleStreamOptions,
 ) => {
   const base = buildBaseOptions(simple);
-  const reasoningEffort = clampReasoning(simple?.reasoning, model);
-  return runCompletionsStream(model, context, { ...base, reasoningEffort }, DEFAULT_COMPAT);
+  return runCompletionsStream(model, context, { ...base, reasoningEffort: simple?.reasoning }, DEFAULT_COMPAT);
 };
 
 // Re-exported so `deepseek.ts` (and future per-provider wrappers) can

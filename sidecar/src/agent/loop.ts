@@ -20,7 +20,7 @@
 // Per docs/designs/llm-provider.md §"包边界" the loop only depends on the
 // public surface re-exported from `../llm`.
 
-import { streamSimple, getDefaultModel, getModel, isContextOverflow, PROVIDER_IDS, DEFAULT_EFFORT, type AssistantMessage, type Model, type Api, type Effort } from "../llm";
+import { streamSimple, getDefaultModel, getModel, isContextOverflow, PROVIDER_IDS, effectiveEffort, type AssistantMessage, type Model, type Api } from "../llm";
 import { readUserConfig } from "../config/storage";
 import {
   RPCErrorCode,
@@ -221,11 +221,13 @@ export async function runTurn(
     return;
   }
 
-  // Effort: read the user's saved choice, fall back to catalog default.
-  // Non-reasoning models drop effort entirely; the provider further clamps
-  // (e.g. xhigh→high) per `clampReasoning` for models that don't support
-  // the highest tier.
-  const effort: Effort | undefined = model.reasoning ? (cfg.effort ?? DEFAULT_EFFORT) : undefined;
+  // Resolve the effort once via the catalog-driven helper. Non-reasoning
+  // models return `undefined` (the field is then dropped from the wire
+  // payload). Reasoning models get the user's pick clamped onto the
+  // model's supported effort list, with the per-model / global default
+  // filled in when the user has never chosen. All effort policy lives in
+  // `models/effort.ts` — do not branch on `model.reasoning` here.
+  const effort: string | undefined = effectiveEffort(model, cfg.effort);
 
   try {
     // Pull the rolling LLM history from the Conversation. This is the

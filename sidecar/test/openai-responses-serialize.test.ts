@@ -25,7 +25,15 @@ function makeModel(): Model<"openai-responses"> {
     api: "openai-responses",
     provider: "chatgpt-plan",
     baseUrl: "https://example.test",
-    reasoning: true,
+    reasoning: {
+      efforts: [
+        { value: "low", label: "Low" },
+        { value: "medium", label: "Medium" },
+        { value: "high", label: "High" },
+        { value: "xhigh", label: "Extra High" },
+      ],
+      default: "medium",
+    },
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 200_000,

@@ -86,7 +86,10 @@ test("markOnboardingCompleted refuses to overwrite a malformed config", async ()
 });
 
 test("configGet auto-resets a malformed config and signals recoveredFromCorruption", async () => {
-  writeRaw('{ "effort": "ludicrous" }');
+  // Closed-enum effort validation no longer exists; use a structural
+  // breakage (selection with non-string field) to trigger the schema
+  // recovery path.
+  writeRaw('{ "selection": { "providerId": 42, "modelId": "gpt-5.5" } }');
 
   const handlers = captureHandlers();
   const handler = handlers.get(RPCMethod.configGet)!;
@@ -113,6 +116,59 @@ test("configGet on a healthy config does not signal recovery", async () => {
   expect(result.recoveredFromCorruption).toBe(false);
   expect(result.selection).toEqual({ providerId: "chatgpt-plan", modelId: "gpt-5.5" });
   expect(result.effort).toBe("high");
+});
+
+test("setEffort accepts a value supported by the currently-selected model", async () => {
+  // GPT-5.5's native vocabulary is low|medium|high|xhigh. Picking "high"
+  // must round-trip onto disk untouched (no closed-enum gating, no
+  // translation).
+  writeUserConfig({ selection: { providerId: "chatgpt-plan", modelId: "gpt-5.5" } });
+
+  const handlers = captureHandlers();
+  const handler = handlers.get(RPCMethod.configSetEffort)!;
+  const result = await handler({ effort: "xhigh" }, { id: "1" });
+
+  expect(result).toEqual({ effort: "xhigh" });
+  expect(readUserConfig().effort).toBe("xhigh");
+});
+
+test("setEffort rejects a value not in the selected model's effort list", async () => {
+  // GPT-5.5 does NOT accept "max" (DeepSeek's vocabulary). Persisting
+  // it would be silently masked by `effectiveEffort` at request time —
+  // the boundary must reject loudly so UI bugs / external RPC callers
+  // can't poison the on-disk config.
+  writeUserConfig({ selection: { providerId: "chatgpt-plan", modelId: "gpt-5.5" } });
+
+  const handlers = captureHandlers();
+  const handler = handlers.get(RPCMethod.configSetEffort)!;
+
+  let threw: unknown;
+  try {
+    await handler({ effort: "max" }, { id: "1" });
+  } catch (err) {
+    threw = err;
+  }
+  expect(threw).toBeInstanceOf(RPCMethodError);
+  expect((threw as RPCMethodError).code).toBe(RPCErrorCode.invalidParams);
+  // Disk must NOT have been touched.
+  expect(readUserConfig().effort).toBeUndefined();
+});
+
+test("setEffort with no persisted selection falls back to the default model and validates against ITS vocabulary", async () => {
+  // Fresh config — nothing persisted. The handler must resolve to the
+  // catalog's default model (chatgpt-plan/gpt-5.5) and reject an
+  // off-vocabulary effort instead of writing it to disk.
+  const handlers = captureHandlers();
+  const handler = handlers.get(RPCMethod.configSetEffort)!;
+
+  let threw: unknown;
+  try {
+    await handler({ effort: "definitely-not-an-effort" }, { id: "1" });
+  } catch (err) {
+    threw = err;
+  }
+  expect(threw).toBeInstanceOf(RPCMethodError);
+  expect((threw as RPCMethodError).code).toBe(RPCErrorCode.invalidParams);
 });
 
 test("markOnboardingCompleted is idempotent on already-completed config", async () => {

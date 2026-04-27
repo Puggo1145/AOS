@@ -8,9 +8,12 @@
 //
 // Quirks captured here (sourced from api-docs.deepseek.com, 2026-04-26):
 //   - Rejects `store: false` and the `developer` system role → both off.
-//   - Does not implement `reasoning_effort`. Effort levels are silently
-//     accepted by the SDK but produce no behavior change → suppressed.
-//   - Reasoning text streams via `delta.reasoning_content` (not `reasoning`).
+//   - `reasoning_effort` IS supported on V4, with a model-native value
+//     space: `"high"` (default) and `"max"`. The catalog declares those
+//     two values verbatim, so the string the user picks goes onto the
+//     wire untouched — no cross-provider mapping table here.
+//   - Reasoning text streams via `delta.reasoning_content` (not
+//     `reasoning`).
 //   - The `max_tokens` field is the legacy spelling — DeepSeek's docs use
 //     it exclusively, `max_completion_tokens` is unrecognized.
 //   - Echoing prior-turn `reasoning_content` back into messages causes a
@@ -28,12 +31,12 @@ import {
   resolveCompat,
   runCompletionsStream,
 } from "./openai-completions";
-import { buildBaseOptions, clampReasoning } from "./simple-options";
+import { buildBaseOptions } from "./simple-options";
 
 const DEEPSEEK_COMPAT_RAW: OpenAICompletionsCompat = {
   supportsStore: false,
   supportsDeveloperRole: false,
-  supportsReasoningEffort: false,
+  supportsReasoningEffort: true,
   maxTokensField: "max_tokens",
   reasoningField: "reasoning_content",
   requiresToolResultName: false,
@@ -53,9 +56,10 @@ export const streamSimpleDeepseek: SimpleStreamFunction<"deepseek"> = (
   simple?: SimpleStreamOptions,
 ) => {
   const base = buildBaseOptions(simple);
-  // Even though DeepSeek ignores `reasoning_effort`, we still clamp here
-  // for symmetry with other providers; the field is stripped inside
-  // `buildPayload` based on `compat.supportsReasoningEffort: false`.
-  const reasoningEffort = clampReasoning(simple?.reasoning, model);
-  return runCompletionsStream(model, context, { ...base, reasoningEffort }, DEEPSEEK_COMPAT);
+  return runCompletionsStream(
+    model,
+    context,
+    { ...base, reasoningEffort: simple?.reasoning },
+    DEEPSEEK_COMPAT,
+  );
 };

@@ -8,33 +8,46 @@ import Foundation
 // modelId) into `config.get` so the Shell settings panel does not need a
 // separate "list models" RPC.
 
-/// Reasoning effort levels. Mirrors `EFFORT_LEVELS` in the sidecar
-/// catalog. The sidecar clamps per-model at request time; the Shell
-/// renders this enum directly in the picker.
-public enum ConfigEffort: String, Codable, Sendable, Equatable, CaseIterable {
-    case minimal
-    case low
-    case medium
-    case high
-    case xhigh
+/// One picker row for a model's reasoning effort.
+///   - `value` is what gets sent on the wire (and stored in
+///     `~/.aos/config.json`) — the exact string the provider's API
+///     expects.
+///   - `label` is the human-readable name shown in the picker.
+/// Effort vocabularies are per-model — there is no closed enum.
+public struct ConfigEffort: Codable, Sendable, Equatable, Hashable, Identifiable {
+    public let value: String
+    public let label: String
+
+    public var id: String { value }
+
+    public init(value: String, label: String) {
+        self.value = value
+        self.label = label
+    }
 }
 
 public struct ConfigModelEntry: Codable, Sendable, Equatable, Identifiable {
     public let id: String
     public let name: String
-    /// `false` → the model has no notion of reasoning effort. Settings UI
-    /// should disable the effort picker while this model is selected.
-    public let reasoning: Bool
-    /// `false` → "xhigh" is not accepted; settings picker should disable
-    /// that row specifically.
-    public let supportsXhigh: Bool
+    /// Effort levels this model accepts, in canonical low→high order.
+    /// Empty → non-reasoning model: the Shell hides the effort picker.
+    /// Otherwise the picker shows exactly these rows; the sidecar stores
+    /// the picked `value` and forwards it to the provider untouched.
+    public let supportedEfforts: [ConfigEffort]
+    /// Default effort `value` for this model. `nil` for non-reasoning
+    /// models. Used when the user has not picked or has stale config.
+    public let defaultEffort: String?
 
-    public init(id: String, name: String, reasoning: Bool, supportsXhigh: Bool) {
+    public init(id: String, name: String, supportedEfforts: [ConfigEffort], defaultEffort: String?) {
         self.id = id
         self.name = name
-        self.reasoning = reasoning
-        self.supportsXhigh = supportsXhigh
+        self.supportedEfforts = supportedEfforts
+        self.defaultEffort = defaultEffort
     }
+
+    /// Convenience: the model has any reasoning capability at all.
+    /// Drives whether the effort UI should be shown.
+    public var reasoning: Bool { !supportedEfforts.isEmpty }
 }
 
 public struct ConfigProviderEntry: Codable, Sendable, Equatable, Identifiable {
@@ -74,10 +87,11 @@ public struct ConfigGetParams: Codable, Sendable, Equatable {
 public struct ConfigGetResult: Codable, Sendable, Equatable {
     /// `nil` when the user has never picked a model.
     public let selection: ConfigSelection?
-    /// `nil` when the user has never picked an effort. Shell falls back
-    /// to `defaultEffort` for the initial UI selection.
-    public let effort: ConfigEffort?
-    public let defaultEffort: ConfigEffort
+    /// User's last picked effort `value`, stored verbatim. `nil` when
+    /// never picked. The Shell resolves the actual rendered effort
+    /// against the active model's `supportedEfforts`; `defaultEffort`
+    /// per model lives on `ConfigModelEntry`.
+    public let effort: String?
     public let providers: [ConfigProviderEntry]
     /// One-shot completion gate. Once `true`, NotchView stops routing
     /// to the onboard panels even if a permission or provider drops —
@@ -90,15 +104,13 @@ public struct ConfigGetResult: Codable, Sendable, Equatable {
 
     public init(
         selection: ConfigSelection?,
-        effort: ConfigEffort?,
-        defaultEffort: ConfigEffort,
+        effort: String?,
         providers: [ConfigProviderEntry],
         hasCompletedOnboarding: Bool,
         recoveredFromCorruption: Bool
     ) {
         self.selection = selection
         self.effort = effort
-        self.defaultEffort = defaultEffort
         self.providers = providers
         self.hasCompletedOnboarding = hasCompletedOnboarding
         self.recoveredFromCorruption = recoveredFromCorruption
@@ -124,17 +136,18 @@ public struct ConfigSetResult: Codable, Sendable, Equatable {
 }
 
 public struct ConfigSetEffortParams: Codable, Sendable, Equatable {
-    public let effort: ConfigEffort
+    /// Wire `value` of one of the active model's supported efforts.
+    public let effort: String
 
-    public init(effort: ConfigEffort) {
+    public init(effort: String) {
         self.effort = effort
     }
 }
 
 public struct ConfigSetEffortResult: Codable, Sendable, Equatable {
-    public let effort: ConfigEffort
+    public let effort: String
 
-    public init(effort: ConfigEffort) {
+    public init(effort: String) {
         self.effort = effort
     }
 }

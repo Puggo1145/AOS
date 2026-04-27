@@ -21,6 +21,7 @@ import {
 } from "../src/llm/providers/openai-completions";
 import {
   streamDeepseek,
+  streamSimpleDeepseek,
 } from "../src/llm/providers/deepseek";
 import type {
   AssistantMessage,
@@ -47,6 +48,8 @@ function makeOpenAIModel(): Model<"openai-completions"> {
     reasoning: false,
     input: ["text"],
     cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+    // (reasoning: false here marks the OpenAI test fixture as a non-
+    // reasoning model; specific tests below override it with a spec.)
     contextWindow: 128_000,
     maxTokens: 16_384,
   };
@@ -59,7 +62,13 @@ function makeDeepseekModel(): Model<"deepseek"> {
     api: "deepseek",
     provider: "deepseek",
     baseUrl: "https://api.deepseek.com",
-    reasoning: true,
+    reasoning: {
+      efforts: [
+        { value: "high", label: "High" },
+        { value: "max", label: "Max" },
+      ],
+      default: "high",
+    },
     input: ["text"],
     cost: { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
     contextWindow: 1_000_000,
@@ -67,10 +76,14 @@ function makeDeepseekModel(): Model<"deepseek"> {
   };
 }
 
+// Mirrors the production DeepSeek compat in `src/llm/providers/deepseek.ts`.
+// V4 chat-completions DOES accept `reasoning_effort` (with the model-native
+// values `high` / `max`); keep this fixture in sync so payload-level tests
+// validate the actually-shipped behavior rather than a stale snapshot.
 const DEEPSEEK_COMPAT_RAW: OpenAICompletionsCompat = {
   supportsStore: false,
   supportsDeveloperRole: false,
-  supportsReasoningEffort: false,
+  supportsReasoningEffort: true,
   maxTokensField: "max_tokens",
   reasoningField: "reasoning_content",
 };
@@ -147,18 +160,55 @@ test("DeepSeek compat: max_tokens (not max_completion_tokens), no store, no deve
   expect(messages[0]!["role"]).toBe("system");
 });
 
-test("DeepSeek compat strips reasoning_effort even when caller passes it", () => {
-  const payload = buildPayload(
-    makeDeepseekModel(),
-    ctx([{ role: "user", content: "hi", timestamp: 0 }]),
-    { reasoningEffort: "high" } as OpenAICompletionsOptions,
-    DEEPSEEK_COMPAT,
-  );
-  expect(payload).not.toHaveProperty("reasoning_effort");
+test("DeepSeek compat forwards reasoning_effort onto the wire (V4 native vocab)", () => {
+  for (const effort of ["high", "max"]) {
+    const payload = buildPayload(
+      makeDeepseekModel(),
+      ctx([{ role: "user", content: "hi", timestamp: 0 }]),
+      { reasoningEffort: effort } as OpenAICompletionsOptions,
+      DEEPSEEK_COMPAT,
+    );
+    expect(payload["reasoning_effort"]).toBe(effort);
+  }
+});
+
+test("streamSimpleDeepseek translates simple `reasoning` into wire `reasoning_effort`", async () => {
+  // Production path: the agent loop hands the resolved effort string off
+  // to `streamSimple*`, which must thread it through to the chat-completions
+  // engine as `reasoning_effort` (NOT swallowed by buildBaseOptions).
+  let captured: Record<string, unknown> | null = null;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (_url: string, init?: { body?: string }) => {
+    captured = JSON.parse(init?.body ?? "{}") as Record<string, unknown>;
+    return sseResponse([sseChunk({ id: "c1", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }), sseChunk("[DONE]")]);
+  }) as typeof fetch;
+  try {
+    const stream = streamSimpleDeepseek(
+      makeDeepseekModel(),
+      ctx([{ role: "user", content: "go", timestamp: 0 }]),
+      { apiKey: "sk-test", reasoning: "max" },
+    );
+    await collect(stream);
+    expect(captured).not.toBeNull();
+    expect(captured!["reasoning_effort"]).toBe("max");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("default compat sends reasoning_effort for reasoning models", () => {
-  const m = { ...makeOpenAIModel(), reasoning: true };
+  const m = {
+    ...makeOpenAIModel(),
+    reasoning: {
+      efforts: [
+        { value: "low", label: "Low" },
+        { value: "medium", label: "Medium" },
+        { value: "high", label: "High" },
+        { value: "xhigh", label: "Extra High" },
+      ],
+      default: "medium",
+    } as const,
+  };
   const payload = buildPayload(
     m,
     ctx([{ role: "user", content: "hi", timestamp: 0 }]),

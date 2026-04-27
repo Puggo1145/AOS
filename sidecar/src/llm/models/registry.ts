@@ -3,7 +3,11 @@
 // via direct mutation (out of scope for this round).
 
 import type { Api, Model } from "../types";
-import { DEFAULT_MODEL_PER_PROVIDER, MODELS, type KnownProvider } from "./catalog";
+import { DEFAULT_MODEL_PER_PROVIDER, MODELS } from "./catalog";
+
+// ReasoningSpec invariant validation lives in `catalog.ts` itself (runs
+// at module load), so by the time we read MODELS here every entry is
+// already validated.
 
 const modelRegistry: Map<string, Map<string, Model<Api>>> = new Map();
 
@@ -44,15 +48,4 @@ export function getDefaultModel<TApi extends Api = Api>(provider: string): Model
 
 export function modelsAreEqual(a: Model<Api>, b: Model<Api>): boolean {
   return a.id === b.id && a.provider === b.provider;
-}
-
-/// Internal: register or overwrite a model. Currently unused by AOS
-/// runtime; reserved for user-config-driven model loading.
-export function registerModel(model: Model<Api>): void {
-  let inner = modelRegistry.get(model.provider);
-  if (!inner) {
-    inner = new Map();
-    modelRegistry.set(model.provider, inner);
-  }
-  inner.set(model.id, model);
 }

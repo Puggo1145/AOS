@@ -17,15 +17,12 @@ import {
   type ConfigMarkOnboardingCompletedResult,
 } from "../rpc/rpc-types";
 import {
-  DEFAULT_EFFORT,
   DEFAULT_MODEL_PER_PROVIDER,
-  EFFORT_LEVELS,
   MODELS,
   PROVIDER_NAMES,
-  type Effort,
   type KnownProvider,
 } from "../llm/models/catalog";
-import { supportsXhigh } from "../llm/models/capabilities";
+import { defaultEffort, supportedEfforts, supportsEffort, supportsThinking } from "../llm/models/effort";
 import type { Api, Model } from "../llm/types";
 import { readUserConfig, writeUserConfig, MalformedConfigError } from "./storage";
 
@@ -36,11 +33,15 @@ function buildProviderCatalog(): ConfigProviderEntry[] {
       id,
       name: PROVIDER_NAMES[id],
       defaultModelId: DEFAULT_MODEL_PER_PROVIDER[id] as string,
+      // `supportedEfforts` is the wire-side single source of truth: an
+      // empty array means "no reasoning UI for this model"; a non-empty
+      // list is exactly the picker rows the Shell should render. The
+      // Shell never re-derives capabilities from `model.id`.
       models: Object.values(inner).map((m) => ({
         id: m.id,
         name: m.name,
-        reasoning: m.reasoning,
-        supportsXhigh: supportsXhigh(m),
+        supportedEfforts: supportedEfforts(m).map((e) => ({ value: e.value, label: e.label })),
+        defaultEffort: defaultEffort(m),
       })),
     };
   });
@@ -52,8 +53,17 @@ function isKnownSelection(providerId: string, modelId: string): boolean {
   return modelId in provider;
 }
 
-function isKnownEffort(value: unknown): value is Effort {
-  return typeof value === "string" && (EFFORT_LEVELS as readonly string[]).includes(value);
+/// Returns the catalog `Model` for the user's current selection, falling
+/// back to the first provider's default model if no valid selection has
+/// been persisted yet (first-run / freshly-recovered config).
+function resolveSelectedModel(selection: { providerId: string; modelId: string } | undefined): Model<Api> {
+  if (selection && isKnownSelection(selection.providerId, selection.modelId)) {
+    const inner = (MODELS as Record<string, Record<string, Model<Api>>>)[selection.providerId]!;
+    return inner[selection.modelId]!;
+  }
+  const firstProvider = Object.keys(MODELS)[0] as KnownProvider;
+  const defaultModelId = DEFAULT_MODEL_PER_PROVIDER[firstProvider] as string;
+  return (MODELS as Record<string, Record<string, Model<Api>>>)[firstProvider]![defaultModelId]!;
 }
 
 export function registerConfigHandlers(dispatcher: Dispatcher): void {
@@ -85,7 +95,6 @@ export function registerConfigHandlers(dispatcher: Dispatcher): void {
     return {
       selection: cfg.selection ?? null,
       effort: cfg.effort ?? null,
-      defaultEffort: DEFAULT_EFFORT,
       providers: buildProviderCatalog(),
       hasCompletedOnboarding: cfg.hasCompletedOnboarding ?? false,
       recoveredFromCorruption,
@@ -113,13 +122,33 @@ export function registerConfigHandlers(dispatcher: Dispatcher): void {
 
   dispatcher.registerRequest(RPCMethod.configSetEffort, async (raw): Promise<ConfigSetEffortResult> => {
     const params = raw as ConfigSetEffortParams;
-    if (!isKnownEffort(params?.effort)) {
+    if (typeof params?.effort !== "string" || params.effort.length === 0) {
       throw new RPCMethodError(
         RPCErrorCode.invalidParams,
-        `config.setEffort requires { effort: one of ${EFFORT_LEVELS.join("|")} }`,
+        `config.setEffort requires { effort: non-empty string }`,
       );
     }
+    // Validate against the currently-selected model's native effort
+    // vocabulary. Persisting an unsupported value would be silently
+    // masked by `effectiveEffort` at request time — better to reject
+    // here so UI bugs / external RPC callers fail loud. (Cross-model
+    // staleness — saved value valid for the previous model but not the
+    // newly-selected one — is a separate concern handled by the runtime
+    // fallback in `effectiveEffort`.)
     const existing = readMergedConfigOrEmpty();
+    const model = resolveSelectedModel(existing.selection);
+    if (!supportsThinking(model)) {
+      throw new RPCMethodError(
+        RPCErrorCode.invalidParams,
+        `config.setEffort: model ${model.provider}/${model.id} does not support reasoning effort`,
+      );
+    }
+    if (!supportsEffort(model, params.effort)) {
+      throw new RPCMethodError(
+        RPCErrorCode.invalidParams,
+        `config.setEffort: ${JSON.stringify(params.effort)} is not a supported effort for ${model.provider}/${model.id}`,
+      );
+    }
     writeUserConfig({ ...existing, effort: params.effort });
     return { effort: params.effort };
   });

@@ -7,9 +7,10 @@ import { registerBuiltins } from "./providers/register-builtins";
 
 export { stream, streamSimple } from "./stream";
 export { getModel, getDefaultModel, getProviders, getModels, modelsAreEqual } from "./models/registry";
-export { PROVIDER_IDS, PROVIDER_NAMES, DEFAULT_MODEL_PER_PROVIDER, EFFORT_LEVELS, DEFAULT_EFFORT } from "./models/catalog";
-export type { KnownProvider, KnownModelId, Effort } from "./models/catalog";
-export { supportsXhigh, supportsThinking, supportsVision } from "./models/capabilities";
+export { PROVIDER_IDS, PROVIDER_NAMES, DEFAULT_MODEL_PER_PROVIDER } from "./models/catalog";
+export type { KnownProvider, KnownModelId, EffortLevel } from "./models/catalog";
+export { supportsThinking, supportsVision, supportsEffort, supportedEfforts, defaultEffort } from "./models/capabilities";
+export { effectiveEffort } from "./models/effort";
 export { isContextOverflow } from "./utils/overflow";
 export { validateToolCall, validateToolArguments } from "./utils/validation";
 export { calculateCost } from "./models/cost";
@@ -39,6 +40,7 @@ export type {
   SimpleStreamOptions,
   ProviderStreamOptions,
   ThinkingLevel,
+  ReasoningSpec,
   AssistantMessageEvent,
   StreamFunction,
   SimpleStreamFunction,

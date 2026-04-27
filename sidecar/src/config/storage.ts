@@ -39,14 +39,15 @@ export interface ModelSelection {
   modelId: string;
 }
 
-import { EFFORT_LEVELS, type Effort } from "../llm/models/catalog";
-
 export interface UserConfig {
   selection?: ModelSelection;
-  /// Global reasoning effort. Mirrors pi's `defaultThinkingLevel` — single
-  /// value applied to whichever model is currently selected. Provider
-  /// clamps it (or forces "off" for non-reasoning models) at request time.
-  effort?: Effort;
+  /// Global reasoning effort, stored as the wire `value` of one of the
+  /// currently-selected model's `supportedEfforts`. Per-model effort
+  /// vocabulary lives in the catalog; we do not validate the string
+  /// against a closed enum here — `effectiveEffort` decides whether the
+  /// saved pick is still usable for the active model and falls back to
+  /// the model's default otherwise.
+  effort?: string;
   /// Onboarding completion gate. Flips `true` the first time the Shell
   /// observes both runtime permissions granted AND a ready provider.
   /// Once `true`, the Shell stops routing the user back to the onboard
@@ -137,15 +138,17 @@ export function readUserConfig(): UserConfig {
     out.selection = { providerId: s.providerId, modelId: s.modelId };
   }
 
-  // effort: undefined OR one of EFFORT_LEVELS.
+  // effort: undefined OR an arbitrary non-empty string. The catalog,
+  // not this validator, decides which strings are meaningful for which
+  // model — see `effectiveEffort` in `models/effort.ts`.
   if (obj.effort !== undefined) {
-    if (typeof obj.effort !== "string" || !(EFFORT_LEVELS as readonly string[]).includes(obj.effort)) {
+    if (typeof obj.effort !== "string" || obj.effort.length === 0) {
       throw new MalformedConfigError(
         "schema",
-        `Config "effort" must be one of ${EFFORT_LEVELS.join("|")}, got: ${JSON.stringify(obj.effort)}`,
+        `Config "effort" must be a non-empty string, got: ${JSON.stringify(obj.effort)}`,
       );
     }
-    out.effort = obj.effort as Effort;
+    out.effort = obj.effort;
   }
 
   // hasCompletedOnboarding: undefined OR boolean.

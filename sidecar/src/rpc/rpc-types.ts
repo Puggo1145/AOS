@@ -415,22 +415,32 @@ export interface ProviderLogoutResult {
 // so the Shell settings UI doesn't need a second RPC.
 // ---------------------------------------------------------------------------
 
-/// Wire enum for reasoning effort. Mirrors `Effort` in
-/// `sidecar/src/llm/models/catalog.ts`. Sidecar clamps per-model at request
-/// time (e.g. `xhigh` → `high` for models that don't support xhigh, and
-/// any value is replaced by "off" for non-reasoning models).
-export type ConfigEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+/// One picker row for a model's reasoning effort.
+///   - `value`: the wire string the sidecar sends to the provider
+///     (e.g. `"high"`, `"xhigh"`, `"max"`). Stored verbatim in
+///     `~/.aos/config.json` when the user picks it.
+///   - `label`: human-readable name shown in the picker.
+/// Each model declares its own list — there is no universal effort
+/// vocabulary across providers.
+export interface ConfigEffortLevel {
+  value: string;
+  label: string;
+}
 
 export interface ConfigModelEntry {
   id: string;
   name: string;
-  /// Whether the model supports any reasoning effort at all (`!model.reasoning`
-  /// → `false`, in which case the Shell should disable the effort picker
-  /// while this model is selected).
-  reasoning: boolean;
-  /// Whether the model accepts the highest "xhigh" tier specifically. The
-  /// effort picker should disable that row for models with `false`.
-  supportsXhigh: boolean;
+  /// Effort levels this model accepts, in canonical low→high order.
+  /// Empty array → non-reasoning model: the Shell hides the effort
+  /// picker. Otherwise the picker shows exactly these rows; the sidecar
+  /// stores the picked `value` and forwards it to the provider's API
+  /// untouched.
+  supportedEfforts: ConfigEffortLevel[];
+  /// Default effort `value` for this model. `null` for non-reasoning
+  /// models. The Shell shows this in the picker when the user has not
+  /// (yet) picked, and falls back to it when the saved global pick is
+  /// not in `supportedEfforts`.
+  defaultEffort: string | null;
 }
 
 export interface ConfigProviderEntry {
@@ -451,10 +461,11 @@ export interface ConfigGetResult {
   /// `null` when the user has never picked. Shell falls back to
   /// `defaultModelId` of the first provider for the initial UI selection.
   selection: ConfigSelection | null;
-  /// `null` when the user has never picked. Shell falls back to
-  /// `defaultEffort` for the initial UI selection.
-  effort: ConfigEffort | null;
-  defaultEffort: ConfigEffort;
+  /// User's last picked effort `value`, stored verbatim. `null` when
+  /// never picked. Shell resolves the actual rendered effort by looking
+  /// it up in the active model's `supportedEfforts`, falling back to the
+  /// model's `defaultEffort`.
+  effort: string | null;
   providers: ConfigProviderEntry[];
   /// One-shot flag: flips `true` the first time the Shell observes both
   /// runtime permissions granted AND a ready provider. After that the
@@ -477,11 +488,15 @@ export interface ConfigSetResult {
 }
 
 export interface ConfigSetEffortParams {
-  effort: ConfigEffort;
+  /// Wire `value` of one of the active model's supported efforts. The
+  /// sidecar stores it verbatim — no closed-enum validation; if the
+  /// value is not actually in the active model's list, the next request
+  /// silently falls back to the model's default.
+  effort: string;
 }
 
 export interface ConfigSetEffortResult {
-  effort: ConfigEffort;
+  effort: string;
 }
 
 export type ConfigMarkOnboardingCompletedParams = Record<string, never>;

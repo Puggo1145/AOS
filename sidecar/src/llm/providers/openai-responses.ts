@@ -47,7 +47,7 @@ import {
   getEnvApiKey,
 } from "../auth/env-api-keys";
 import { readChatGPTToken, AuthInvalidatedError } from "../auth/oauth/chatgpt-plan";
-import { buildBaseOptions, clampReasoning } from "./simple-options";
+import { buildBaseOptions } from "./simple-options";
 
 export interface OpenAIResponsesOptions extends ProviderStreamOptions {
   reasoning?: import("../types").ThinkingLevel;
@@ -510,6 +510,5 @@ function mapResponsesEventToAssistantEvent(
 
 export const streamSimpleOpenaiResponses: SimpleStreamFunction<"openai-responses"> = (model, context, simple?: SimpleStreamOptions) => {
   const base = buildBaseOptions(simple);
-  const reasoning = clampReasoning(simple?.reasoning, model);
-  return streamOpenaiResponses(model, context, { ...base, reasoning });
+  return streamOpenaiResponses(model, context, { ...base, reasoning: simple?.reasoning });
 };

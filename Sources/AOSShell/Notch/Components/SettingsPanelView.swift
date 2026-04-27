@@ -138,7 +138,11 @@ struct SettingsPanelView: View {
                     )
                     BentoPickerCard(
                         caption: "Effort",
-                        valueTitle: effortDisplayName(currentEffort),
+                        // Show "Unsupported" instead of a stale effort
+                        // label when the current model has no reasoning
+                        // capability — clearer than greying out a value
+                        // the user can never reach.
+                        valueTitle: currentEffort?.label ?? "Unsupported",
                         isEnabled: selectedModel?.reasoning ?? false,
                         onTap: { page = .effort }
                     )
@@ -598,9 +602,9 @@ struct SettingsPanelView: View {
         pickerPage(title: "Effort") {
             BentoOptionsList(
                 options: effortOptions,
-                selectedId: currentEffort.rawValue,
+                selectedId: currentEffort?.value ?? "",
                 onSelect: { rawValue in
-                    guard let value = ConfigEffort(rawValue: rawValue) else { return }
+                    guard let value = selectedModel?.supportedEfforts.first(where: { $0.value == rawValue }) else { return }
                     Task {
                         await configService.selectEffort(value)
                         page = .main
@@ -610,28 +614,16 @@ struct SettingsPanelView: View {
         }
     }
 
-    /// Build effort rows respecting the current model's `supportsXhigh`
-    /// flag — disable rather than hide so the row count stays stable.
+    /// Build effort rows from the sidecar-reported supported list.
+    /// Each row's id/title come straight from the catalog — no local
+    /// mapping table.
     private var effortOptions: [BentoOption] {
-        let supportsXhigh = selectedModel?.supportsXhigh ?? true
-        return ConfigEffort.allCases.compactMap { e in
-            if e == .xhigh && !supportsXhigh { return nil }
-            return BentoOption(id: e.rawValue, title: effortDisplayName(e))
-        }
+        let efforts = selectedModel?.supportedEfforts ?? []
+        return efforts.map { e in BentoOption(id: e.value, title: e.label) }
     }
 
-    private var currentEffort: ConfigEffort {
-        configService.effectiveEffort
-    }
-
-    private func effortDisplayName(_ e: ConfigEffort) -> String {
-        switch e {
-        case .minimal: return "Minimal"
-        case .low: return "Low"
-        case .medium: return "Medium"
-        case .high: return "High"
-        case .xhigh: return "Extra High"
-        }
+    private var currentEffort: ConfigEffort? {
+        configService.effort(for: selectedModel)
     }
 
     @ViewBuilder
