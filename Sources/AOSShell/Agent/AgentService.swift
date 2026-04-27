@@ -76,6 +76,17 @@ public struct ConversationTurn: Identifiable {
     public var reply: String
     public var status: AgentStatus
     public var errorMessage: String?
+    /// Accumulated reasoning trace streamed via `ui.thinking`. Empty when
+    /// the model is non-reasoning or has not yet emitted any thinking.
+    public var thinking: String = ""
+    /// Wall-clock instant the first `ui.thinking` delta arrived. `nil`
+    /// until then. Used together with `thinkingEndedAt` to compute the
+    /// "thought for X seconds" label.
+    public var thinkingStartedAt: Date?
+    /// Wall-clock instant thinking finished — set when the first reply
+    /// token arrives, or when the turn reaches a terminal status while
+    /// thinking is still open. `nil` while thinking is in progress.
+    public var thinkingEndedAt: Date?
 }
 
 /// Display-side snapshot of the citedContext attached to a turn. The icon is
@@ -193,6 +204,9 @@ public final class AgentService {
         rpc.registerNotificationHandler(method: RPCMethod.uiToken) { [weak self] (params: UITokenParams) in
             await self?.handleToken(params)
         }
+        rpc.registerNotificationHandler(method: RPCMethod.uiThinking) { [weak self] (params: UIThinkingParams) in
+            await self?.handleThinking(params)
+        }
         rpc.registerNotificationHandler(method: RPCMethod.uiStatus) { [weak self] (params: UIStatusParams) in
             await self?.handleStatus(params)
         }
@@ -305,6 +319,28 @@ public final class AgentService {
     internal func handleToken(_ p: UITokenParams) {
         guard let idx = turns.lastIndex(where: { $0.id == p.turnId }) else { return }
         turns[idx].reply.append(p.delta)
+    }
+
+    /// Tagged dispatch on the `ui.thinking` lifecycle. `.delta` accumulates
+    /// the trace and stamps `thinkingStartedAt` on first arrival; `.end`
+    /// stamps `thinkingEndedAt` exactly once. The Shell never infers either
+    /// transition from neighboring channels — the sidecar owns the timing.
+    internal func handleThinking(_ p: UIThinkingParams) {
+        guard let idx = turns.lastIndex(where: { $0.id == p.turnId }) else { return }
+        switch p.kind {
+        case .delta:
+            // `UIThinkingParams`'s decoder rejects `.delta` without a delta
+            // string, so the force-unwrap here is the wire contract — a nil
+            // would have failed at decode and never reached this handler.
+            if turns[idx].thinkingStartedAt == nil {
+                turns[idx].thinkingStartedAt = Date()
+            }
+            turns[idx].thinking.append(p.delta!)
+        case .end:
+            if turns[idx].thinkingStartedAt != nil && turns[idx].thinkingEndedAt == nil {
+                turns[idx].thinkingEndedAt = Date()
+            }
+        }
     }
 
     internal func handleStatus(_ p: UIStatusParams) {

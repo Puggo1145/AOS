@@ -155,6 +155,63 @@ final class RoundtripTests: XCTestCase {
         )
     }
 
+    func testUIThinkingDeltaRoundtrip() throws {
+        try assertRoundtrip(
+            fixture: "ui.thinking.delta.json",
+            as: RPCNotification<UIThinkingParams>.self
+        )
+    }
+
+    func testUIThinkingEndRoundtrip() throws {
+        try assertRoundtrip(
+            fixture: "ui.thinking.end.json",
+            as: RPCNotification<UIThinkingParams>.self
+        )
+    }
+
+    /// `kind == .end` MUST omit `delta` from the wire (not encode it as
+    /// `null`). The end fixture is the byte-equal proof; this guards the
+    /// inverse — that we don't accidentally encode `delta: null`.
+    func testUIThinkingEndOmitsDelta() throws {
+        let end = RPCNotification(
+            method: "ui.thinking",
+            params: UIThinkingParams(turnId: "t", kind: .end)
+        )
+        let bytes = try CanonicalJSON.encode(end)
+        let s = String(data: bytes, encoding: .utf8) ?? ""
+        XCTAssertFalse(s.contains("\"delta\""), "end variant should not carry delta key, got: \(s)")
+    }
+
+    /// The decoder rejects a `kind:"delta"` frame that omits `delta`, instead
+    /// of silently producing `delta: nil`. Pairs with the TS discriminated
+    /// union's compile-time guarantee.
+    func testUIThinkingDeltaWithoutDeltaIsRejected() {
+        let raw = #"{"jsonrpc":"2.0","method":"ui.thinking","params":{"kind":"delta","turnId":"t"}}"#.data(using: .utf8)!
+        XCTAssertThrowsError(try JSONDecoder().decode(RPCNotification<UIThinkingParams>.self, from: raw))
+    }
+
+    /// The decoder rejects a `kind:"end"` frame that carries a `delta`,
+    /// catching producers that accidentally serialize the leftover field.
+    func testUIThinkingEndWithDeltaIsRejected() {
+        let raw = #"{"jsonrpc":"2.0","method":"ui.thinking","params":{"delta":"x","kind":"end","turnId":"t"}}"#.data(using: .utf8)!
+        XCTAssertThrowsError(try JSONDecoder().decode(RPCNotification<UIThinkingParams>.self, from: raw))
+    }
+
+    /// `{"kind":"end","delta":null}` is still a frame carrying the `delta`
+    /// key — the wire contract is keyed on field presence, not field value,
+    /// so an explicit null must also be rejected.
+    func testUIThinkingEndWithNullDeltaIsRejected() {
+        let raw = #"{"jsonrpc":"2.0","method":"ui.thinking","params":{"delta":null,"kind":"end","turnId":"t"}}"#.data(using: .utf8)!
+        XCTAssertThrowsError(try JSONDecoder().decode(RPCNotification<UIThinkingParams>.self, from: raw))
+    }
+
+    /// Symmetric guard: `{"kind":"delta","delta":null}` is malformed — the
+    /// delta variant requires a string, not a present-but-null field.
+    func testUIThinkingDeltaWithNullDeltaIsRejected() {
+        let raw = #"{"jsonrpc":"2.0","method":"ui.thinking","params":{"delta":null,"kind":"delta","turnId":"t"}}"#.data(using: .utf8)!
+        XCTAssertThrowsError(try JSONDecoder().decode(RPCNotification<UIThinkingParams>.self, from: raw))
+    }
+
     func testUIStatusRoundtrip() throws {
         try assertRoundtrip(
             fixture: "ui.status.json",

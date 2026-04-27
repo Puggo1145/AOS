@@ -153,6 +153,72 @@ struct AgentServiceTests {
         #expect(s.turns.isEmpty)
     }
 
+    // MARK: - Thinking lifecycle
+    //
+    // The `ui.thinking` channel carries explicit lifecycle events: `.delta`
+    // chunks accumulate the trace and stamp `thinkingStartedAt` on first
+    // arrival; `.end` stamps `thinkingEndedAt`. The Shell never infers either
+    // transition from neighboring channels (`ui.token`, `ui.status`,
+    // `ui.error`) — the sidecar owns the timing.
+
+    @Test("first ui.thinking delta stamps startedAt and accumulates the trace")
+    func thinkingDeltaAccumulates() {
+        let s = makeService()
+        s._testTurnStarted(id: "TH1")
+        s.handleThinking(UIThinkingParams(turnId: "TH1", kind: .delta, delta: "Considering "))
+        s.handleThinking(UIThinkingParams(turnId: "TH1", kind: .delta, delta: "the request…"))
+        #expect(s.turns.last?.thinking == "Considering the request…")
+        #expect(s.turns.last?.thinkingStartedAt != nil)
+        #expect(s.turns.last?.thinkingEndedAt == nil)
+    }
+
+    @Test("ui.thinking end stamps thinkingEndedAt exactly once")
+    func thinkingEndStamps() {
+        let s = makeService()
+        s._testTurnStarted(id: "TH2")
+        s.handleThinking(UIThinkingParams(turnId: "TH2", kind: .delta, delta: "x"))
+        let firstStart = s.turns.last?.thinkingStartedAt
+        s.handleThinking(UIThinkingParams(turnId: "TH2", kind: .end))
+        let firstEnd = s.turns.last?.thinkingEndedAt
+        #expect(firstEnd != nil)
+        // A second end must not move the stamp — the lifecycle is a
+        // one-shot transition, not a re-trigger.
+        s.handleThinking(UIThinkingParams(turnId: "TH2", kind: .end))
+        #expect(s.turns.last?.thinkingEndedAt == firstEnd)
+        #expect(s.turns.last?.thinkingStartedAt == firstStart)
+    }
+
+    @Test("ui.token does NOT close thinking — only an explicit end does")
+    func tokenDoesNotCloseThinking() {
+        let s = makeService()
+        s._testTurnStarted(id: "TH3")
+        s.handleThinking(UIThinkingParams(turnId: "TH3", kind: .delta, delta: "trace"))
+        s.handleToken(UITokenParams(turnId: "TH3", delta: "reply"))
+        // Reply accumulates as expected, but thinking remains open until the
+        // sidecar emits `.end`.
+        #expect(s.turns.last?.reply == "reply")
+        #expect(s.turns.last?.thinkingEndedAt == nil)
+    }
+
+    @Test("ui.status .done does NOT close thinking — only an explicit end does")
+    func statusDoneDoesNotCloseThinking() {
+        let s = makeService()
+        s._testTurnStarted(id: "TH4")
+        s.handleThinking(UIThinkingParams(turnId: "TH4", kind: .delta, delta: "trace"))
+        s.handleStatus(UIStatusParams(turnId: "TH4", status: .done))
+        #expect(s.turns.last?.thinkingEndedAt == nil)
+    }
+
+    @Test("stale ui.thinking after reset is ignored")
+    func staleThinkingAfterResetIgnored() {
+        let s = makeService()
+        s._testTurnStarted(id: "TH5")
+        s.handleConversationReset()
+        s.handleThinking(UIThinkingParams(turnId: "TH5", kind: .delta, delta: "late"))
+        s.handleThinking(UIThinkingParams(turnId: "TH5", kind: .end))
+        #expect(s.turns.isEmpty)
+    }
+
     @Test("payload-too-large message names both the actual size and the limit")
     func payloadTooLargeMessageShape() {
         let msg = AgentService.formatPayloadTooLargeMessage(

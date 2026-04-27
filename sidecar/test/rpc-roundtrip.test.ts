@@ -30,6 +30,7 @@ import {
   type ConfigSetParams,
   type ConfigSetEffortParams,
   type UITokenParams,
+  type UIThinkingParams,
   type UIStatusParams,
   type UIErrorParams,
   type ProviderStatusParams,
@@ -172,6 +173,27 @@ test("ui.token fixture roundtrips byte-equal", () => {
   const note = parsed as RPCNotification<UITokenParams>;
   expect(note.method).toBe(RPCMethod.uiToken);
   expect(typeof note.params.delta).toBe("string");
+});
+
+test("ui.thinking.delta fixture roundtrips byte-equal", () => {
+  assertRoundtrip("ui.thinking.delta.json");
+  const { parsed } = loadFixture("ui.thinking.delta.json");
+  const note = parsed as RPCNotification<UIThinkingParams>;
+  expect(note.method).toBe(RPCMethod.uiThinking);
+  expect(note.params.kind).toBe("delta");
+  if (note.params.kind === "delta") {
+    expect(typeof note.params.delta).toBe("string");
+  }
+});
+
+test("ui.thinking.end fixture roundtrips byte-equal", () => {
+  assertRoundtrip("ui.thinking.end.json");
+  const { parsed } = loadFixture("ui.thinking.end.json");
+  const note = parsed as RPCNotification<UIThinkingParams>;
+  expect(note.method).toBe(RPCMethod.uiThinking);
+  expect(note.params.kind).toBe("end");
+  // `end` variant must not carry a `delta` field.
+  expect("delta" in note.params).toBe(false);
 });
 
 test("ui.status fixture roundtrips byte-equal", () => {

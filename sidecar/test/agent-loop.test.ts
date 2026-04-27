@@ -199,6 +199,156 @@ test("happy path: ack + turnStarted + thinking + tokens + done", async () => {
   expect(convo.turns[0].finalAssistant).toBeDefined();
 });
 
+test("thinking lifecycle: thinking_delta and thinking_end are forwarded as ui.thinking before ui.token", async () => {
+  // Reasoning-trace deltas must reach the Shell on the dedicated `ui.thinking`
+  // channel with `kind: "delta"`, the explicit `thinking_end` event must be
+  // forwarded as `kind: "end"`, and both must precede the first `ui.token`
+  // so the Shell's reasoning affordance closes before the reply renders.
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const convo = new Conversation();
+  registerAgentHandlers(dispatcher, { registry: new TurnRegistry(), conversation: convo });
+
+  nextStream = (model) => {
+    const s = new AssistantMessageEventStream();
+    queueMicrotask(async () => {
+      const partial = fakeAssistantMessage(model);
+      s.push({ type: "thinking_delta", contentIndex: 0, delta: "Considering ", partial });
+      s.push({ type: "thinking_delta", contentIndex: 0, delta: "the request…", partial });
+      s.push({ type: "thinking_end", contentIndex: 0, content: "Considering the request…", partial });
+      s.push({ type: "text_delta", contentIndex: 1, delta: "Answer", partial });
+      s.push({ type: "done", reason: "stop", message: partial });
+      s.end();
+    });
+    return s;
+  };
+
+  pushInbound({ jsonrpc: "2.0", id: 1, method: "agent.submit", params: { turnId: "TT", prompt: "hi", citedContext: {} } });
+  await flush(80);
+
+  const thinking = captured.notifications.filter((n) => n.method === "ui.thinking");
+  expect(thinking).toHaveLength(3);
+  expect(thinking[0].params).toEqual({ turnId: "TT", kind: "delta", delta: "Considering " });
+  expect(thinking[1].params).toEqual({ turnId: "TT", kind: "delta", delta: "the request…" });
+  expect(thinking[2].params).toEqual({ turnId: "TT", kind: "end" });
+
+  // Ordering invariant: every ui.thinking precedes every ui.token.
+  const lastThinkingIdx = captured.notifications
+    .map((n, i) => ({ n, i }))
+    .filter(({ n }) => n.method === "ui.thinking")
+    .at(-1)!.i;
+  const firstTokenIdx = captured.notifications.findIndex((n) => n.method === "ui.token");
+  expect(firstTokenIdx).toBeGreaterThan(lastThinkingIdx);
+});
+
+test("thinking lifecycle: error mid-thinking synthesizes a {kind:end} before ui.error", async () => {
+  // Provider can bail out of reasoning without ever emitting `thinking_end`.
+  // The Shell no longer infers the close from `ui.error`, so the sidecar
+  // must synthesize the end itself or the shimmer keeps animating.
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const convo = new Conversation();
+  registerAgentHandlers(dispatcher, { registry: new TurnRegistry(), conversation: convo });
+
+  nextStream = (model) => {
+    const s = new AssistantMessageEventStream();
+    queueMicrotask(async () => {
+      const partial = fakeAssistantMessage(model);
+      s.push({ type: "thinking_delta", contentIndex: 0, delta: "considering…", partial });
+      const errMsg = fakeAssistantMessage(model, { errorMessage: "boom" });
+      s.push({ type: "error", reason: "error", error: errMsg });
+      s.end();
+    });
+    return s;
+  };
+
+  pushInbound({ jsonrpc: "2.0", id: 1, method: "agent.submit", params: { turnId: "TE1", prompt: "hi", citedContext: {} } });
+  await flush(80);
+
+  const events = captured.notifications.map((n) => ({ method: n.method, params: n.params }));
+  // Expected order: ...thinking_delta, then synthesized thinking end, then ui.error.
+  const lastThinkingIdx = events
+    .map((e, i) => ({ e, i }))
+    .filter(({ e }) => e.method === "ui.thinking")
+    .at(-1)!.i;
+  expect(events[lastThinkingIdx].params).toEqual({ turnId: "TE1", kind: "end" });
+  const errorIdx = events.findIndex((e) => e.method === "ui.error");
+  expect(errorIdx).toBeGreaterThan(lastThinkingIdx);
+});
+
+test("thinking lifecycle: cancel mid-thinking synthesizes a {kind:end} before ui.status done", async () => {
+  // Cancel path: the loop breaks on `signal.aborted` and emits `ui.status
+  // done` from the natural-completion tail. The thinking block must close
+  // before that done so the Shell's per-turn timer freezes correctly.
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const convo = new Conversation();
+  registerAgentHandlers(dispatcher, { registry: new TurnRegistry(), conversation: convo });
+
+  nextStream = (model, signal) => {
+    const s = new AssistantMessageEventStream();
+    queueMicrotask(async () => {
+      const partial = fakeAssistantMessage(model);
+      s.push({ type: "thinking_delta", contentIndex: 0, delta: "considering…", partial });
+      await new Promise<void>((resolve) => {
+        if (signal?.aborted) return resolve();
+        signal?.addEventListener("abort", () => resolve());
+      });
+      const terminal = fakeAssistantMessage(model);
+      terminal.stopReason = "aborted";
+      s.push({ type: "done", reason: "stop", message: terminal });
+      s.end();
+    });
+    return s;
+  };
+
+  pushInbound({ jsonrpc: "2.0", id: 1, method: "agent.submit", params: { turnId: "TC1", prompt: "hi", citedContext: {} } });
+  await flush(30);
+  pushInbound({ jsonrpc: "2.0", id: 2, method: "agent.cancel", params: { turnId: "TC1" } });
+  await flush(80);
+
+  const thinking = captured.notifications.filter((n) => n.method === "ui.thinking");
+  // delta + synthesized end
+  expect(thinking).toHaveLength(2);
+  expect(thinking[0].params).toMatchObject({ kind: "delta" });
+  expect(thinking[1].params).toEqual({ turnId: "TC1", kind: "end" });
+
+  const lastThinkingIdx = captured.notifications
+    .map((n, i) => ({ n, i }))
+    .filter(({ n }) => n.method === "ui.thinking")
+    .at(-1)!.i;
+  const doneIdx = captured.notifications.findIndex(
+    (n) => n.method === "ui.status" && n.params.status === "done",
+  );
+  expect(doneIdx).toBeGreaterThan(lastThinkingIdx);
+});
+
+test("thinking lifecycle: end is not duplicated when provider already sent thinking_end", async () => {
+  // Sanity: the synthesized end must not double-fire on the happy path
+  // where the provider closes the block itself.
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const convo = new Conversation();
+  registerAgentHandlers(dispatcher, { registry: new TurnRegistry(), conversation: convo });
+
+  nextStream = (model) => {
+    const s = new AssistantMessageEventStream();
+    queueMicrotask(async () => {
+      const partial = fakeAssistantMessage(model);
+      s.push({ type: "thinking_delta", contentIndex: 0, delta: "x", partial });
+      s.push({ type: "thinking_end", contentIndex: 0, content: "x", partial });
+      s.push({ type: "text_delta", contentIndex: 1, delta: "y", partial });
+      s.push({ type: "done", reason: "stop", message: partial });
+      s.end();
+    });
+    return s;
+  };
+
+  pushInbound({ jsonrpc: "2.0", id: 1, method: "agent.submit", params: { turnId: "TD1", prompt: "hi", citedContext: {} } });
+  await flush(80);
+
+  const ends = captured.notifications.filter(
+    (n) => n.method === "ui.thinking" && n.params.kind === "end",
+  );
+  expect(ends).toHaveLength(1);
+});
+
 test("cancel path: agent.cancel aborts the stream and emits status done", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const convo = new Conversation();

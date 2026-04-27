@@ -104,6 +104,7 @@ export const RPCMethod = {
   conversationTurnStarted: "conversation.turnStarted",
   conversationReset: "conversation.reset",
   uiToken: "ui.token",
+  uiThinking: "ui.thinking",
   uiStatus: "ui.status",
   uiError: "ui.error",
   providerStatus: "provider.status",
@@ -293,6 +294,16 @@ export interface UITokenParams {
   turnId: string;
   delta: string;
 }
+
+/// `ui.thinking` carries reasoning-trace lifecycle events streamed by
+/// reasoning-capable models. Tagged union by `kind`:
+///   - `"delta"` — incremental reasoning text in `delta`.
+///   - `"end"`   — end of the current reasoning block; no `delta`.
+/// Kept on a separate channel from `ui.token` so the Notch panel can render
+/// the reasoning trace distinctly from the visible reply.
+export type UIThinkingParams =
+  | { turnId: string; kind: "delta"; delta: string }
+  | { turnId: string; kind: "end" };
 
 export type UIStatus = "thinking" | "tool_calling" | "waiting_input" | "done";
 

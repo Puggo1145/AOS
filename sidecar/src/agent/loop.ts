@@ -229,6 +229,22 @@ export async function runTurn(
   // `models/effort.ts` — do not branch on `model.reasoning` here.
   const effort: string | undefined = effectiveEffort(model, cfg.effort);
 
+  // Tracks whether a reasoning block has been opened on the wire and not yet
+  // closed. The provider stream's `thinking_end` is the happy-path closer,
+  // but providers can also bail out of thinking with an error, the user can
+  // cancel mid-trace, or an exception can propagate before the provider
+  // emits `thinking_end`. In every one of those terminal paths we MUST
+  // synthesize a `{ kind: "end" }` before the terminal `ui.error` /
+  // `ui.status done`, otherwise the Shell's shimmer keeps animating
+  // indefinitely (we removed the implicit-close fallbacks on the Shell side
+  // when the lifecycle moved to an explicit channel).
+  let thinkingOpen = false;
+  const closeThinkingIfOpen = (): void => {
+    if (!thinkingOpen) return;
+    thinkingOpen = false;
+    dispatcher.notify(RPCMethod.uiThinking, { turnId, kind: "end" });
+  };
+
   try {
     // Pull the rolling LLM history from the Conversation. This is the
     // single change that gives the LLM cross-turn memory: prior successful
@@ -263,7 +279,24 @@ export async function runTurn(
     let final: AssistantMessage | undefined;
     for await (const ev of eventStream) {
       if (signal.aborted) break;
-      if (ev.type === "text_delta") {
+      if (ev.type === "thinking_delta") {
+        // Forward reasoning-trace deltas verbatim. Not persisted in the
+        // Conversation store: thinking is display-only and never replayed
+        // into the next turn's LLM context (cross-source providers strip
+        // it anyway). The Shell renders these in a separate affordance.
+        thinkingOpen = true;
+        dispatcher.notify(RPCMethod.uiThinking, {
+          turnId,
+          kind: "delta",
+          delta: ev.delta,
+        });
+      } else if (ev.type === "thinking_end") {
+        // Explicit lifecycle end of the current reasoning block. Forwarded
+        // so the Shell can stamp `thinkingEndedAt` without inferring it
+        // from the first `ui.token` (which never arrives for tool-call-
+        // only turns or when reasoning ends right at completion).
+        closeThinkingIfOpen();
+      } else if (ev.type === "text_delta") {
         // Dual write: durable Conversation first, then streaming notify.
         // The boolean tells us whether the turn still exists — false means
         // it was wiped by `agent.reset` / advanced past by `agent.cancel`,
@@ -278,6 +311,9 @@ export async function runTurn(
       } else if (ev.type === "error") {
         const code = pickErrorCode(ev.error);
         const message = ev.error.errorMessage ?? "agent error";
+        // Close any open reasoning block first — the Shell stamps
+        // `thinkingEndedAt` on this and stops the shimmer.
+        closeThinkingIfOpen();
         if (convo.setError(turnId, code, message)) {
           dispatcher.notify(RPCMethod.uiError, { turnId, code, message });
           // Project typed auth invalidation to provider.statusChanged so the
@@ -302,6 +338,7 @@ export async function runTurn(
       // Allocated agent.* segment (-32300 ~ -32399) per rpc-protocol.md.
       // contextOverflow = -32300; distinguishes overflow from generic
       // internal faults so the Shell error UI can render a tailored message.
+      closeThinkingIfOpen();
       if (convo.setError(turnId, RPCErrorCode.agentContextOverflow, "Context too long")) {
         dispatcher.notify(RPCMethod.uiError, {
           turnId,
@@ -335,11 +372,15 @@ export async function runTurn(
     }
     // `ui.status done` is the terminal signal regardless of whether the turn
     // is still in the conversation — Shell may want to clear its emoji even
-    // if the turn was reset. We notify unconditionally here.
+    // if the turn was reset. We notify unconditionally here. Cancel paths
+    // also land here (loop break on `signal.aborted`) — closing the thinking
+    // block first keeps the cancel-mid-thinking UX consistent with errors.
+    closeThinkingIfOpen();
     dispatcher.notify(RPCMethod.uiStatus, { turnId, status: "done" });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.error("runTurn failed", { turnId, err: String(err) });
+    closeThinkingIfOpen();
     if (convo.setError(turnId, RPCErrorCode.internalError, message)) {
       dispatcher.notify(RPCMethod.uiError, {
         turnId,

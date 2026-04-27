@@ -270,11 +270,23 @@ struct OpenedPanelView: View {
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
-                Text(turn.reply)
-                    .font(.system(size: 13, weight: .regular, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.9))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
+                VStack(alignment: .leading, spacing: 6) {
+                    if turn.thinkingStartedAt != nil {
+                        ThinkingView(
+                            thinking: turn.thinking,
+                            startedAt: turn.thinkingStartedAt,
+                            endedAt: turn.thinkingEndedAt
+                        )
+                    }
+                    if !turn.reply.isEmpty {
+                        Text(turn.reply)
+                            .font(.system(size: 13, weight: .regular, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.9))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             if turn.status == .error, let msg = turn.errorMessage, !msg.isEmpty {
