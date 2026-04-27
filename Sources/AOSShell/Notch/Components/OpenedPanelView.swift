@@ -434,33 +434,15 @@ struct OpenedPanelView: View {
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
                 VStack(alignment: .leading, spacing: 6) {
-                    if turn.thinkingStartedAt != nil {
-                        ThinkingView(
-                            thinking: turn.thinking,
-                            startedAt: turn.thinkingStartedAt,
-                            endedAt: turn.thinkingEndedAt
-                        )
-                    }
-                    // Tool calls render in emit order between thinking and
-                    // reply — same vertical column the LLM produced them in.
-                    // `id: \.id` is the wire `toolCallId`, stable across the
-                    // `.calling` → `.completed` transition so SwiftUI keeps
-                    // each row's local state (expanded/collapsed) when the
-                    // result lands.
-                    ForEach(turn.toolCalls, id: \.id) { record in
-                        ToolCallView(record: record)
-                    }
-                    if !turn.reply.isEmpty {
-                        // Reply is untrusted LLM output. Disable network image
-                        // providers so a model-emitted `![](https://…)` cannot
-                        // turn the Notch UI into an outbound beacon (prompt
-                        // injection → IP/online-state/timing leak via image GET).
-                        Markdown(turn.reply)
-                            .markdownTheme(.aosNotchPanel)
-                            .markdownImageProvider(BlockedImageProvider())
-                            .markdownInlineImageProvider(BlockedInlineImageProvider())
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
+                    // Render segments in the order the sidecar emitted them
+                    // so thinking, tool calls, and reply chunks interleave the
+                    // way the model produced them — instead of being grouped
+                    // into a fixed thinking → tools → reply layout. Segment
+                    // ids are stable (UUID for thinking/reply, `toolCallId`
+                    // for tool calls) so SwiftUI preserves each row's local
+                    // state across redraws.
+                    ForEach(turn.segments) { segment in
+                        segmentView(segment, in: turn)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -477,6 +459,36 @@ struct OpenedPanelView: View {
                         RoundedRectangle(cornerRadius: 6)
                             .fill(Color.red.opacity(0.12))
                     )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func segmentView(_ segment: TurnSegment, in turn: ConversationTurn) -> some View {
+        switch segment {
+        case .thinking(let s):
+            ThinkingView(
+                thinking: s.text,
+                startedAt: s.startedAt,
+                endedAt: s.endedAt,
+                isCurrent: s.isOpenForAppend
+            )
+        case .toolCall(let id):
+            if let record = turn.toolCalls.first(where: { $0.id == id }) {
+                ToolCallView(record: record)
+            }
+        case .reply(let s):
+            if !s.text.isEmpty {
+                // Reply is untrusted LLM output. Disable network image
+                // providers so a model-emitted `![](https://…)` cannot turn
+                // the Notch UI into an outbound beacon (prompt injection →
+                // IP/online-state/timing leak via image GET).
+                Markdown(s.text)
+                    .markdownTheme(.aosNotchPanel)
+                    .markdownImageProvider(BlockedImageProvider())
+                    .markdownInlineImageProvider(BlockedInlineImageProvider())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
             }
         }
     }

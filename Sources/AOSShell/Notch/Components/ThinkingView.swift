@@ -30,6 +30,14 @@ struct ThinkingView: View {
     let thinking: String
     let startedAt: Date?
     let endedAt: Date?
+    /// True while this segment is the active reasoning burst — the next
+    /// `ui.thinking.delta` would extend it. Goes false the moment a reply
+    /// token or tool call lands. The explicit `ui.thinking.end` lifecycle
+    /// frame (which sets `endedAt`) may arrive later. During the
+    /// `!isCurrent && endedAt == nil` window we render a "paused" tail —
+    /// same single-row layout as streaming but without the shimmer, since
+    /// the model has visibly moved on.
+    let isCurrent: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded: Bool = false
@@ -59,10 +67,14 @@ struct ThinkingView: View {
     private var isSettled: Bool { startedAt != nil && endedAt != nil }
 
     var body: some View {
-        if isStreaming {
-            streamingTail
-        } else if isSettled {
+        if isSettled {
             settled
+        } else if isStreaming {
+            // Same single-row tail layout in both sub-states. The shimmer is
+            // gated on `isCurrent` so a paused segment (reply/tool already
+            // landed, lifecycle `.end` not yet) reads as quiescent rather
+            // than still-thinking.
+            streamingTail
         } else {
             EmptyView()
         }
@@ -83,7 +95,9 @@ struct ThinkingView: View {
         return ShimmerText(
             text: tail.isEmpty ? " " : tail,
             fontSize: Self.fontSize,
-            reduceMotion: reduceMotion
+            // Paused segments (`!isCurrent`) share Reduce Motion's static
+            // render path — visible but no animated band.
+            reduceMotion: reduceMotion || !isCurrent
         )
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(

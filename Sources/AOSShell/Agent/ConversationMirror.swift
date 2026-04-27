@@ -39,7 +39,7 @@ public final class ConversationMirror {
 
     public func applyTurnStarted(_ p: ConversationTurnStartedParams) {
         let snapshot = ContextSnapshot.from(citedContext: p.turn.citedContext)
-        let local = ConversationTurn(
+        var local = ConversationTurn(
             id: p.turn.id,
             prompt: p.turn.prompt,
             context: snapshot,
@@ -47,6 +47,9 @@ public final class ConversationMirror {
             status: AgentStatus.from(turnStatus: p.turn.status),
             errorMessage: p.turn.errorMessage
         )
+        if !local.reply.isEmpty {
+            local.segments.append(.reply(ReplySegment(text: local.reply)))
+        }
         if let existing = turns.firstIndex(where: { $0.id == local.id }) {
             turns[existing] = local
         } else {
@@ -68,6 +71,12 @@ public final class ConversationMirror {
     public func applyToken(_ p: UITokenParams) {
         guard let idx = turns.lastIndex(where: { $0.id == p.turnId }) else { return }
         turns[idx].reply.append(p.delta)
+        // Reply tokens mark any open thinking segment as no longer accepting
+        // appends (a later thinking burst opens a new segment), but DO NOT
+        // stamp `endedAt` — the explicit `ui.thinking.end` lifecycle is the
+        // sole authority for that. See ThinkingSegment.isOpenForAppend.
+        markCurrentThinkingNotAppendable(in: &turns[idx])
+        appendReplyDelta(&turns[idx], delta: p.delta)
     }
 
     public func applyThinking(_ p: UIThinkingParams) {
@@ -79,11 +88,14 @@ public final class ConversationMirror {
             }
             // Wire decoder rejects `.delta` without a delta string, so the
             // force-unwrap matches the Codable contract — see UI.swift.
-            turns[idx].thinking.append(p.delta!)
+            let delta = p.delta!
+            turns[idx].thinking.append(delta)
+            appendThinkingDelta(&turns[idx], delta: delta)
         case .end:
             if turns[idx].thinkingStartedAt != nil && turns[idx].thinkingEndedAt == nil {
                 turns[idx].thinkingEndedAt = Date()
             }
+            endCurrentThinking(in: &turns[idx])
         }
     }
 
@@ -108,6 +120,14 @@ public final class ConversationMirror {
             } else {
                 turns[idx].toolCalls.append(record)
             }
+            // A tool call ends both the current thinking burst (the model has
+            // chosen its action) and the current reply burst (subsequent text
+            // belongs to a fresh segment after the tool result).
+            // Tool call landing is the same signal as a reply token: the
+            // current thinking segment stops accepting deltas, but its
+            // `endedAt` waits for the explicit lifecycle frame.
+            markCurrentThinkingNotAppendable(in: &turns[idx])
+            appendToolCallSegment(&turns[idx], id: p.toolCallId)
         case .result:
             // `.result` for an unknown id can happen if a `conversation.reset`
             // races with an in-flight tool call — drop silently rather than
@@ -138,6 +158,78 @@ public final class ConversationMirror {
                 turns[idx].toolCalls[existing] = record
             } else {
                 turns[idx].toolCalls.append(record)
+            }
+            // Tool call landing is the same signal as a reply token: the
+            // current thinking segment stops accepting deltas, but its
+            // `endedAt` waits for the explicit lifecycle frame.
+            markCurrentThinkingNotAppendable(in: &turns[idx])
+            appendToolCallSegment(&turns[idx], id: p.toolCallId)
+        }
+    }
+
+    // MARK: - Segment helpers
+
+    private func appendThinkingDelta(_ turn: inout ConversationTurn, delta: String) {
+        // Extend the current segment only if it's still open for appends. A
+        // segment with `isOpenForAppend == false` was retired by an
+        // intervening reply/tool, even if its `endedAt` is still nil pending
+        // the explicit `.end` frame.
+        if case .thinking(var seg) = turn.segments.last, seg.isOpenForAppend {
+            seg.text.append(delta)
+            turn.segments[turn.segments.count - 1] = .thinking(seg)
+        } else {
+            let seg = ThinkingSegment(text: delta, startedAt: Date())
+            turn.segments.append(.thinking(seg))
+        }
+    }
+
+    private func appendReplyDelta(_ turn: inout ConversationTurn, delta: String) {
+        if case .reply(var seg) = turn.segments.last {
+            seg.text.append(delta)
+            turn.segments[turn.segments.count - 1] = .reply(seg)
+        } else {
+            turn.segments.append(.reply(ReplySegment(text: delta)))
+        }
+    }
+
+    private func appendToolCallSegment(_ turn: inout ConversationTurn, id: String) {
+        // Idempotent: skip if the same tool call id is already segmented
+        // (matches the dedupe on `toolCalls`).
+        if turn.segments.contains(where: {
+            if case .toolCall(let existing) = $0, existing == id { return true }
+            return false
+        }) { return }
+        turn.segments.append(.toolCall(id: id))
+    }
+
+    /// Reply / tool arrival: the current thinking burst is no longer the
+    /// active one (any further `.delta` opens a new segment), but its
+    /// lifecycle `endedAt` belongs to the explicit `.end` frame.
+    private func markCurrentThinkingNotAppendable(in turn: inout ConversationTurn) {
+        for i in stride(from: turn.segments.count - 1, through: 0, by: -1) {
+            if case .thinking(var seg) = turn.segments[i] {
+                if seg.isOpenForAppend {
+                    seg.isOpenForAppend = false
+                    turn.segments[i] = .thinking(seg)
+                }
+                return
+            }
+        }
+    }
+
+    /// Explicit `ui.thinking.end`: stamp `endedAt` on the most recent
+    /// thinking segment that's still missing one. Also flips
+    /// `isOpenForAppend` defensively for the case where `.end` arrives
+    /// before any reply/tool would have done it.
+    private func endCurrentThinking(in turn: inout ConversationTurn) {
+        for i in stride(from: turn.segments.count - 1, through: 0, by: -1) {
+            if case .thinking(var seg) = turn.segments[i] {
+                if seg.endedAt == nil {
+                    seg.endedAt = Date()
+                }
+                seg.isOpenForAppend = false
+                turn.segments[i] = .thinking(seg)
+                return
             }
         }
     }
@@ -206,6 +298,23 @@ public final class ConversationMirror {
                 t.thinking = existing.thinking
                 t.thinkingStartedAt = existing.thinkingStartedAt
                 t.thinkingEndedAt = existing.thinkingEndedAt
+                t.toolCalls = existing.toolCalls
+                t.segments = existing.segments
+                // The wire `reply` is authoritative: if it has grown beyond
+                // what our last reply segment captured, append the delta into
+                // the existing reply segment so render order is preserved.
+                let mirroredReplyLength = existing.segments.reduce(0) { acc, seg in
+                    if case .reply(let r) = seg { return acc + r.text.count }
+                    return acc
+                }
+                if t.reply.count > mirroredReplyLength {
+                    let delta = String(t.reply.suffix(t.reply.count - mirroredReplyLength))
+                    appendReplyDelta(&t, delta: delta)
+                }
+            } else if !t.reply.isEmpty {
+                // First-activate path: no segment history — surface the
+                // accumulated reply as one segment.
+                t.segments.append(.reply(ReplySegment(text: t.reply)))
             }
             merged.append(t)
         }

@@ -92,6 +92,78 @@ public struct ConversationTurn: Identifiable {
     /// `.completed` on the matching `phase: "result"` frame. Empty when the
     /// turn made no tool calls.
     public var toolCalls: [ToolCallRecord] = []
+    /// Ordered render script for the turn body. Captures the actual emit
+    /// sequence of `ui.thinking` / `ui.token` / `ui.toolCall` notifications so
+    /// the panel renders thinking, tool calls, and reply text in the order the
+    /// model produced them — rather than the fixed thinking → tools → reply
+    /// grouping that loses interleaving (e.g. "think → tool → think → reply →
+    /// tool → reply"). The aggregate `thinking` / `reply` / `toolCalls` fields
+    /// above are kept in sync with the segments and remain the source for
+    /// streaming-detection heuristics and emoji selection.
+    public var segments: [TurnSegment] = []
+}
+
+/// One ordered slot in `ConversationTurn.segments`. Thinking and reply each
+/// own their own text so the same turn can carry multiple non-contiguous
+/// thinking or reply chunks separated by tool calls.
+public enum TurnSegment: Identifiable, Equatable {
+    case thinking(ThinkingSegment)
+    case toolCall(id: String)
+    case reply(ReplySegment)
+
+    public var id: String {
+        switch self {
+        case .thinking(let s): return "think:\(s.id)"
+        case .toolCall(let id): return "tool:\(id)"
+        case .reply(let s): return "reply:\(s.id)"
+        }
+    }
+}
+
+/// One contiguous run of `ui.thinking` deltas. A turn may have several when
+/// reasoning resumes after a tool result.
+public struct ThinkingSegment: Identifiable, Equatable, Sendable {
+    public let id: String
+    public var text: String
+    public var startedAt: Date
+    public var endedAt: Date?
+    /// Two concepts deliberately split:
+    ///   - `isOpenForAppend`: subsequent `ui.thinking.delta` frames extend
+    ///     this segment vs. start a new one. Flipped to false as soon as a
+    ///     reply token or tool call lands, so a later thinking burst becomes
+    ///     its own segment in render order.
+    ///   - `endedAt`: the explicit `ui.thinking.end` lifecycle stamp, used by
+    ///     the UI to compute "Thought for X seconds". Driven exclusively by
+    ///     the `.end` frame — never inferred from reply/tool arrival.
+    /// Conflating these would settle the UI and record elapsed time off the
+    /// first reply/tool frame instead of the actual lifecycle end.
+    public var isOpenForAppend: Bool
+
+    public init(
+        id: String = UUID().uuidString,
+        text: String = "",
+        startedAt: Date,
+        endedAt: Date? = nil,
+        isOpenForAppend: Bool = true
+    ) {
+        self.id = id
+        self.text = text
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+        self.isOpenForAppend = isOpenForAppend
+    }
+}
+
+/// One contiguous run of `ui.token` deltas. A turn may have several when the
+/// model emits visible text, makes a tool call, then emits more text.
+public struct ReplySegment: Identifiable, Equatable, Sendable {
+    public let id: String
+    public var text: String
+
+    public init(id: String = UUID().uuidString, text: String = "") {
+        self.id = id
+        self.text = text
+    }
 }
 
 /// Per-tool-invocation record mirrored from the sidecar's `ui.toolCall`
