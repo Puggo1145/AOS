@@ -5,6 +5,9 @@
 // want exercised, so they do NOT call this function.
 
 import { createBashTool } from "./bash";
+import { createReadTool } from "./read";
+import { createUpdateTool } from "./update";
+import { createWriteTool } from "./write";
 import { toolRegistry } from "./registry";
 
 let registered = false;
@@ -13,4 +16,7 @@ export function registerBuiltinTools(): void {
   if (registered) return;
   registered = true;
   toolRegistry.register(createBashTool());
+  toolRegistry.register(createReadTool());
+  toolRegistry.register(createWriteTool());
+  toolRegistry.register(createUpdateTool());
 }

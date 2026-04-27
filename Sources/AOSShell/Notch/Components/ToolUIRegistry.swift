@@ -18,11 +18,13 @@ import AOSRPCSchema
 
 /// Rendering rules for one tool's inline row + expanded panel.
 public struct ToolUIPresenter: Sendable {
-    /// Short label shown next to "using" / "used" in the row header. Receives
-    /// the call's `args` so a tool can specialize per-invocation
-    /// (e.g. `read /etc/hosts` instead of just `read`). Default presenter
-    /// returns the tool's name unchanged.
-    public let label: @Sendable (JSONValue) -> String
+    /// Full row-header text for one call. Receives the call's `args` plus
+    /// `isCalling` (true while in `.calling`, false after `.result`) so the
+    /// presenter owns its own grammar — file tools say `reading hosts` /
+    /// `read hosts`, while opaque tools like `bash` keep the generic
+    /// `using bash` / `used bash`. The view does NOT prefix a verb, so
+    /// the closure must return the full string it wants displayed.
+    public let label: @Sendable (_ args: JSONValue, _ isCalling: Bool) -> String
 
     /// Body shown when expanded while the call is still in `.calling`. For
     /// `bash` this is the command string the model is executing. Returning
@@ -44,7 +46,7 @@ public struct ToolUIPresenter: Sendable {
     public let icon: String
 
     public init(
-        label: @escaping @Sendable (JSONValue) -> String,
+        label: @escaping @Sendable (_ args: JSONValue, _ isCalling: Bool) -> String,
         callingBody: @escaping @Sendable (JSONValue) -> String?,
         resultBody: @escaping @Sendable (_ args: JSONValue, _ outputText: String, _ isError: Bool) -> String,
         icon: String
@@ -94,17 +96,21 @@ public enum ToolUIRegistry {
 
     private static func registerBuiltins() {
         register(name: "bash", presenter: bashPresenter())
+        register(name: "read", presenter: readPresenter())
+        register(name: "write", presenter: writePresenter())
+        register(name: "update", presenter: updatePresenter())
     }
 
     // MARK: - Built-in presenters
 
     private static func bashPresenter() -> ToolUIPresenter {
         ToolUIPresenter(
-            // The header just says "bash" — the command itself is the row's
-            // payload, not its title. Putting the command in the header would
-            // crowd the closed bar and make long commands wrap behind the
-            // chevron, which is exactly the noise the registry exists to avoid.
-            label: { _ in "bash" },
+            // Bash is opaque — we don't have a single English verb that
+            // captures "run an arbitrary shell pipeline" (`running` is wrong
+            // when the command is a one-shot `cat`, etc.). Stick with the
+            // generic `using bash` / `used bash` framing; the command itself
+            // lives in the expanded body, not the header.
+            label: { _, isCalling in isCalling ? "using bash" : "used bash" },
             // For `.calling` we read the validated `args.command` straight
             // off the wire. JSON shape mirrors `agent/tools/bash.ts`'s schema:
             // `{ command: string, timeout?: number }`. If the shape ever
@@ -138,9 +144,78 @@ public enum ToolUIRegistry {
         )
     }
 
+    // File-tool presenters mirror `agent/tools/{read,write,update}.ts`'s
+    // wire shape: `args.path` is always the user-facing identifier of the
+    // call (which file the model is touching), so the row label echoes the
+    // file's basename — that's what the user scans against their mental
+    // model of "what is the agent doing right now". Full paths are visible
+    // in the expanded body so context isn't lost.
+
+    private static func readPresenter() -> ToolUIPresenter {
+        ToolUIPresenter(
+            label: { args, isCalling in
+                fileToolLabel(verb: isCalling ? "reading" : "read", args: args)
+            },
+            // Pre-result body shows the path so the user knows which file
+            // is in flight even before output arrives.
+            callingBody: { args in fileToolPath(args) },
+            // Result body keeps the path header above the contents — the
+            // tool's text payload is already the file body verbatim.
+            resultBody: { args, output, _ in
+                guard let path = fileToolPath(args) else { return output }
+                return "\(path)\n\n\(output)"
+            },
+            icon: "doc.text"
+        )
+    }
+
+    private static func writePresenter() -> ToolUIPresenter {
+        ToolUIPresenter(
+            label: { args, isCalling in
+                fileToolLabel(verb: isCalling ? "writing" : "wrote", args: args)
+            },
+            // While writing we have no preview of the new content here (it's
+            // on the wire's `args.content` but rendering the full new file
+            // would dominate the panel). Show the target path only.
+            callingBody: { args in fileToolPath(args) },
+            // Result already says "Created/Overwrote <path> (N bytes)" so we
+            // surface it as-is — adding a path header would be redundant.
+            resultBody: { _, output, _ in output },
+            icon: "square.and.pencil"
+        )
+    }
+
+    private static func updatePresenter() -> ToolUIPresenter {
+        ToolUIPresenter(
+            label: { args, isCalling in
+                fileToolLabel(verb: isCalling ? "updating" : "updated", args: args)
+            },
+            // Show the substring being replaced while the call is running.
+            // The `old → new` block tracks the user's mental model of "edit
+            // this into that" without us having to reconstruct a diff.
+            callingBody: { args in
+                guard case let .object(obj) = args,
+                      case let .string(oldText) = obj["old_text"],
+                      case let .string(newText) = obj["new_text"]
+                else { return fileToolPath(args) }
+                let path = fileToolPath(args) ?? ""
+                let header = path.isEmpty ? "" : "\(path)\n\n"
+                return "\(header)- \(oldText)\n+ \(newText)"
+            },
+            // Result text already names the file and the byte delta. If the
+            // call errored, the wire's outputText is the ToolUserError
+            // message — which mentions the file too. Either way, show
+            // verbatim.
+            resultBody: { _, output, _ in output },
+            icon: "pencil.and.outline"
+        )
+    }
+
     private static func fallback(toolName: String) -> ToolUIPresenter {
         ToolUIPresenter(
-            label: { _ in toolName },
+            // Unknown tools fall back to the generic `using/used` framing —
+            // we have no idea what verb fits.
+            label: { _, isCalling in "\(isCalling ? "using" : "used") \(toolName)" },
             // Unknown tool: don't try to guess which arg key carries the
             // user-facing payload. The view will show a generic "running…"
             // until the result arrives.
@@ -149,4 +224,32 @@ public enum ToolUIRegistry {
             icon: "wrench.and.screwdriver"
         )
     }
+}
+
+// MARK: - File-tool helpers
+//
+// These live outside the `@MainActor`-isolated `ToolUIRegistry` enum so the
+// presenter closures (which are `@Sendable` and therefore must be callable
+// from any isolation domain) can invoke them synchronously. They are pure
+// functions over `JSONValue` — no shared state to protect — so dropping the
+// actor isolation is safe.
+
+/// Extract `args.path` for the file tools. Mirrors the JSON shape declared
+/// in `agent/tools/{read,write,update}.ts`. Returns `nil` if the wire ever
+/// drifts so callers can fall back gracefully rather than rendering a
+/// malformed JSON dump.
+private func fileToolPath(_ args: JSONValue) -> String? {
+    guard case let .object(obj) = args,
+          case let .string(path) = obj["path"]
+    else { return nil }
+    return path
+}
+
+/// Row header label for file tools: `<verb> <basename>`. The basename keeps
+/// the closed bar tight while still telling the user which file is in play.
+/// The expanded body still carries the full path.
+private func fileToolLabel(verb: String, args: JSONValue) -> String {
+    guard let path = fileToolPath(args), !path.isEmpty else { return verb }
+    let base = (path as NSString).lastPathComponent
+    return base.isEmpty ? verb : "\(verb) \(base)"
 }

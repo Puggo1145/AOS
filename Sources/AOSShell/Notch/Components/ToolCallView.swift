@@ -38,11 +38,11 @@ struct ToolCallView: View {
     private var isCalling: Bool { record.status == .calling }
 
     private var headerLabel: String {
-        // The verb flip is the user's primary signal that the call has
-        // resolved — keep it before the tool name so it reads naturally
-        // ("using bash" / "used bash") at a glance.
-        let verb = isCalling ? "using" : "used"
-        return "\(verb) \(presenter.label(record.args))"
+        // The presenter owns its own grammar: file tools render in the
+        // active/past form of their verb (`reading hosts` / `read hosts`),
+        // bash falls back to the generic `using bash` / `used bash`. The
+        // view just renders what the presenter returns.
+        presenter.label(record.args, isCalling)
     }
 
     /// What the expanded slot shows. While calling we prefer the
