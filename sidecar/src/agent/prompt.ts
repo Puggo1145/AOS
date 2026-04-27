@@ -10,7 +10,7 @@
 // that interprets the payload structure by `kind`.
 
 import type { CitedContext, BehaviorEnvelope } from "../rpc/rpc-types";
-import type { UserMessage } from "../llm/types";
+import type { ImageContent, UserContent, UserMessage } from "../llm/types";
 
 /// Build the LLM `UserMessage` for a turn. If `citedContext` carries any
 /// non-empty field, prepend an `<os-context>...</os-context>` block before the
@@ -20,6 +20,13 @@ import type { UserMessage } from "../llm/types";
 /// Shape rule: an empty CitedContext (every field undefined) yields a message
 /// with the bare prompt — no tags, no whitespace, byte-for-byte the previous
 /// behavior. This keeps the trivial case (no Sense data yet) clean.
+///
+/// Visual frames: when `citedContext.visual.frame` is present, the actual
+/// image bytes ride alongside the text as an `ImageContent` block so the
+/// agent can *see* the user's window. For non-vision models the provider's
+/// `transformMessages` swaps the image for a placeholder text block — the
+/// catalog's `model.input` is the single source of truth, so this builder
+/// does not branch on capability itself.
 export function buildUserMessage(input: {
   prompt: string;
   citedContext: CitedContext;
@@ -32,12 +39,30 @@ export function buildUserMessage(input: {
   // exact position the user placed it. The position carries intent:
   // "summarize <paste1> using <paste2>" and the swap read differently.
   const expandedPrompt = expandClipboardMarkers(input.prompt, input.citedContext.clipboards ?? []);
-  const content = block.length > 0 ? `${block}\n\n${expandedPrompt}` : expandedPrompt;
+  const text = block.length > 0 ? `${block}\n\n${expandedPrompt}` : expandedPrompt;
+  const image = imageFromVisual(input.citedContext.visual);
+  if (image) {
+    const content: UserContent[] = [{ type: "text", text }, image];
+    return {
+      role: "user",
+      content,
+      timestamp: input.startedAt,
+    };
+  }
   return {
     role: "user",
-    content,
+    content: text,
     timestamp: input.startedAt,
   };
+}
+
+/// Translate a `CitedVisual` into a wire `ImageContent` block. Returns
+/// `null` when no frame is attached (the screenshot toggle was off, or
+/// capture failed). Frame bytes ride to the LLM verbatim; the provider
+/// layer adds the data URL framing.
+function imageFromVisual(visual: CitedContext["visual"]): ImageContent | null {
+  if (!visual || !visual.frame) return null;
+  return { type: "image", data: visual.frame, mimeType: "image/png" };
 }
 
 /// Substitute every `[[clipboard:N]]` marker in `prompt` with an inline
@@ -79,13 +104,13 @@ export function formatCitedContext(ctx: CitedContext): string {
       lines.push(...formatBehavior(b));
     }
   }
-  if (ctx.visual) {
-    // Frame bytes are intentionally NOT included — the LLM call this round
-    // is text-only. The presence + capturedAt + size is still useful signal.
-    lines.push(
-      `Visual: ${ctx.visual.frameSize.width}x${ctx.visual.frameSize.height} captured ${ctx.visual.capturedAt}`,
-    );
-  }
+  // Visual frames are NOT projected as text. When present, `buildUserMessage`
+  // attaches the actual bytes as an `ImageContent` block; redundantly
+  // describing size/capturedAt in <os-context> would just pollute the
+  // vision model's prompt with metadata it can already infer from the image.
+  // For non-vision targets, the provider's `transformMessages` swaps the
+  // image for an explicit `[image omitted: ...]` placeholder — that path
+  // already self-narrates, no extra metadata line needed here.
 
   if (lines.length === 0) return "";
   return ["<os-context>", ...lines, "</os-context>"].join("\n");

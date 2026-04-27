@@ -37,12 +37,17 @@ public struct ConfigModelEntry: Codable, Sendable, Equatable, Identifiable {
     /// Default effort `value` for this model. `nil` for non-reasoning
     /// models. Used when the user has not picked or has stale config.
     public let defaultEffort: String?
+    /// `true` when the model accepts image input. Drives the app-context
+    /// chip's screenshot toggle: vision-capable models render an eye
+    /// affordance, text-only models render `eye.slash` and ignore taps.
+    public let supportsVision: Bool
 
-    public init(id: String, name: String, supportedEfforts: [ConfigEffort], defaultEffort: String?) {
+    public init(id: String, name: String, supportedEfforts: [ConfigEffort], defaultEffort: String?, supportsVision: Bool) {
         self.id = id
         self.name = name
         self.supportedEfforts = supportedEfforts
         self.defaultEffort = defaultEffort
+        self.supportsVision = supportsVision
     }
 
     /// Convenience: the model has any reasoning capability at all.

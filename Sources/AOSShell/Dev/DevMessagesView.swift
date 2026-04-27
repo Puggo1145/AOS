@@ -1,5 +1,6 @@
 import SwiftUI
 import Foundation
+import AppKit
 
 // MARK: - DevMessagesView
 //
@@ -174,7 +175,8 @@ private struct ParsedMessage: Identifiable {
                     return [.toolCall(name: name, arguments: prettyJSON(argsAny))]
                 case "image":
                     let mime = part["mimeType"] as? String ?? "image"
-                    return [.image(mime: mime)]
+                    let data = part["data"] as? String ?? ""
+                    return [.image(mime: mime, base64: data)]
                 default:
                     return [.unknown(jsonString(part))]
                 }
@@ -229,7 +231,7 @@ private enum ParsedPart {
     case osContext(String)
     case thinking(String, redacted: Bool)
     case toolCall(name: String, arguments: String)
-    case image(mime: String)
+    case image(mime: String, base64: String)
     case unknown(String)
 }
 
@@ -316,10 +318,8 @@ private struct MessageCard: View {
                             .fill(Color.secondary.opacity(0.10))
                     )
             }
-        case .image(let mime):
-            Text("[image: \(mime)]")
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.secondary)
+        case .image(let mime, let base64):
+            ImagePartView(mime: mime, base64: base64)
         case .unknown(let raw):
             Text(raw)
                 .font(.system(size: 11, design: .monospaced))
@@ -375,5 +375,186 @@ private struct CollapsibleBlock: View {
                     )
             }
         }
+    }
+}
+
+// MARK: - Image part renderer
+//
+// The wire-side `ImageContent` block is what the LLM actually sees on
+// vision turns; rendering it as `[image: image/png]` defeats the point of
+// Dev Mode (no way to confirm the agent is looking at the right window).
+// We decode the base64 once into an `NSImage`, render a clamped thumbnail,
+// and present a full-size viewer on click. Decode failure surfaces as a
+// labeled placeholder rather than a crash — wire bugs should be visible.
+
+private struct ImagePartView: View {
+    let mime: String
+    private let decoded: NSImage?
+    private let base64Length: Int
+
+    init(mime: String, base64: String) {
+        self.mime = mime
+        self.base64Length = base64.count
+        // Decode at struct construction so repeated body evaluations on the
+        // same View instance don't re-run base64 + NSImage(data:). The struct
+        // is still rebuilt when the parent invalidates — that's SwiftUI's
+        // normal cost, not something to fight.
+        if let data = Data(base64Encoded: base64, options: .ignoreUnknownCharacters),
+           let image = NSImage(data: data) {
+            self.decoded = image
+        } else {
+            self.decoded = nil
+        }
+    }
+
+    /// Cap the inline thumbnail at this height. Big enough to recognize a
+    /// window snapshot, small enough to keep the message card scannable.
+    private static let thumbnailMaxHeight: CGFloat = 160
+
+    var body: some View {
+        if let image = decoded {
+            VStack(alignment: .leading, spacing: 4) {
+                Button {
+                    ImageViewerWindowController.present(image: image, mime: mime)
+                } label: {
+                    Image(nsImage: image)
+                        .resizable()
+                        .interpolation(.medium)
+                        .scaledToFit()
+                        .frame(maxHeight: Self.thumbnailMaxHeight)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill(Color.black.opacity(0.4))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Click to open full-size viewer (pinch / ⌘+ to zoom)")
+                .accessibilityLabel(Text("Image attached to message; click to open full-size viewer"))
+
+                Text("\(mime) · \(Int(image.size.width))×\(Int(image.size.height)) · click to enlarge")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+        } else {
+            // Decode failure is louder than silent — the wire claimed an
+            // image was there, so a developer should see something is off.
+            Text("[image: \(mime) — failed to decode \(base64Length) base64 chars]")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.red)
+        }
+    }
+}
+
+// MARK: - Full-size image viewer (separate NSWindow)
+//
+// SwiftUI `.sheet` is sized by the parent window and ignores idealWidth/
+// idealHeight on macOS, which left the previous viewer stuck at a tiny
+// square with no way to fit a 1280×800 frame. A standalone NSWindow
+// hosting an NSScrollView with `allowsMagnification = true` gives the
+// developer a real inspector: resizable, pinch / ⌘+/⌘-/⌘0 zoom, scroll
+// to pan. Each click spawns a new viewer (Dev Mode is for comparing
+// turns side-by-side, not single-document editing).
+
+@MainActor
+private final class ImageViewerWindowController: NSWindowController, NSWindowDelegate {
+
+    /// Strong-retains live viewers — without this the controller would be
+    /// deallocated as soon as the SwiftUI button action returns and the
+    /// window would close. Cleared on `windowWillClose`.
+    private static var liveControllers: Set<ImageViewerWindowController> = []
+
+    static func present(image: NSImage, mime: String) {
+        let controller = ImageViewerWindowController(image: image, mime: mime)
+        liveControllers.insert(controller)
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
+    }
+
+    private init(image: NSImage, mime: String) {
+        // Initial window size: fit the image but cap to 90% of the visible
+        // screen so a 4K capture doesn't open off-screen. The user can
+        // resize freely afterwards; the scroll view handles overflow with
+        // pan + magnification.
+        let screen = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
+        let maxW = screen.width * 0.9
+        let maxH = screen.height * 0.9
+        let imageW = max(image.size.width, 1)
+        let imageH = max(image.size.height, 1)
+        let aspect = imageH / imageW
+        var w = min(imageW, maxW)
+        var h = w * aspect
+        if h > maxH {
+            h = maxH
+            w = h / max(aspect, 0.0001)
+        }
+        // Reserve a bit of vertical space for the title bar; AppKit takes
+        // care of titlebar geometry but we don't want the document area
+        // to start cramped.
+        let contentRect = NSRect(x: 0, y: 0, width: w, height: h)
+        let window = NSWindow(
+            contentRect: contentRect,
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Image · \(mime) · \(Int(imageW))×\(Int(imageH))"
+        window.isReleasedWhenClosed = false
+        window.center()
+
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = true
+        scrollView.autohidesScrollers = false
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = true
+        scrollView.backgroundColor = NSColor.black.withAlphaComponent(0.85)
+        // Magnification: 0.05× lets the user shrink-fit huge frames; 16×
+        // is enough to inspect individual pixels for AX / OCR debugging.
+        // ⌘+ / ⌘- / ⌘0 are bound automatically by NSScrollView when
+        // magnification is enabled.
+        scrollView.allowsMagnification = true
+        scrollView.minMagnification = 0.05
+        scrollView.maxMagnification = 16.0
+
+        // Initial magnification: fit-to-window. The user can pinch /
+        // ⌘+ from there; ⌘0 returns to fit.
+        let fit = min(w / imageW, h / imageH)
+        scrollView.magnification = fit > 0 ? fit : 1.0
+
+        let imageView = NSImageView(frame: NSRect(origin: .zero, size: NSSize(width: imageW, height: imageH)))
+        imageView.image = image
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        // Sharper pixel rendering when zoomed past 100% — matters for
+        // checking small UI text inside a captured frame.
+        imageView.imageAlignment = .alignCenter
+        imageView.wantsLayer = true
+        imageView.layer?.magnificationFilter = .nearest
+
+        scrollView.documentView = imageView
+
+        window.contentView = scrollView
+        super.init(window: nil)
+        self.window = window
+        window.delegate = self
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("ImageViewerWindowController is constructed in code only")
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        // Drop the strong reference so the controller (and its image)
+        // can be released. Multiple viewers coexist; only the closing
+        // one leaves the set.
+        ImageViewerWindowController.liveControllers.remove(self)
     }
 }

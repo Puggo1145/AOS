@@ -25,9 +25,32 @@ import AOSOSSenseKit
 // Behavior chips remain individually selectable; deselected keys flow up
 // to `ComposerCard` and are filtered out at projection time.
 
+/// Per-bundle "attach screenshot" affordance state. Encodes the three
+/// gates (model vision capability, OS screen-recording permission, and
+/// the user's per-app pick) as a closed set so the view body renders one
+/// state instead of composing three booleans inline. Callers derive this
+/// at the parent boundary; ContextChipsView itself does not see the LLM
+/// model — it only sees "is the toggle usable, and if not, why not".
+enum ScreenshotToggleState: Equatable {
+    /// The active model has no vision input — capture is pointless. Chip
+    /// renders `eye.slash` and refuses taps. This is the user-facing
+    /// signal mirroring the catalog projection; the actual downgrade is
+    /// the sidecar's authority.
+    case unsupportedByModel
+    /// Vision-capable model, but ScreenCaptureKit is unauthorized — chip
+    /// stays visible but dim, taps are no-ops until permission lands.
+    case needsScreenRecordingPermission
+    /// Toggle is operable; `on` is the per-bundle "always capture" pick.
+    case operable(on: Bool)
+}
+
 struct ContextChipsView: View {
     let senseStore: SenseStore
     let policyStore: VisualCapturePolicyStore
+    /// Derived screenshot-toggle state for the current (model, permission,
+    /// per-app pick) tuple. Computed at the parent (`ComposerCard`) so
+    /// this view stays free of LLM concepts.
+    let screenshotToggle: ScreenshotToggleState
     @Binding var deselectedBehaviorKeys: Set<String>
 
     var body: some View {
@@ -83,30 +106,61 @@ struct ContextChipsView: View {
 
     @ViewBuilder
     private func captureToggleButton(bundleId: String) -> some View {
-        let on = policyStore.isAlwaysCapture(bundleId: bundleId)
-        let available = senseStore.visualSnapshotAvailable
         Button {
-            // Toggle is a no-op when screen-recording isn't granted —
-            // there'd be nothing to capture. Keep the button visible but
-            // dimmed so the user discovers it; tapping does nothing
-            // until permission is granted.
-            guard available else { return }
-            _ = policyStore.toggle(bundleId: bundleId)
+            // Only the operable state mutates store; other states are
+            // visible but inert so the user can discover the affordance
+            // and the tooltip explains why it's currently disabled.
+            if case .operable = screenshotToggle {
+                _ = policyStore.toggle(bundleId: bundleId)
+            }
         } label: {
-            Image(systemName: on ? "eye.fill" : "eye")
+            Image(systemName: screenshotToggleIcon)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white.opacity(on ? 0.95 : (available ? 0.55 : 0.25)))
+                .foregroundStyle(.white.opacity(screenshotToggleOpacity))
                 .frame(width: 22, height: 22)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(on
-            ? "Always attach a window snapshot when sending from \(bundleId)"
-            : (available
-                ? "Attach a window snapshot to every send from this app"
-                : "Screen recording permission required"))
+        .help(screenshotToggleHelp(bundleId: bundleId))
         .accessibilityLabel(Text("Always capture screenshot for this app"))
-        .accessibilityValue(Text(on ? "on" : "off"))
+        .accessibilityValue(Text(screenshotToggleAccessibilityValue))
+    }
+
+    private var screenshotToggleIcon: String {
+        switch screenshotToggle {
+        case .unsupportedByModel: return "eye.slash"
+        case .needsScreenRecordingPermission: return "eye"
+        case .operable(let on): return on ? "eye.fill" : "eye"
+        }
+    }
+
+    private var screenshotToggleOpacity: Double {
+        switch screenshotToggle {
+        case .unsupportedByModel: return 0.35
+        case .needsScreenRecordingPermission: return 0.25
+        case .operable(let on): return on ? 0.95 : 0.55
+        }
+    }
+
+    private func screenshotToggleHelp(bundleId: String) -> String {
+        switch screenshotToggle {
+        case .unsupportedByModel:
+            return "The selected model can't read images — switch to a vision-capable model to attach screenshots"
+        case .needsScreenRecordingPermission:
+            return "Screen recording permission required"
+        case .operable(let on):
+            return on
+                ? "Always attach a window snapshot when sending from \(bundleId)"
+                : "Attach a window snapshot to every send from this app"
+        }
+    }
+
+    private var screenshotToggleAccessibilityValue: String {
+        switch screenshotToggle {
+        case .unsupportedByModel: return "unavailable for current model"
+        case .needsScreenRecordingPermission: return "screen recording permission required"
+        case .operable(let on): return on ? "on" : "off"
+        }
     }
 
     // MARK: - Behavior chip

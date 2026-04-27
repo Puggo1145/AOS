@@ -23,6 +23,7 @@ import {
   type KnownProvider,
 } from "../llm/models/catalog";
 import { defaultEffort, supportedEfforts, supportsEffort, supportsThinking } from "../llm/models/effort";
+import { supportsVision } from "../llm/models/capabilities";
 import type { Api, Model } from "../llm/types";
 import { readUserConfig, writeUserConfig, MalformedConfigError } from "./storage";
 
@@ -42,6 +43,7 @@ function buildProviderCatalog(): ConfigProviderEntry[] {
         name: m.name,
         supportedEfforts: supportedEfforts(m).map((e) => ({ value: e.value, label: e.label })),
         defaultEffort: defaultEffort(m),
+        supportsVision: supportsVision(m),
       })),
     };
   });

@@ -127,6 +127,40 @@ test("buildUserMessage escapes the image type attribute", () => {
   expect(content).toContain('type="evil&quot;&amp;&lt;&gt;"');
 });
 
+test("buildUserMessage attaches the visual frame as an ImageContent block", () => {
+  // Regression: the prior implementation only flattened size + capturedAt
+  // into the text body, so vision-capable models never actually saw the
+  // user's window. The image bytes must ride alongside the text as a
+  // first-class content block; the provider's vision downgrade handles
+  // the text-only fallback.
+  const frame = "ZmFrZS1wbmctYnl0ZXM="; // "fake-png-bytes" base64
+  const msg = buildUserMessage({
+    prompt: "what's on screen?",
+    citedContext: {
+      visual: {
+        frame,
+        frameSize: { width: 1280, height: 800 },
+        capturedAt: "2026-04-26T00:00:00Z",
+      },
+    },
+    startedAt: 1,
+  });
+  expect(msg.role).toBe("user");
+  expect(Array.isArray(msg.content)).toBe(true);
+  const blocks = msg.content as Array<{ type: string }>;
+  expect(blocks).toHaveLength(2);
+  expect(blocks[0]!.type).toBe("text");
+  expect((blocks[0] as { type: "text"; text: string }).text).toContain("what's on screen?");
+  // Size/capturedAt metadata is NOT projected as text — the image
+  // carries it. Asserting absence guards against regressions that
+  // re-introduce redundant prompt pollution for vision models.
+  expect((blocks[0] as { type: "text"; text: string }).text).not.toContain("Visual:");
+  const image = blocks[1] as { type: "image"; data: string; mimeType: string };
+  expect(image.type).toBe("image");
+  expect(image.data).toBe(frame);
+  expect(image.mimeType).toBe("image/png");
+});
+
 test("buildUserMessage leaves out-of-range markers literal so contract drift is visible", () => {
   // If Shell ever ships a marker without a backing entry, surfacing the
   // raw token is louder feedback than silently dropping it.

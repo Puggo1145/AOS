@@ -452,6 +452,11 @@ export interface ConfigModelEntry {
   /// (yet) picked, and falls back to it when the saved global pick is
   /// not in `supportedEfforts`.
   defaultEffort: string | null;
+  /// `true` when the model accepts image input (catalog `input` includes
+  /// `"image"`). The Shell uses this to decide whether the per-app
+  /// "attach screenshot" toggle is offered, or shown as disabled with an
+  /// `eye.slash` glyph indicating the active model is text-only.
+  supportsVision: boolean;
 }
 
 export interface ConfigProviderEntry {

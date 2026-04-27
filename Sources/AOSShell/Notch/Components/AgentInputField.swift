@@ -56,6 +56,7 @@ struct ComposerCard: View {
             ContextChipsView(
                 senseStore: senseStore,
                 policyStore: policyStore,
+                screenshotToggle: screenshotToggleState,
                 deselectedBehaviorKeys: $deselectedBehaviorKeys
             )
             inputRow
@@ -214,6 +215,28 @@ struct ComposerCard: View {
         return configService.provider(id: sel.providerId)
     }
 
+    /// Derived screenshot-toggle state for the chip row. Resolves the
+    /// three gates (model vision capability, OS screen-recording
+    /// permission, per-bundle pick) into a single closed enum so
+    /// ContextChipsView doesn't have to know about LLM models. Order
+    /// matters: model capability is the outermost gate (no point asking
+    /// for permission for bytes the agent can't read), then permission,
+    /// then the user's per-app pick.
+    private var screenshotToggleState: ScreenshotToggleState {
+        guard currentModel?.supportsVision == true else { return .unsupportedByModel }
+        guard senseStore.visualSnapshotAvailable else { return .needsScreenRecordingPermission }
+        let on = senseStore.context.app.map { policyStore.isAlwaysCapture(bundleId: $0.bundleId) } ?? false
+        return .operable(on: on)
+    }
+
+    /// `true` iff the current submit should attach a freshly captured
+    /// frame. Mirrors `screenshotToggleState` so the UI's `eye.fill`
+    /// glyph and the actual wire payload can never disagree.
+    private var shouldAttachCapturedFrame: Bool {
+        if case .operable(let on) = screenshotToggleState { return on }
+        return false
+    }
+
     private func submit() {
         // Re-check the same gate the send button uses. Return is also a
         // submit path, and `snapshot.prompt` includes `[[clipboard:N]]`
@@ -227,9 +250,21 @@ struct ComposerCard: View {
         // Per-app capture policy decides whether to pull a snapshot.
         // No more per-turn visual chip — the toggle next to the app chip
         // is the single source of truth.
-        let bundleId = senseStore.context.app?.bundleId
-        let shouldCaptureVisual = bundleId.map { policyStore.isAlwaysCapture(bundleId: $0) } ?? false
-            && senseStore.visualSnapshotAvailable
+        // Capture-cost optimization based on the catalog's `supportsVision`
+        // flag projected via `config.get`. This is a *prediction*, not a
+        // protocol contract — the sidecar's `transformMessages` is the
+        // authoritative vision-downgrade path and remains correct even if
+        // this gate goes stale. The reason we still pay for the prediction:
+        // the capture itself is not free (ScreenCaptureKit syscall + PNG
+        // encode + 400KB payload guard), and the bytes would just be
+        // swapped for a `[image omitted]` placeholder downstream. If
+        // sidecar ever introduces image→OCR fallback or similar, this
+        // line goes silently stale; the chip's `eye.slash` glyph stays
+        // correct via the same projection, which is the user-facing signal.
+        // Routing both the chip and this decision through
+        // `screenshotToggleState` keeps them lockstep — the UI can never
+        // promise an attachment that the wire then drops.
+        let shouldCaptureVisual = shouldAttachCapturedFrame
 
         let snapshotCtx = senseStore.context
         let promptForTurn = snapshot.prompt
