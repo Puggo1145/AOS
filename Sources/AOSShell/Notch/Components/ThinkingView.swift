@@ -128,7 +128,15 @@ struct ThinkingView: View {
                 if reduceMotion {
                     expanded.toggle()
                 } else {
-                    withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+                    // Match the notch silhouette's height animation
+                    // (`.smooth(0.32)` in NotchView) so the inner frame
+                    // reveal eases in lockstep with the outer container
+                    // growing/shrinking. Mismatched curves/durations cause
+                    // a visible discontinuity between the notch height and
+                    // the thinking content frame.
+                    withAnimation(.smooth(duration: 0.32, extraBounce: 0)) {
+                        expanded.toggle()
+                    }
                 }
             } label: {
                 HStack(spacing: 4) {
@@ -139,7 +147,7 @@ struct ThinkingView: View {
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.55))
                         .rotationEffect(.degrees(expanded ? 90 : 0))
-                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: expanded)
+                        .animation(reduceMotion ? nil : .smooth(duration: 0.32, extraBounce: 0), value: expanded)
                 }
             }
             .buttonStyle(.plain)

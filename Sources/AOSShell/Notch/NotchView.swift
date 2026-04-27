@@ -20,6 +20,13 @@ import SwiftUI
 struct NotchView: View {
     let viewModel: NotchViewModel
 
+    /// Reduce Motion gates the silhouette's height/tray easing so users who
+    /// opted out of decorative animation get instant resizes instead of a
+    /// 0.32s smooth interpolation. ThinkingView and the other motion-aware
+    /// components honour the same setting; gating here keeps the outer
+    /// container in lockstep with the inner content.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         ZStack(alignment: .top) {
             // Layer 1: silhouette. Single Path-based Shape covering the
@@ -97,16 +104,20 @@ struct NotchView: View {
         .animation(viewModel.animation, value: viewModel.status)
         // Height changes as the agent loop activates / completes. Drive the
         // silhouette + content frame interpolation off the size value so the
-        // bottom edge eases down (or back up) instead of snapping.
-        .animation(.smooth(duration: 0.32, extraBounce: 0),
+        // bottom edge eases down (or back up) instead of snapping. Gated on
+        // Reduce Motion so users who opted out of decorative motion get an
+        // instant resize instead of a 0.32s ease — and the inner ThinkingView
+        // (which also honours the setting) stays in lockstep with the outer
+        // silhouette.
+        .animation(reduceMotion ? nil : .smooth(duration: 0.32, extraBounce: 0),
                    value: viewModel.notchOpenedSize.height)
         // Tray drawer slides in/out smoothly when notices appear / are
         // dismissed. Driving on `trayHeight` (a derived CGFloat) keeps the
         // background-silhouette growth and the content fade on the same
         // timeline.
-        .animation(.smooth(duration: 0.28),
+        .animation(reduceMotion ? nil : .smooth(duration: 0.28),
                    value: trayHeight)
-        .animation(.smooth(duration: 0.28),
+        .animation(reduceMotion ? nil : .smooth(duration: 0.28),
                    value: viewModel.trayExpanded)
     }
 

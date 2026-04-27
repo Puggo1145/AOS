@@ -48,6 +48,21 @@ struct OpenedPanelView: View {
     /// existing `.smooth` height animation that lets the panel ease open).
     @State private var lastObservedTurnCount: Int = 0
 
+    /// Last visible-reply length seen on the most recent turn. Combined
+    /// with `lastObservedTurnCount` this is the explicit "we just received
+    /// a visible-output token" signal: when both the turn count is
+    /// unchanged AND the last turn's `reply.count` grew, we know the
+    /// height bump is coming from streamed reply text — so we suppress
+    /// the panel's height animation to keep the bottom-anchored ScrollView
+    /// from bouncing. Other intra-turn height changes (thinking expand/
+    /// collapse, error banners appearing, status emoji swaps) leave the
+    /// reply length unchanged and flow through the notch's normal
+    /// `.smooth` animation. This is more reliable than a height-delta
+    /// heuristic — provider chunks aren't guaranteed to be one wrapped
+    /// line, so any geometric threshold misclassifies large batched
+    /// chunks as UI transitions.
+    @State private var lastObservedReplyLength: Int = 0
+
     /// Top safe area equal to the physical notch height. The opened panel
     /// extends to the very top of the screen, so any content inside the
     /// `0..<deviceNotchRect.height` band sits behind the hardware cutout.
@@ -346,13 +361,38 @@ struct OpenedPanelView: View {
             // back down as the viewport finishes growing — the "上顶/回弹".
             //
             // Suppress the height animation only on the streaming path
-            // (turn count unchanged) so panel + viewport grow in the same
-            // frame as the content. New-turn insertion changes the count,
-            // so its preference update flows through with the normal
-            // `.smooth` height animation intact and the panel still eases
-            // open to make room.
+            // (turn count unchanged + reply length grew) so panel +
+            // viewport grow in the same frame as the content. New-turn
+            // insertion changes the count, so its preference update flows
+            // through with the normal `.smooth` height animation intact
+            // and the panel still eases open to make room.
+            //
+            // Other intra-turn height changes (the user expands/collapses
+            // a settled thinking trace, an error banner appears, the
+            // status emoji swaps) must NOT take the suppression path:
+            // SwiftUI propagates the *final* layout size through
+            // preferences immediately, so disabling the animation would
+            // snap the notch height to the new max while the inner
+            // `.frame(height:)` is still easing — producing a visible
+            // jump followed by a delayed inner reveal. Letting the change
+            // flow through the notch's `.smooth(0.32)` animation keeps
+            // the silhouette and the inner frame in lockstep (we match
+            // curves in `ThinkingView`).
+            //
+            // The discriminator is whether the last turn's `reply.count`
+            // actually grew on this tick — that's the explicit signal
+            // for "a visible-output token just arrived". Status going
+            // through `.thinking` is too coarse (it covers reasoning-only
+            // phases where no visible token has streamed yet, and where
+            // ThinkingView's own settled transitions need normal
+            // animation), and a height-delta heuristic misclassifies
+            // batched provider chunks (markdown blocks, tables, fenced
+            // code) as UI transitions.
             let count = agentService.turns.count
-            if count == lastObservedTurnCount {
+            let currentReplyLength = agentService.turns.last?.reply.count ?? 0
+            let isStreamingReply = count == lastObservedTurnCount
+                && currentReplyLength > lastObservedReplyLength
+            if isStreamingReply {
                 var txn = Transaction()
                 txn.disablesAnimations = true
                 withTransaction(txn) {
@@ -362,6 +402,7 @@ struct OpenedPanelView: View {
                 viewModel.historyContentHeight = h
                 lastObservedTurnCount = count
             }
+            lastObservedReplyLength = currentReplyLength
         }
     }
 
