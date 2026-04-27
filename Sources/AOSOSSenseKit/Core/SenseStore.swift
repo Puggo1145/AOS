@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import os
 
 // MARK: - SenseStore
 //
@@ -57,12 +58,26 @@ public final class SenseStore {
 
     /// Adapters currently attached to the frontmost app, keyed by AdapterID.
     private var attachedAdapters: [AdapterID: any SenseAdapter] = [:]
+    /// Attach order for the currently-attached adapters. Drives merge
+    /// order in `mergeBehaviors` so the chip row stays stable across app
+    /// switches. Pinned to `AdapterRegistry`'s registration order via
+    /// `adapters(matching:)`. (Design §"事件源与字段映射": "general first,
+    /// then adapters in registration order".)
+    private var attachedAdapterOrder: [AdapterID] = []
     /// Consumer tasks for each attached adapter's AsyncStream. Cancel +
     /// await on detach.
     private var adapterTasks: [AdapterID: Task<Void, Never>] = [:]
     /// Single in-flight adapter swap task. New swaps await the previous one
     /// before running so detach/attach pairs never interleave.
     private var pendingSwap: Task<Void, Never>?
+
+    /// Diagnostic counter: incremented each time `attach()` failed to
+    /// return within the 500ms contract window. The timeout is informational
+    /// — Swift cancellation is cooperative and we don't try to forcibly
+    /// kill the underlying task. See `withAttachTimeout` for the rationale.
+    private(set) var attachTimeoutCount: Int = 0
+
+    private static let log = Logger(subsystem: "com.aos.AOSOSSenseKit", category: "SenseStore")
 
     public init(permissionsService: PermissionsService, registry: AdapterRegistry) {
         self.permissionsService = permissionsService
@@ -188,6 +203,15 @@ public final class SenseStore {
             behaviorsBySource.removeValue(forKey: source)
         } else {
             behaviorsBySource[source] = envelopes
+            // Pin the source's merge slot on first non-empty write so the
+            // chip row order is stable. Idempotent for adapters that
+            // `attachAdaptersForCurrentApp` already pre-registered in
+            // registration order; for direct producers and the test seam
+            // (which bypass the attach pipeline) this is the only place
+            // ordering is established, so first-emit becomes the slot.
+            if source != "general" && !attachedAdapterOrder.contains(source) {
+                attachedAdapterOrder.append(source)
+            }
         }
         applyBehaviorsRecompute()
     }
@@ -207,10 +231,14 @@ public final class SenseStore {
         if let general = behaviorsBySource["general"] {
             out.append(contentsOf: general)
         }
-        // Adapters in iteration order. Stable enough for now; Stage 2 can
-        // pin a registration-order array on AdapterRegistry if needed.
-        for (key, value) in behaviorsBySource where key != "general" {
-            out.append(contentsOf: value)
+        // Adapters in attach order — pinned to registry registration order
+        // by `attachAdaptersForCurrentApp`. Iterating Dictionary directly
+        // would surface adapter chips in an unstable order across app
+        // switches.
+        for id in attachedAdapterOrder {
+            if let envelopes = behaviorsBySource[id] {
+                out.append(contentsOf: envelopes)
+            }
         }
         return out
     }
@@ -242,6 +270,18 @@ public final class SenseStore {
         // resolved or degraded window as appropriate.
         if axNowGranted || axNowRevoked {
             windowMirror?.setAccessibilityGranted(!permissions.denied.contains(.accessibility))
+        }
+
+        // Re-run the adapter swap whenever the denied set actually
+        // changed. This closes the permission-isolation contract on the
+        // adapter side: an adapter whose `requiredPermissions` was just
+        // unblocked attaches on this tick; one whose required permission
+        // was just revoked detaches. Without this, an adapter declaring
+        // `requiredPermissions != []` would be skipped at startup and
+        // never re-attempt — `attachAdaptersForCurrentApp` is the only
+        // path that calls `attach()`.
+        if oldDenied != permissions.denied {
+            scheduleAdapterSwap()
         }
     }
 
@@ -291,6 +331,7 @@ public final class SenseStore {
         let tasks = adapterTasks
         attachedAdapters.removeAll()
         adapterTasks.removeAll()
+        attachedAdapterOrder.removeAll()
 
         // Drop each adapter's contribution from the merged behaviors view
         // immediately so the UI doesn't show stale chips.
@@ -328,20 +369,25 @@ public final class SenseStore {
         for adapter in candidates {
             let required = await adapter.requiredPermissions
             // Permission isolation: skip attach when any required permission
-            // is currently denied (design §"权限隔离"). The chip / adapter
-            // re-attaches automatically once permissions flip — the next
-            // applyPermissions tick re-runs swap.
+            // is currently denied (design §"权限隔离"). The store re-runs
+            // this swap from `applyPermissions` whenever the denied set
+            // changes, so denied→granted automatically triggers attach
+            // and granted→denied automatically triggers detach.
             guard required.isDisjoint(with: denied) else { continue }
             let id = type(of: adapter).id
-            // 500ms timeout + failure isolation (design §"SenseAdapter 协议":
-            // "失败让该 adapter 输出空 behavior 集合，不影响其他来源").
-            let stream = await Self.withAttachTimeout(
+            // 500ms diagnostic timeout. Per `SenseAdapter` doc, attach
+            // MUST return promptly; we log + count violations rather than
+            // trying to engineer around them. See `withAttachTimeout` for
+            // why we don't attempt a forced kill.
+            let result = await self.withAttachTimeout(
                 milliseconds: 500,
+                adapterId: id,
                 attach: { await adapter.attach(hub: hubRef, target: target) }
             )
-            guard let stream else { continue }
+            guard let stream = result else { continue }
 
             attachedAdapters[id] = adapter
+            attachedAdapterOrder.append(id)
             let consumer = Task { [weak self] in
                 for await envelopes in stream {
                     if Task.isCancelled { return }
@@ -353,15 +399,37 @@ public final class SenseStore {
         }
     }
 
-    /// Race the adapter's `attach` call against a sleep. If `attach` returns
-    /// first, that stream is the result; if the sleep wins, the adapter is
-    /// considered failed and we return nil (the adapter task that's still
-    /// running will be cancelled when the group tears down).
-    private static func withAttachTimeout(
+    /// Race the adapter's `attach` call against a 500ms sleep. **The
+    /// timeout is diagnostic, not an enforcement mechanism.** Swift task
+    /// cancellation is cooperative — if `attach` blocks on a synchronous
+    /// AX or Apple Event call (which doesn't honor cancellation), we
+    /// can't kill it; `cancelAll` only marks the task. The whole
+    /// `withTaskGroup` then waits for both child tasks to finish anyway,
+    /// because the group implicitly awaits all children before returning.
+    ///
+    /// What we DO get from the race:
+    ///   - **Cooperative case (the contract):** `attach` returns within
+    ///     a few ms; we get the stream and move on. Sleep loses, gets
+    ///     cancelled cooperatively, group closes immediately.
+    ///   - **Cancellation-aware-but-slow case:** `attach` is honoring
+    ///     cancellation but for some reason exceeded 500ms; sleep wins,
+    ///     `cancelAll` fires, the attach task observes cancellation and
+    ///     returns. We log + bump the counter; the swap chain continues.
+    ///   - **Contract-violating case:** `attach` is uncancellable
+    ///     (synchronous AX, ignored Task.isCancelled). The sleep finishes
+    ///     first, but `withTaskGroup` waits for the attach task anyway
+    ///     before returning. We still log + bump the counter so the
+    ///     violation is observable; but the swap chain blocks until the
+    ///     adapter finally returns. This is documented as an adapter bug
+    ///     — fixing it engineering-side would require leaking detached
+    ///     tasks, which is worse than a loud, observable stall.
+    private func withAttachTimeout(
         milliseconds: Int,
+        adapterId: AdapterID,
         attach: @escaping @Sendable () async -> AsyncStream<[BehaviorEnvelope]>
     ) async -> AsyncStream<[BehaviorEnvelope]>? {
-        await withTaskGroup(of: AsyncStream<[BehaviorEnvelope]>?.self) { group in
+        let start = ContinuousClock.now
+        let result = await withTaskGroup(of: AsyncStream<[BehaviorEnvelope]>?.self) { group -> AsyncStream<[BehaviorEnvelope]>? in
             group.addTask { await attach() }
             group.addTask {
                 try? await Task.sleep(nanoseconds: UInt64(milliseconds) * 1_000_000)
@@ -371,6 +439,28 @@ public final class SenseStore {
             group.cancelAll()
             return first
         }
+        let elapsed = ContinuousClock.now - start
+        if result == nil {
+            attachTimeoutCount += 1
+            Self.log.error(
+                """
+                SenseAdapter \(adapterId, privacy: .public) attach exceeded \
+                \(milliseconds, privacy: .public)ms (elapsed: \
+                \(elapsed.description, privacy: .public)). This is a \
+                contract violation — see SenseAdapter.attach docs.
+                """
+            )
+        } else if elapsed > .milliseconds(milliseconds / 2) {
+            // Half the budget — not a violation, but worth knowing about.
+            Self.log.notice(
+                """
+                SenseAdapter \(adapterId, privacy: .public) attach took \
+                \(elapsed.description, privacy: .public) (budget: \
+                \(milliseconds, privacy: .public)ms).
+                """
+            )
+        }
+        return result
     }
 
     // MARK: - Test seams (internal; reached via @testable import)
@@ -399,5 +489,19 @@ public final class SenseStore {
 
     internal var _attachedAdapterIdsForTesting: Set<AdapterID> {
         Set(attachedAdapters.keys)
+    }
+
+    /// Test-only: ordered view of attached adapters. Lets tests assert
+    /// the registration-order invariant directly, instead of inferring
+    /// it from `context.behaviors`.
+    internal var _attachedAdapterOrderForTesting: [AdapterID] {
+        attachedAdapterOrder
+    }
+
+    /// Test-only: how many times an adapter's `attach()` blew past the
+    /// 500ms diagnostic timeout. Lets tests prove the observability seam
+    /// without having to scrape OSLog.
+    internal var _attachTimeoutCountForTesting: Int {
+        attachTimeoutCount
     }
 }

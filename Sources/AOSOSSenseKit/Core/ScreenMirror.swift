@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import ScreenCaptureKit
 import CoreGraphics
+import os
 
 // MARK: - ScreenMirror
 //
@@ -26,6 +27,8 @@ import CoreGraphics
 @MainActor
 public final class ScreenMirror {
     public static let maxLongEdge: CGFloat = 1280
+
+    private static let log = Logger(subsystem: "com.aos.AOSOSSenseKit", category: "ScreenMirror")
 
     public init() {}
 
@@ -61,6 +64,18 @@ public final class ScreenMirror {
                 capturedAt: Date()
             )
         } catch {
+            // The product semantics are best-effort — visual is allowed
+            // to be absent (DRM, fullscreen game, window gone, SCK
+            // permission revoked mid-flight). We keep returning nil so
+            // the caller decides whether to fall back, but log the
+            // underlying error so a dropped frame is diagnosable.
+            // Privacy: pid is part of the error context, not user data.
+            Self.log.error(
+                """
+                captureNow(forPid: \(pid, privacy: .public)) failed: \
+                \(error.localizedDescription, privacy: .public)
+                """
+            )
             return nil
         }
     }
