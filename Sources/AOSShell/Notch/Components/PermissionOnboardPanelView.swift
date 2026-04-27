@@ -59,7 +59,7 @@ struct PermissionOnboardPanelView: View {
         .padding(.horizontal, 24)
         .padding(.bottom, 16)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .animation(.smooth(duration: 0.42, extraBounce: 0.05), value: current)
+        .animation(.smooth(duration: 0.42, extraBounce: 0), value: current)
         .task(id: current) {
             // Poll while the user is granting. macOS does not push TCC
             // changes back to the running process, so we re-probe on a

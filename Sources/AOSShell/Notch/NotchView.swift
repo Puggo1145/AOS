@@ -4,8 +4,8 @@ import SwiftUI
 //
 // Top-level SwiftUI tree mounted into the NotchWindow. The silhouette and
 // the inner content are bound to one morphing container so closed → opened
-// reads as a single jelly expansion: the shape grows, the content reveals
-// inside it (clipped), they share the same spring animation.
+// reads as a single smooth expansion: the shape grows, the content reveals
+// inside it (clipped), they share the same animation curve.
 //
 // Layers:
 //   1. NotchShape silhouette (the morphing black container with shoulders)
@@ -28,7 +28,7 @@ struct NotchView: View {
             // panelSize so the silhouette extends downward as one
             // geometry; no separate "Layer 0" extension rect, no
             // compositingGroup-based shoulder overlay. The whole shape
-            // animates as one Path under the same spring.
+            // animates as one Path under the same animation curve.
             NotchShape(
                 status: viewModel.status,
                 deviceNotchRect: viewModel.deviceNotchRect,
@@ -94,11 +94,11 @@ struct NotchView: View {
         .scaleEffect(viewModel.status == .popping ? 1.04 : 1.0, anchor: .top)
         .offset(x: notchHorizontalOffset)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .animation(statusAnimation, value: viewModel.status)
+        .animation(viewModel.animation, value: viewModel.status)
         // Height changes as the agent loop activates / completes. Drive the
         // silhouette + content frame interpolation off the size value so the
         // bottom edge eases down (or back up) instead of snapping.
-        .animation(.smooth(duration: 0.32, extraBounce: 0.05),
+        .animation(.smooth(duration: 0.32, extraBounce: 0),
                    value: viewModel.notchOpenedSize.height)
         // Tray drawer slides in/out smoothly when notices appear / are
         // dismissed. Driving on `trayHeight` (a derived CGFloat) keeps the
@@ -115,17 +115,6 @@ struct NotchView: View {
     /// 0) and the collapsed/expanded toggle.
     private var trayHeight: CGFloat {
         viewModel.status == .opened ? viewModel.notchTraySize.height : 0
-    }
-
-    /// Closing back to the device notch must not overshoot — a bouncy spring
-    /// briefly contracts past the physical notch silhouette and exposes the
-    /// real hardware cutout. Use a flat ease-out for `.closed`; keep the
-    /// jelly spring for opening / popping.
-    private var statusAnimation: Animation {
-        switch viewModel.status {
-        case .closed: return .smooth(duration: 0.38, extraBounce: 0)
-        case .opened, .popping: return viewModel.animation
-        }
     }
 
     @ViewBuilder

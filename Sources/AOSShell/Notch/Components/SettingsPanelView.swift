@@ -98,7 +98,7 @@ struct SettingsPanelView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .animation(.snappy(duration: 0.24, extraBounce: 0.04), value: page)
+        .animation(.smooth(duration: 0.24, extraBounce: 0), value: page)
         .onExitCommand {
             if page == .main { onClose() } else { page = .main }
         }

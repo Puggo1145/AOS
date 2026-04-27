@@ -250,11 +250,7 @@ public final class NotchViewModel {
         !agentService.turns.isEmpty
     }
     public let inset: CGFloat
-    public let animation: Animation = .interactiveSpring(
-        duration: 0.5,
-        extraBounce: 0.25,
-        blendDuration: 0.125
-    )
+    public let animation: Animation = .smooth(duration: 0.38, extraBounce: 0)
 
     // MARK: - Dependencies (read-only from view)
 
