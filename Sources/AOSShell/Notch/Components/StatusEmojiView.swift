@@ -8,8 +8,9 @@ import SwiftUI
 //   - `.medium`: opened-panel variant, 32pt — sized to align with the
 //                two-row "context + input" header.
 //   - `.large`:  reserved for hero contexts, 64pt
-// Always monospaced so the different glyph widths (`:)` vs `>_<`) don't
-// shift surrounding layout.
+// All glyphs are 2 chars wide so monospaced rendering keeps the slot a
+// fixed pixel width across status transitions (a 3-char glyph like
+// `>_<` would still be wider than `:)` even in a monospaced font).
 
 struct StatusEmojiView: View {
     let status: AgentStatus
@@ -24,7 +25,7 @@ struct StatusEmojiView: View {
         case .idle: return ":)"
         case .listening: return ":o"
         case .thinking: return ":/"
-        case .working: return ">_<"
+        case .working: return "X("
         case .done: return ":D"
         case .waiting: return ":?"
         case .error: return ":("

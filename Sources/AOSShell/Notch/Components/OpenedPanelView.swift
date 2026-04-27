@@ -42,26 +42,11 @@ struct OpenedPanelView: View {
     let visualCapturePolicyStore: VisualCapturePolicyStore
 
     /// Last turn count observed by the history-height preference handler.
-    /// Used to distinguish streaming-token growth (count unchanged → suppress
-    /// the panel's height animation so the viewport stays in lockstep with
-    /// the content) from new-turn insertion (count changed → keep the
-    /// existing `.smooth` height animation that lets the panel ease open).
+    /// Used to distinguish streaming growth (count unchanged → suppress the
+    /// panel's height animation so the viewport stays in lockstep with the
+    /// content) from new-turn insertion (count changed → keep the existing
+    /// `.smooth` animation that lets the panel ease open).
     @State private var lastObservedTurnCount: Int = 0
-
-    /// Last visible-reply length seen on the most recent turn. Combined
-    /// with `lastObservedTurnCount` this is the explicit "we just received
-    /// a visible-output token" signal: when both the turn count is
-    /// unchanged AND the last turn's `reply.count` grew, we know the
-    /// height bump is coming from streamed reply text — so we suppress
-    /// the panel's height animation to keep the bottom-anchored ScrollView
-    /// from bouncing. Other intra-turn height changes (thinking expand/
-    /// collapse, error banners appearing, status emoji swaps) leave the
-    /// reply length unchanged and flow through the notch's normal
-    /// `.smooth` animation. This is more reliable than a height-delta
-    /// heuristic — provider chunks aren't guaranteed to be one wrapped
-    /// line, so any geometric threshold misclassifies large batched
-    /// chunks as UI transitions.
-    @State private var lastObservedReplyLength: Int = 0
 
     /// Top safe area equal to the physical notch height. The opened panel
     /// extends to the very top of the screen, so any content inside the
@@ -360,49 +345,56 @@ struct OpenedPanelView: View {
             // bottom and the older content visually scrolls up, then slides
             // back down as the viewport finishes growing — the "上顶/回弹".
             //
-            // Suppress the height animation only on the streaming path
-            // (turn count unchanged + reply length grew) so panel +
-            // viewport grow in the same frame as the content. New-turn
-            // insertion changes the count, so its preference update flows
-            // through with the normal `.smooth` height animation intact
-            // and the panel still eases open to make room.
+            // Suppress the height animation while a turn is live (count
+            // unchanged) so panel + viewport grow in the same frame as the
+            // content. New-turn insertion changes the count, so its
+            // preference update flows through with the normal `.smooth`
+            // height animation intact and the panel still eases open.
+            //
+            // The signal is "last turn is in a non-terminal status" rather
+            // than "reply.count grew since last fire". A single token can
+            // produce multiple preference fires (sub-pixel relayout after
+            // the parent frame catches up); a delta-based discriminator
+            // that advances its baseline on the first fire would miss the
+            // follow-up fires and let them through the animated path,
+            // which is exactly the bounce. The status-based signal is
+            // stable across fires for the duration of the streaming turn.
             //
             // Other intra-turn height changes (the user expands/collapses
-            // a settled thinking trace, an error banner appears, the
-            // status emoji swaps) must NOT take the suppression path:
-            // SwiftUI propagates the *final* layout size through
-            // preferences immediately, so disabling the animation would
-            // snap the notch height to the new max while the inner
-            // `.frame(height:)` is still easing — producing a visible
-            // jump followed by a delayed inner reveal. Letting the change
-            // flow through the notch's `.smooth(0.32)` animation keeps
-            // the silhouette and the inner frame in lockstep (we match
-            // curves in `ThinkingView`).
+            // a *settled* thinking trace on an older turn, an error
+            // banner appears, the status emoji swaps) leave the last
+            // turn in a terminal status (`.done` / `.error` / `.idle`)
+            // so they fall through to the normal `.smooth(0.32)` path,
+            // matching the silhouette's animation curve.
             //
-            // The discriminator is whether the last turn's `reply.count`
-            // actually grew on this tick — that's the explicit signal
-            // for "a visible-output token just arrived". Status going
-            // through `.thinking` is too coarse (it covers reasoning-only
-            // phases where no visible token has streamed yet, and where
-            // ThinkingView's own settled transitions need normal
-            // animation), and a height-delta heuristic misclassifies
-            // batched provider chunks (markdown blocks, tables, fenced
-            // code) as UI transitions.
+            // Round h to integer points to suppress sub-pixel jitter from
+            // SwiftUI's per-frame relayout — same pattern as
+            // OnboardingMeasurement / SettingsMeasurement. Real content
+            // changes are always >> 1pt and still flow through.
             let count = agentService.turns.count
-            let currentReplyLength = agentService.turns.last?.reply.count ?? 0
-            let isStreamingReply = count == lastObservedTurnCount
-                && currentReplyLength > lastObservedReplyLength
-            if isStreamingReply {
+            let isLastTurnLive: Bool = {
+                guard let last = agentService.turns.last else { return false }
+                switch last.status {
+                case .thinking, .working, .waiting: return true
+                case .idle, .listening, .done, .error: return false
+                }
+            }()
+            let isStreamingUpdate = count == lastObservedTurnCount && isLastTurnLive
+            let rounded = h.rounded()
+            if isStreamingUpdate {
                 var txn = Transaction()
                 txn.disablesAnimations = true
                 withTransaction(txn) {
-                    viewModel.historyContentHeight = h
+                    if viewModel.historyContentHeight != rounded {
+                        viewModel.historyContentHeight = rounded
+                    }
                 }
             } else {
-                viewModel.historyContentHeight = h
+                if viewModel.historyContentHeight != rounded {
+                    viewModel.historyContentHeight = rounded
+                }
                 lastObservedTurnCount = count
             }
-            lastObservedReplyLength = currentReplyLength
         }
     }
 
@@ -516,7 +508,7 @@ struct OpenedPanelView: View {
         switch turn.status {
         case .error: return ":("
         case .thinking: return turn.reply.isEmpty ? ":/" : ":O"
-        case .working: return ">_<"
+        case .working: return "X("
         case .waiting: return ":?"
         case .listening: return ":o"
         case .done, .idle:

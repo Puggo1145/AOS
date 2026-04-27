@@ -62,18 +62,40 @@ struct AgentServiceTests {
     }
 
     @Test("ui.status maps to AgentStatus and updates the matching turn")
-    func statusMapping() {
+    func statusMapping() async throws {
         let s = makeService()
         s._testTurnStarted(id: "T1")
         s.handleStatus(UIStatusParams(sessionId: "S", turnId: "T1", status: .thinking))
         #expect(s.status == .thinking)
         #expect(s.turns.last?.status == .thinking)
+        // tool_calling is debounced (~250ms) so a fast tool round doesn't
+        // produce a visible `X(` flicker between two `:/` states. After the
+        // debounce window elapses without a superseding status, the working
+        // glyph lands.
         s.handleStatus(UIStatusParams(sessionId: "S", turnId: "T1", status: .toolCalling))
+        #expect(s.status == .thinking)
+        #expect(s.turns.last?.status == .thinking)
+        try await Task.sleep(nanoseconds: 400_000_000)
         #expect(s.status == .working)
         #expect(s.turns.last?.status == .working)
         s.handleStatus(UIStatusParams(sessionId: "S", turnId: "T1", status: .waitingInput))
         #expect(s.status == .waiting)
         #expect(s.turns.last?.status == .waiting)
+    }
+
+    @Test("fast tool_calling → thinking does not flicker .working into the UI")
+    func toolCallingDebounceCancelled() async throws {
+        let s = makeService()
+        s._testTurnStarted(id: "T1")
+        s.handleStatus(UIStatusParams(sessionId: "S", turnId: "T1", status: .toolCalling))
+        // Superseding status arrives well within the 250ms debounce window —
+        // matches the "fast local tool" path on the sidecar (tool_calling and
+        // thinking emit back-to-back with only millisecond-scale work between).
+        try await Task.sleep(nanoseconds: 50_000_000)
+        s.handleStatus(UIStatusParams(sessionId: "S", turnId: "T1", status: .thinking))
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(s.status == .thinking)
+        #expect(s.turns.last?.status == .thinking)
     }
 
     @Test("done auto-reverts global status to idle within ~1.5s but keeps the turn")

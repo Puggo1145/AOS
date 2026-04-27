@@ -72,7 +72,7 @@ struct SessionStoreTests {
     }
 
     @Test("ui.status .working on inactive session leaves active status unchanged")
-    func inactiveStatusDoesNotMoveActiveStatus() {
+    func inactiveStatusDoesNotMoveActiveStatus() async throws {
         let (store, agent) = makeStore()
         store.adoptCreated(SessionListItem(
             id: "A", title: "A", createdAt: 0, turnCount: 0, lastActivityAt: 0
@@ -80,8 +80,11 @@ struct SessionStoreTests {
         agent.handleTurnStarted(turnStarted("Ta", sessionId: "A"))
         agent.handleTurnStarted(turnStarted("Tb", sessionId: "B"))
         // A is .thinking from its turnStarted; flipping B's status to working
-        // must not leak into the active projection.
+        // must not leak into the active projection. `.working` is debounced
+        // (~250ms) on the receiving mirror to suppress the fast-tool flicker,
+        // so wait past the window before asserting B reached `.working`.
         agent.handleStatus(UIStatusParams(sessionId: "B", turnId: "Tb", status: .toolCalling))
+        try await Task.sleep(nanoseconds: 400_000_000)
         #expect(agent.status == .thinking)
         #expect(store.mirrors["B"]?.status == .working)
     }

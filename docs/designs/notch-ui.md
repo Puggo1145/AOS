@@ -243,7 +243,7 @@ assistantText 渲染于输入框上方：`AgentService.assistantText` 由 `ui.to
 | `idle` | `:)` | 默认；turn 结束 1s 后自动回归 |
 | `listening` | `:o` | **view-local**：opened 态且 TextField focused 时本地覆盖 `AgentService.status` 的 display 值 |
 | `thinking` | `:/` | `ui.status { status: "thinking" }` |
-| `working` | `>_<` | `ui.status { status: "tool_calling" }` |
+| `working` | `X(` | `ui.status { status: "tool_calling" }`，仅在 tool_calling 持续 >250ms 时显示（短工具不闪一下） |
 | `done` | `:D` | `ui.status { status: "done" }`，由 AgentService 持有 1s 后回 `idle` |
 | `waiting` | `:?` | `ui.status { status: "waiting_input" }` |
 | `error` | `:(` | `ui.error` notification |
