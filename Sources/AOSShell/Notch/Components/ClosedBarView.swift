@@ -22,6 +22,11 @@ struct ClosedBarView: View {
     /// user's current foreground; the overlay is what AOS is doing in the
     /// background).
     let backgroundOp: BackgroundOperation?
+    /// Name of the most recent in-flight tool call (any family). When set,
+    /// the right-side status slot swaps the resting/working emoji for the
+    /// tool's SF Symbol — see `AgentStatusIndicator`. `nil` falls back to
+    /// the emoji glyph.
+    let activeToolName: String?
 
     @State private var pulse: Bool = false
 
@@ -47,7 +52,7 @@ struct ClosedBarView: View {
                 }
             }
             .frame(width: deviceNotchRect.width, height: h)
-            StatusEmojiView(status: agentStatus, size: .small)
+            AgentStatusIndicator(status: agentStatus, activeToolName: activeToolName)
                 .frame(width: h, height: h)
         }
         .frame(width: deviceNotchRect.width + h * 2, height: h)

@@ -380,6 +380,19 @@ public final class AgentService {
         return BackgroundOperation.resolve(toolName: inflight.name, args: inflight.args)
     }
 
+    /// Name of the most recent in-flight tool call on the active turn, across
+    /// every tool family. Drives the closed-bar status slot's live tool-icon
+    /// swap (see `AgentStatusIndicator`). `nil` when no tool is currently in
+    /// `.calling`. Last-wins on concurrent fan-out, matching
+    /// `activeBackgroundOperation`.
+    public var activeToolName: String? {
+        guard let mirror = sessionStore.activeMirror,
+              let turnId = mirror.currentTurn,
+              let turn = mirror.turns.last(where: { $0.id == turnId })
+        else { return nil }
+        return turn.toolCalls.last(where: { $0.status == .calling })?.name
+    }
+
     private let rpc: RPCClient
 
     public init(rpc: RPCClient, sessionStore: SessionStore) {

@@ -270,7 +270,8 @@ struct NotchView: View {
             senseStore: viewModel.senseStore,
             agentStatus: viewModel.agentService.status,
             deviceNotchRect: viewModel.deviceNotchRect,
-            backgroundOp: viewModel.agentService.activeBackgroundOperation
+            backgroundOp: viewModel.agentService.activeBackgroundOperation,
+            activeToolName: viewModel.agentService.activeToolName
         )
         .frame(width: closedBarWidth, height: viewModel.deviceNotchRect.height)
     }
