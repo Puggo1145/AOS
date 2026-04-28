@@ -48,7 +48,20 @@ struct ComposerCard: View {
     /// said something", and a bag of pastes with no question is a bug
     /// shape, not a turn.
     private var canSubmit: Bool {
-        !inputModel.isTextEmpty
+        !inputModel.isTextEmpty && !isAgentBusy
+    }
+
+    /// The agent is mid-turn — either streaming tokens (`working`) or
+    /// waiting on a tool round (`waiting`). In this state the trailing
+    /// circular button flips to a stop affordance and clicking it cancels
+    /// the in-flight turn instead of submitting a new prompt. Send via
+    /// Enter is also gated off so a stray Return keystroke can't enqueue
+    /// behind a running turn.
+    private var isAgentBusy: Bool {
+        switch agentService.status {
+        case .working, .waiting: return true
+        case .idle, .listening, .done, .error: return false
+        }
     }
 
     var body: some View {
@@ -183,7 +196,16 @@ struct ComposerCard: View {
         .accessibilityLabel(Text("Reasoning effort"))
     }
 
+    @ViewBuilder
     private var sendButton: some View {
+        if isAgentBusy {
+            stopButton
+        } else {
+            submitButton
+        }
+    }
+
+    private var submitButton: some View {
         Button(action: submit) {
             Image(systemName: "arrow.up")
                 .font(.system(size: 12, weight: .bold))
@@ -197,6 +219,26 @@ struct ComposerCard: View {
         .buttonStyle(.plain)
         .disabled(!canSubmit)
         .accessibilityLabel(Text("Send prompt"))
+    }
+
+    private var stopButton: some View {
+        Button(action: cancel) {
+            // Filled square inside a white disc — the standard "stop a
+            // running task" affordance. Black-on-white matches the active
+            // submit button so the trailing slot doesn't visually shift
+            // weight when the agent flips between idle and busy.
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(Color.black)
+                .frame(width: 9, height: 9)
+                .frame(width: 26, height: 26)
+                .background(Circle().fill(Color.white))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("Stop agent"))
+    }
+
+    private func cancel() {
+        Task { await agentService.cancel() }
     }
 
     // MARK: - Selection helpers
@@ -241,8 +283,10 @@ struct ComposerCard: View {
         // Re-check the same gate the send button uses. Return is also a
         // submit path, and `snapshot.prompt` includes `[[clipboard:N]]`
         // markers — checking it would let a chips-only field submit a
-        // bag of pastes with no question.
-        guard !inputModel.isTextEmpty else { return }
+        // bag of pastes with no question. Also block while a turn is in
+        // flight so a stray Enter keystroke can't enqueue behind the
+        // running agent (the button itself flips to stop in that state).
+        guard !inputModel.isTextEmpty, !isAgentBusy else { return }
         let snapshot = inputModel.snapshot()
 
         let selection = CitedSelection(deselectedBehaviors: deselectedBehaviorKeys)
