@@ -573,6 +573,7 @@ export async function runTurn(
               sessionId,
               turnId,
               toolCallId: tc.id,
+              model,
               signal,
             });
           } catch (err) {
@@ -678,6 +679,7 @@ interface ToolDispatchCtx {
   sessionId: string;
   turnId: string;
   toolCallId: string;
+  model: Model<Api>;
   signal: AbortSignal;
 }
 
@@ -738,6 +740,26 @@ async function runTool(
     if (err instanceof ToolUserError) {
       return {
         content: [{ type: "text", text: err.message }],
+        isError: true,
+      };
+    }
+    // Cancellation propagated through the tool. The dispatcher rejects
+    // an aborted outbound request with a plain `Error("... aborted")`
+    // — NOT an `RPCMethodError` — so the recoverable-error filter in
+    // computer-use's `callCU` doesn't catch it and it would otherwise
+    // bubble all the way to `runTurn`'s top-level catch, fire `ui.error`,
+    // and mark the turn as failed. The user pressed cancel; that's not
+    // an error. Return a closing frame so the toolCall row doesn't
+    // dangle in `.calling`, and let the outer `if (signal.aborted)`
+    // check in `runTurn` close the turn via `ui.status: done`.
+    //
+    // We trust the signal as the cancel oracle (not error message
+    // string-matching): only convert when the signal is actually
+    // aborted. Other transient I/O errors that happen to coincide with
+    // a non-aborted signal still fail loudly.
+    if (ctx.signal.aborted) {
+      return {
+        content: [{ type: "text", text: `${toolName} cancelled` }],
         isError: true,
       };
     }

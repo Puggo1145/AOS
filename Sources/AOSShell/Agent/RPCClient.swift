@@ -45,6 +45,24 @@ public enum RPCClientError: Error, Sendable {
 /// the `params` value and decode it themselves; the reader stays generic.
 public typealias NotificationHandler = @Sendable (Data) async -> Void
 
+/// Inbound-request handler. Receives the raw NDJSON line (so the handler
+/// can decode `RPCRequest<P>` for whichever P it expects) and returns the
+/// already-encoded response/error line. Handlers are invoked on a detached
+/// Task so they don't block the reader; the wire layer writes the
+/// returned bytes back through the outbound queue. Per
+/// docs/designs/rpc-protocol.md §"computerUse.*" each `computerUse.*`
+/// method registers one handler here.
+public typealias RequestHandler = @Sendable (Data) async -> Data?
+
+/// Bridge for handlers that want to surface a typed `RPCError` on the
+/// wire. `RPCError` is a Codable struct (not an `Error`); wrap it here
+/// so the handler closure can throw and the dispatcher recovers the
+/// original wire shape via the `as RPCErrorThrowable` catch arm.
+public struct RPCErrorThrowable: Error {
+    public let rpcError: RPCError
+    public init(_ rpcError: RPCError) { self.rpcError = rpcError }
+}
+
 public final class RPCClient: @unchecked Sendable {
     private let inbound: FileHandle
     private let outbound: FileHandle
@@ -57,6 +75,12 @@ public final class RPCClient: @unchecked Sendable {
     /// detached Tasks so they don't block the reader.
     private var notificationHandlers: [String: NotificationHandler] = [:]
     private let handlersLock = NSLock()
+
+    /// Inbound-request handlers keyed by method name. See
+    /// `registerRequestHandler` for the registration helper. Lives behind
+    /// the same lock as `notificationHandlers` to keep the registry
+    /// reads/writes coherent.
+    private var requestHandlers: [String: RequestHandler] = [:]
 
     private let writeQueue = DispatchQueue(label: "aos.rpc.write")
     private var readerStopped = false
@@ -149,6 +173,66 @@ public final class RPCClient: @unchecked Sendable {
         }
         handlersLock.lock()
         notificationHandlers[method] = raw
+        handlersLock.unlock()
+    }
+
+    // MARK: - Inbound request handler registry
+    //
+    // Per docs/designs/rpc-protocol.md §"computerUse.*". Each typed handler
+    // decodes `RPCRequest<P>`, runs the kit operation, and projects the
+    // result back into `RPCResponse<R>`. Errors thrown by the closure
+    // become `RPCErrorResponse`s — the caller can map them onto application
+    // codes via `RPCErrorAdapter`.
+    public func registerRequestHandler<P: Codable & Sendable & Equatable, R: Codable & Sendable & Equatable>(
+        method: String,
+        as paramsType: P.Type = P.self,
+        resultType: R.Type = R.self,
+        _ handler: @escaping @Sendable (P) async throws -> R
+    ) {
+        let raw: RequestHandler = { data in
+            // Decode the request envelope so we can pin the response id.
+            // Failure here is wire corruption — fall back to invalidRequest
+            // so the sidecar isn't left waiting on a continuation.
+            let decoder = JSONDecoder()
+            do {
+                let req = try decoder.decode(RPCRequest<P>.self, from: data)
+                do {
+                    let result = try await handler(req.params)
+                    let resp = RPCResponse(id: req.id, result: result)
+                    return Self.guardedResponseLine(resp, id: req.id, method: method)
+                } catch let throwable as RPCErrorThrowable {
+                    let err = RPCErrorResponse(id: req.id, error: throwable.rpcError)
+                    return Self.guardedResponseLine(err, id: req.id, method: method)
+                } catch {
+                    let err = RPCErrorResponse(
+                        id: req.id,
+                        error: RPCError(
+                            code: RPCErrorCode.internalError,
+                            message: "\(error)"
+                        )
+                    )
+                    return Self.guardedResponseLine(err, id: req.id, method: method)
+                }
+            } catch {
+                // Try to recover the request id so the sidecar continuation
+                // is freed even on decode failure.
+                if let probe = try? decoder.decode(Probe.self, from: data),
+                   let id = probe.id
+                {
+                    let err = RPCErrorResponse(
+                        id: id,
+                        error: RPCError(
+                            code: RPCErrorCode.invalidParams,
+                            message: "failed to decode params for \(method): \(error)"
+                        )
+                    )
+                    return try? Self.encodeLine(err)
+                }
+                return nil
+            }
+        }
+        handlersLock.lock()
+        requestHandlers[method] = raw
         handlersLock.unlock()
     }
 
@@ -262,6 +346,46 @@ public final class RPCClient: @unchecked Sendable {
         // wire bytes the Shell actually emits are the same bytes the
         // conformance harness pins. See `AOSRPCSchema/CanonicalEncoder.swift`.
         try CanonicalJSON.encode(value)
+    }
+
+    /// Encode an inbound-request response and reject anything over the
+    /// `maxLineBytes` cap. Mirror of the outbound `outboundPayloadTooLarge`
+    /// guard in `request(...)`: the sidecar treats any inbound NDJSON line
+    /// > 2 MiB as fatal and closes the channel, which would crash the agent
+    /// loop mid-conversation. A getAppState response (screenshot + AX tree)
+    /// is the only realistic way to hit this in production, but the screenshot
+    /// payload cap (`ScreenshotPayloadPolicy.defaultRawByteBudget`, 700KB raw
+    /// ≈ 1MB base64) plus the AX tree node cap (`maxRenderedNodes = 2000`)
+    /// can in pathological cases still combine past 2 MiB. Defending the
+    /// boundary here so any new oversize source can't take down the channel.
+    ///
+    /// On overflow we substitute a `payloadTooLarge` error response keyed to
+    /// the same id so the sidecar continuation gets resolved (no hang) and
+    /// the agent treats the call as a recoverable failure (per
+    /// `isRecoverableComputerUseError` in `sidecar/.../computer-use.ts`).
+    private static func guardedResponseLine<T: Encodable>(
+        _ value: T,
+        id: RPCId,
+        method: String
+    ) -> Data? {
+        guard let line = try? Self.encodeLine(value) else { return nil }
+        if line.count <= Self.maxLineBytes { return line }
+        FileHandle.standardError.write(
+            Data("[rpc] inbound response for '\(method)' is \(line.count) bytes (> \(Self.maxLineBytes)); substituting payloadTooLarge\n".utf8)
+        )
+        let fallback = RPCErrorResponse(
+            id: id,
+            error: RPCError(
+                code: RPCErrorCode.payloadTooLarge,
+                message: "response for '\(method)' exceeds \(Self.maxLineBytes)-byte NDJSON line cap",
+                data: .object([
+                    "bytes": .int(line.count),
+                    "limit": .int(Self.maxLineBytes),
+                    "method": .string(method),
+                ])
+            )
+        )
+        return try? Self.encodeLine(fallback)
     }
 
     // MARK: - Reader loop
@@ -407,7 +531,21 @@ public final class RPCClient: @unchecked Sendable {
             }
             return
         }
-        // Any other inbound Request — reply MethodNotFound.
+        // Try registered request handlers (computerUse.* live here). Each
+        // handler runs in this detached Task so concurrent inbound
+        // requests don't serialise behind one another — per
+        // docs/designs/rpc-protocol.md §"Dispatcher 并发模型".
+        handlersLock.lock()
+        let handler = requestHandlers[method]
+        handlersLock.unlock()
+        if let handler {
+            if let response = await handler(line) {
+                write(line: response)
+            }
+            return
+        }
+        // No registered handler — reply MethodNotFound so the sidecar
+        // isn't stuck waiting on a continuation.
         if let probe = try? JSONDecoder().decode(Probe.self, from: line), let id = probe.id {
             let err = RPCErrorResponse(
                 id: id,

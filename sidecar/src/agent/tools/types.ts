@@ -11,15 +11,25 @@
 // harness can attach handler-only concerns (signal, sessionId, structured
 // details) without polluting the model's view.
 
-import type { Tool, ToolResultContent } from "../../llm/types";
+import type { Api, Model, Tool, ToolResultContent } from "../../llm/types";
 
 /// Per-call context handed to a tool's `execute`. Carries the abort signal
 /// (shared with the parent turn — cancellation propagates), plus identity
 /// fields tools may want for logging or wire notifications.
+///
+/// `model` is the resolved active model for the current turn. It exists so
+/// tools can branch on **catalog-declared capabilities** (`supportsVision`
+/// etc.) — the catalog is the single source of truth for what a model can
+/// consume, and tools that produce optional rich output (e.g. screenshots)
+/// must respect that. Tools MUST NOT branch on `model.id` / `model.provider`
+/// directly: that re-derives capability outside the catalog and rots the
+/// moment a new model is added. Use the `supportsX` predicates from
+/// `llm/models/capabilities`.
 export interface ToolExecContext {
   sessionId: string;
   turnId: string;
   toolCallId: string;
+  model: Model<Api>;
   /// Aborted when the parent turn is cancelled or reset. Tools MUST honor
   /// it to avoid leaking subprocesses / file handles.
   signal: AbortSignal;

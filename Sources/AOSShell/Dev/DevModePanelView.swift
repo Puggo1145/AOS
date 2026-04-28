@@ -1,5 +1,6 @@
 import SwiftUI
 import AOSRPCSchema
+import AOSComputerUseKit
 
 // MARK: - DevModePanelView
 //
@@ -11,11 +12,13 @@ import AOSRPCSchema
 struct DevModePanelView: View {
     let contextService: DevContextService
     var sessionStore: SessionStore?
+    var doctorService: ComputerUseDoctorService?
 
     @State private var selected: Section = .context
 
     enum Section: String, CaseIterable, Identifiable, Hashable {
         case context = "Context"
+        case computerUse = "Computer Use"
         var id: String { rawValue }
     }
 
@@ -30,6 +33,16 @@ struct DevModePanelView: View {
             switch selected {
             case .context:
                 DevContextSectionView(service: contextService, sessionStore: sessionStore)
+            case .computerUse:
+                if let doctorService {
+                    DevComputerUseSectionView(service: doctorService)
+                } else {
+                    ContentUnavailableView(
+                        "Computer Use unavailable",
+                        systemImage: "stethoscope",
+                        description: Text("Doctor service was not wired into Dev Mode at boot.")
+                    )
+                }
             }
         }
         .task {
@@ -42,7 +55,128 @@ struct DevModePanelView: View {
     private func icon(for section: Section) -> String {
         switch section {
         case .context: return "doc.text"
+        case .computerUse: return "stethoscope"
         }
+    }
+}
+
+// MARK: - DevComputerUseSectionView
+//
+// Renders the cached `DoctorReport` as a checklist (Accessibility / Screen
+// Recording / each SkyLight SPI), plus a "Re-run" button that re-probes
+// in-process. The section auto-runs once on first appear so opening Dev Mode
+// after a Privacy toggle gives an up-to-date read without a manual click.
+
+struct DevComputerUseSectionView: View {
+    let service: ComputerUseDoctorService
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            header
+            Divider()
+            if let report = service.lastReport {
+                reportBody(report)
+            } else if service.isRefreshing {
+                ProgressView("Probing…")
+                    .controlSize(.small)
+            } else {
+                ContentUnavailableView(
+                    "No report yet",
+                    systemImage: "stethoscope",
+                    description: Text("Click Re-run to probe accessibility, screen recording, and SkyLight SPI status.")
+                )
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .navigationTitle("Computer Use")
+        .task {
+            // First-open hydrate: re-run regardless of cache, so the panel
+            // always reflects current TCC state when the dev opens it.
+            await service.refresh()
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Text("computerUse.doctor")
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+            if let at = service.lastRefreshedAt {
+                Text(timestamp(at))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            Spacer()
+            Button {
+                Task { await service.refresh() }
+            } label: {
+                if service.isRefreshing {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Label("Re-run", systemImage: "arrow.clockwise")
+                }
+            }
+            .disabled(service.isRefreshing)
+        }
+    }
+
+    @ViewBuilder
+    private func reportBody(_ r: DoctorReport) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            checklistGroup(
+                title: "Permissions",
+                rows: [
+                    ("Accessibility", r.accessibility),
+                    ("Screen Recording", r.screenRecording),
+                    ("Automation", r.automation),
+                ]
+            )
+            checklistGroup(
+                title: "SkyLight Private SPI",
+                rows: [
+                    ("SLEventPostToPid", r.skyLightSPI.postToPid),
+                    ("Authentication message envelope", r.skyLightSPI.authMessage),
+                    ("Focus without raise (yabai)", r.skyLightSPI.focusWithoutRaise),
+                    ("Window-local CGEvent location", r.skyLightSPI.windowLocation),
+                    ("Spaces enumeration", r.skyLightSPI.spaces),
+                    ("_AXUIElementGetWindow", r.skyLightSPI.getWindow),
+                ]
+            )
+        }
+    }
+
+    private func checklistGroup(title: String, rows: [(String, Bool)]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    HStack(spacing: 8) {
+                        Image(systemName: row.1 ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .foregroundStyle(row.1 ? .green : .red)
+                        Text(row.0)
+                            .font(.system(size: 12, design: .monospaced))
+                        Spacer()
+                    }
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.secondary.opacity(0.08))
+            )
+        }
+    }
+
+    private func timestamp(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f.string(from: d)
     }
 }
 

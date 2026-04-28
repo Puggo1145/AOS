@@ -420,6 +420,97 @@ test("unexpected handler exception terminates the turn with a ui.error", async (
   expect(convo.turns[0].status).toBe("error");
 });
 
+test("cancellation mid-tool closes the turn quietly — no ui.error", async () => {
+  // Regression: agent.cancel during a tool call used to surface as a
+  // turn-fatal `ui.error`. The dispatcher rejects an aborted outbound
+  // request with a plain `Error("... aborted")` (NOT an `RPCMethodError`),
+  // so the recoverable-error filter in computer-use's `callCU` doesn't
+  // catch it and it bubbled to runTurn's top-level catch. runTool now
+  // checks `ctx.signal.aborted` in its catch and returns a closing
+  // `isError` result instead of rethrowing, so runTurn's existing
+  // `if (signal.aborted)` branch closes the turn via `ui.status: done`.
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const { manager, convo, sessionId } = setupSession();
+  registerAgentHandlers(dispatcher, { manager });
+
+  // Tool blocks on a 5s sleep, racing the abort signal. When the test
+  // sends `agent.cancel` mid-call, the abort listener rejects — same
+  // shape as Dispatcher.request rejecting on signal.aborted.
+  toolRegistry.register({
+    spec: {
+      name: "slow",
+      description: "Sleeps until cancelled",
+      parameters: { type: "object", properties: {} },
+    },
+    execute: async (_args, ctx) => {
+      await new Promise<void>((resolve, reject) => {
+        if (ctx.signal.aborted) {
+          reject(new Error("aborted before start"));
+          return;
+        }
+        const onAbort = () => {
+          clearTimeout(timer);
+          reject(new Error("request 'slow' aborted"));
+        };
+        const timer = setTimeout(() => {
+          ctx.signal.removeEventListener("abort", onAbort);
+          resolve();
+        }, 5000);
+        ctx.signal.addEventListener("abort", onAbort, { once: true });
+      });
+      return { content: [{ type: "text", text: "should not reach" }], isError: false };
+    },
+  });
+
+  scriptedRounds.push((model) => {
+    const tc: ToolCall = { type: "toolCall", id: "tc_slow", name: "slow", arguments: {} };
+    return emitStream((s) => {
+      const partial = fakeAssistant(model, [tc], "toolUse");
+      s.push({ type: "toolcall_end", contentIndex: 0, toolCall: tc, partial });
+      s.push({ type: "done", reason: "toolUse", message: partial });
+    });
+  });
+  // Subsequent rounds MUST NOT run — cancellation should end the turn.
+  scriptedRounds.push(() => {
+    throw new Error("loop should not have advanced past the cancelled tool");
+  });
+
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "agent.submit",
+    params: { sessionId, turnId: "T1", prompt: "start slow tool", citedContext: {} },
+  });
+  // Let the loop reach the tool's await before cancelling.
+  await flush(60);
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "agent.cancel",
+    params: { sessionId, turnId: "T1" },
+  });
+  await flush(120);
+
+  // No ui.error fired — that's the bug we're regressing against.
+  const errorEvents = captured.notifications.filter((n) => n.method === "ui.error");
+  expect(errorEvents).toHaveLength(0);
+
+  // The toolCall row must have a closing `result` frame so the UI
+  // doesn't strand it in `.calling`. The closing frame is isError=true
+  // with a "cancelled" message; that's what runTool returns on abort.
+  const toolResults = captured.notifications.filter(
+    (n) => n.method === "ui.toolCall" && n.params.phase === "result",
+  );
+  expect(toolResults).toHaveLength(1);
+  expect(toolResults[0].params.toolCallId).toBe("tc_slow");
+  expect(toolResults[0].params.isError).toBe(true);
+  expect(toolResults[0].params.outputText).toContain("cancelled");
+
+  // Turn ends in `cancelled` state (set by the agent.cancel handler),
+  // not `error`.
+  expect(convo.turns[0].status).toBe("cancelled");
+});
+
 test("invalid tool arguments produce an isError result with the validator's message", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, convo, sessionId } = setupSession();

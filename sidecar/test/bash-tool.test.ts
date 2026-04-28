@@ -3,12 +3,14 @@
 import { test, expect } from "bun:test";
 import { createBashTool } from "../src/agent/tools/bash";
 import type { ToolExecContext } from "../src/agent/tools/types";
+import { getDefaultModel, PROVIDER_IDS } from "../src/llm";
 
 function ctxWith(signal: AbortSignal): ToolExecContext {
   return {
     sessionId: "sess",
     turnId: "turn",
     toolCallId: "call",
+    model: getDefaultModel(PROVIDER_IDS.chatgptPlan),
     signal,
   };
 }

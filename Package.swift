@@ -7,12 +7,13 @@ import PackageDescription
 //   - executable `AOSShell`      (Notch UI + RPC client + AgentService composition root)
 //   - library `AOSRPCSchema`     (wire protocol — see docs/plans/rpc-protocol.md)
 //   - library `AOSOSSenseKit`    (OS Sense — see docs/designs/os-sense.md)
+//   - library `AOSComputerUseKit` (Computer Use — see docs/designs/computer-use.md)
 //   - library `AOSAXSupport`     (shared AX SPI bridge — see docs/designs/os-sense.md
 //                                 §"共享 AX SPI 底层模块". Holds the
 //                                 `@_silgen_name("_AXUIElementGetWindow")`
-//                                 bridge so OS Sense and (future)
-//                                 AOSComputerUseKit can both depend on it
-//                                 without read-side ↔ write-side coupling.)
+//                                 bridge so OS Sense and AOSComputerUseKit
+//                                 both depend on it without read-side ↔
+//                                 write-side coupling.)
 let package = Package(
     name: "AOS",
     platforms: [
@@ -34,6 +35,10 @@ let package = Package(
         .library(
             name: "AOSAXSupport",
             targets: ["AOSAXSupport"]
+        ),
+        .library(
+            name: "AOSComputerUseKit",
+            targets: ["AOSComputerUseKit"]
         )
     ],
     dependencies: [
@@ -80,6 +85,22 @@ let package = Package(
             dependencies: ["AOSOSSenseKit", "AOSAXSupport"],
             path: "Tests/AOSOSSenseKitTests"
         ),
+        // AOSComputerUseKit — write-side macOS-native operations:
+        // background app control via SkyLight SPI + ScreenCaptureKit + AX.
+        // Per docs/designs/computer-use.md §"模块结构". Depends only on
+        // AOSAXSupport for the shared AX SPI bridge — never on
+        // AOSOSSenseKit (read↔write isolation, mirrored from the OS Sense
+        // dependency rule).
+        .target(
+            name: "AOSComputerUseKit",
+            dependencies: ["AOSAXSupport"],
+            path: "Sources/AOSComputerUseKit"
+        ),
+        .testTarget(
+            name: "AOSComputerUseKitTests",
+            dependencies: ["AOSComputerUseKit", "AOSAXSupport"],
+            path: "Tests/AOSComputerUseKitTests"
+        ),
         // AOSShell — the macOS Notch UI executable. Depends on both library
         // targets; bundles Info.plist and AOS.entitlements as resources via
         // `.copy(...)` so they're addressable from `Bundle.main.resourceURL`
@@ -97,6 +118,7 @@ let package = Package(
             dependencies: [
                 "AOSRPCSchema",
                 "AOSOSSenseKit",
+                "AOSComputerUseKit",
                 .product(name: "MarkdownUI", package: "swift-markdown-ui")
             ],
             path: "Sources/AOSShell",
@@ -106,7 +128,7 @@ let package = Package(
         ),
         .testTarget(
             name: "AOSShellTests",
-            dependencies: ["AOSShell", "AOSRPCSchema", "AOSOSSenseKit"],
+            dependencies: ["AOSShell", "AOSRPCSchema", "AOSOSSenseKit", "AOSComputerUseKit"],
             path: "Tests/AOSShellTests"
         )
     ]

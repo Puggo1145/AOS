@@ -29,7 +29,7 @@
 // only producer and it is single-threaded per session in practice; if
 // concurrent turns ever ship, this storage needs revisiting.
 
-import type { Message, AssistantMessage, ToolResultMessage } from "../llm/types";
+import type { Message, AssistantMessage, ToolCall, ToolResultMessage } from "../llm/types";
 import type {
   CitedContext,
   ConversationTurnWire,
@@ -180,7 +180,7 @@ export class Conversation {
         out.push(this._messages[i]);
       }
     }
-    return out;
+    return stripStaleScreenshots(out);
   }
 
   /// Wire-format projection for `conversation.turnStarted` and the
@@ -203,4 +203,67 @@ export class Conversation {
   private find(turnId: string): ConversationTurn | undefined {
     return this._turns.find((x) => x.id === turnId);
   }
+}
+
+/// Per (pid, windowId), keep the screenshot only on the most recent
+/// `computer_use_get_app_state` tool result and strip image blocks from
+/// every earlier result, replacing them with a text placeholder. Older
+/// captures are dead context: the model only ever needs the latest view of
+/// a window, and accumulated base64 PNGs were both (a) blowing past codex
+/// `/responses` payload limits — symptom: SSE silently never returns —
+/// and (b) making `dev.context.get` time out because the rendered context
+/// payload was huge. AX text + stateId stay intact so the model can still
+/// reason about earlier element interactions.
+const STALE_SCREENSHOT_PLACEHOLDER =
+  "[screenshot omitted: superseded by a later capture for this window]";
+
+const GET_APP_STATE_TOOL = "computer_use_get_app_state";
+
+function stripStaleScreenshots(messages: Message[]): Message[] {
+  // 1) toolCallId → "pid:windowId" for every get_app_state call we can see
+  //    in this history. A call with non-numeric pid/windowId (model
+  //    hallucinated args) is just skipped — its result wasn't keyed and
+  //    won't be touched, leaving any image alone.
+  const keyByCallId = new Map<string, string>();
+  for (const m of messages) {
+    if (m.role !== "assistant") continue;
+    for (const block of m.content) {
+      if (block.type !== "toolCall") continue;
+      const tc = block as ToolCall;
+      if (tc.name !== GET_APP_STATE_TOOL) continue;
+      const args = tc.arguments as Record<string, unknown> | undefined;
+      const pid = args?.["pid"];
+      const windowId = args?.["windowId"];
+      if (typeof pid === "number" && typeof windowId === "number") {
+        keyByCallId.set(tc.id, `${pid}:${windowId}`);
+      }
+    }
+  }
+  if (keyByCallId.size === 0) return messages;
+
+  // 2) Latest tool-result index per key.
+  const latestIdxByKey = new Map<string, number>();
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i]!;
+    if (m.role !== "toolResult") continue;
+    const key = keyByCallId.get(m.toolCallId);
+    if (key !== undefined) latestIdxByKey.set(key, i);
+  }
+  if (latestIdxByKey.size === 0) return messages;
+
+  // 3) Strip images from every non-latest get_app_state tool result.
+  return messages.map((m, i) => {
+    if (m.role !== "toolResult") return m;
+    const key = keyByCallId.get(m.toolCallId);
+    if (key === undefined) return m;
+    if (latestIdxByKey.get(key) === i) return m;
+    const hasImage = m.content.some((b) => b.type === "image");
+    if (!hasImage) return m;
+    const newContent = m.content.map((b) =>
+      b.type === "image"
+        ? { type: "text" as const, text: STALE_SCREENSHOT_PLACEHOLDER }
+        : b,
+    );
+    return { ...m, content: newContent } satisfies ToolResultMessage;
+  });
 }

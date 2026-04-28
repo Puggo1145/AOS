@@ -269,7 +269,8 @@ struct NotchView: View {
         ClosedBarView(
             senseStore: viewModel.senseStore,
             agentStatus: viewModel.agentService.status,
-            deviceNotchRect: viewModel.deviceNotchRect
+            deviceNotchRect: viewModel.deviceNotchRect,
+            backgroundOp: viewModel.agentService.activeBackgroundOperation
         )
         .frame(width: closedBarWidth, height: viewModel.deviceNotchRect.height)
     }

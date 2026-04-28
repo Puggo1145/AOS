@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import AOSRPCSchema
 import AOSOSSenseKit
+import AOSComputerUseKit
 
 // MARK: - CompositionRoot
 //
@@ -27,6 +28,9 @@ public final class CompositionRoot {
     public let visualCapturePolicyStore: VisualCapturePolicyStore
     public let sidecarProcess: SidecarProcess
     public private(set) var rpcClient: RPCClient?
+    public private(set) var computerUseService: ComputerUseService?
+    public private(set) var computerUseHandlers: ComputerUseHandlers?
+    public private(set) var computerUseDoctorService: ComputerUseDoctorService?
     public private(set) var agentService: AgentService?
     public private(set) var sessionService: SessionService?
     public private(set) var providerService: ProviderService?
@@ -81,6 +85,32 @@ public final class CompositionRoot {
         client.start()
         self.rpcClient = client
 
+        // Computer Use handlers — register `computerUse.*` methods on the
+        // RPC client so the sidecar agent loop's tool calls land on the
+        // in-process Kit. Per docs/designs/computer-use.md §"与 AOS 主进程
+        // 的集成": Kit is a Swift dependency linked into Shell; handlers
+        // run on independent Tasks and don't block the dispatcher.
+        let cuService = ComputerUseService()
+        // Visualize agent operations: software cursor overlay rides on every
+        // background-pid click / drag / scroll via the Kit's MouseInput
+        // observer hook. Frontmost HID-tap clicks (real cursor moves) are
+        // skipped automatically. Disable at runtime with `AOS_VISUAL_CURSOR=0`.
+        AOSComputerUseKit.installVisualCursor()
+        let cuHandlers = ComputerUseHandlers(
+            service: cuService, permissions: permissionsService
+        )
+        cuHandlers.register(on: client)
+        self.computerUseService = cuService
+        self.computerUseHandlers = cuHandlers
+        // Doctor service: same in-process Kit handle as the RPC handlers, so
+        // Dev Mode + the boot-time auto-probe both read truth without going
+        // out over the wire. Auto-run is fired from NotchView once permissions
+        // reach their settled state — see PermissionOnboardPanelView.
+        let cuDoctor = ComputerUseDoctorService(
+            service: cuService, permissions: permissionsService
+        )
+        self.computerUseDoctorService = cuDoctor
+
         // 3. Construct ProviderService (notification handler registration only,
         //    no RPC issued yet), ConfigService, and AgentService.
         let provider = ProviderService(rpc: client)
@@ -100,7 +130,11 @@ public final class CompositionRoot {
         // NotificationCenter so the notch view tree stays unaware of it.
         let devContext = DevContextService(rpc: client)
         self.devContextService = devContext
-        let devWindow = DevModeWindowController(contextService: devContext, sessionStore: store)
+        let devWindow = DevModeWindowController(
+            contextService: devContext,
+            sessionStore: store,
+            doctorService: cuDoctor
+        )
         self.devModeWindowController = devWindow
         self.devModeOpenObserver = NotificationCenter.default.addObserver(
             forName: .aosOpenDevMode,
@@ -162,6 +196,30 @@ public final class CompositionRoot {
 
         // 8. Start global event monitors (closed/popping/opened state machine).
         EventMonitors.shared.start()
+
+        // 9. Auto-doctor: once Accessibility + Screen Recording are both
+        //    granted (which may already be true from a prior run), probe the
+        //    SkyLight SPI surface once and log a one-line warning if anything
+        //    is missing. Plan Stage 5: "权限或 SPI 缺失直接给用户反馈".
+        //    Detached from view lifecycle so it survives notch open/close.
+        scheduleDoctorAutoRun(doctor: cuDoctor)
+    }
+
+    /// Poll `permissionsService.allGranted` until it flips true (or already
+    /// is), then fire `ComputerUseDoctorService.runOnceIfNeeded`. We don't
+    /// hold a reference to the task — it self-terminates after one
+    /// successful run, and CompositionRoot.stop() drops the doctor service
+    /// either way.
+    private func scheduleDoctorAutoRun(doctor: ComputerUseDoctorService) {
+        Task { [weak permissionsService] in
+            while !Task.isCancelled {
+                if permissionsService?.allGranted == true {
+                    await doctor.runOnceIfNeeded()
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
     }
 
     /// Rebuild the notch window stack on screen change. Per
@@ -220,6 +278,9 @@ public final class CompositionRoot {
         notchWindowController = nil
         rpcClient?.stop()
         rpcClient = nil
+        computerUseHandlers = nil
+        computerUseService = nil
+        computerUseDoctorService = nil
         providerService = nil
         configService = nil
         agentService = nil

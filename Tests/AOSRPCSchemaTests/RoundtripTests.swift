@@ -455,6 +455,77 @@ final class RoundtripTests: XCTestCase {
         )
     }
 
+    // MARK: - Computer Use click — split-shape invariants
+    //
+    // Click was historically one method (`computerUse.click`) with two arms
+    // gated on optional fields. The model kept filling both arms with
+    // placeholders and the dispatcher would route to the wrong arm and
+    // fail with `stateStale`. The fix split it into two physically
+    // separate methods. These tests pin the new shapes so a regression
+    // — re-merging the params struct, or dropping a `required` field —
+    // breaks the test before it breaks production.
+
+    func testClickByElementParamsRequireStateIdAndIndex() throws {
+        // Missing both → fails to decode.
+        let missingBoth = #"{"pid":42,"windowId":7}"#.data(using: .utf8)!
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ComputerUseClickByElementParams.self, from: missingBoth)
+        )
+
+        // Missing just elementIndex → still fails.
+        let missingIndex = #"{"pid":42,"windowId":7,"stateId":"abc"}"#.data(using: .utf8)!
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ComputerUseClickByElementParams.self, from: missingIndex)
+        )
+
+        // Full payload → succeeds, fields preserved.
+        let full = #"{"pid":42,"windowId":7,"stateId":"abc","elementIndex":3,"action":"AXShowMenu"}"#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(ComputerUseClickByElementParams.self, from: full)
+        XCTAssertEqual(decoded.stateId, "abc")
+        XCTAssertEqual(decoded.elementIndex, 3)
+        XCTAssertEqual(decoded.action, "AXShowMenu")
+    }
+
+    func testClickByCoordsParamsRequireXAndY() throws {
+        let missingY = #"{"pid":42,"windowId":7,"x":100}"#.data(using: .utf8)!
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ComputerUseClickByCoordsParams.self, from: missingY)
+        )
+
+        let full = #"{"pid":42,"windowId":7,"x":116,"y":421,"count":2}"#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(ComputerUseClickByCoordsParams.self, from: full)
+        XCTAssertEqual(decoded.x, 116)
+        XCTAssertEqual(decoded.y, 421)
+        XCTAssertEqual(decoded.count, 2)
+    }
+
+    /// The exact payload shape the LLM used to send (per the user's
+    /// screenshot): both placeholder element fields AND real coords.
+    /// With the split, the byCoords decoder simply ignores the extra
+    /// `stateId`/`elementIndex` keys and routes to the coord-only
+    /// service path — no way to land in element mode by accident.
+    func testClickByCoordsIgnoresExtraneousElementFields() throws {
+        let mixedPayload = """
+        {"pid":56340,"windowId":291977,"x":116,"y":421,"stateId":"unused","elementIndex":-1,"count":1}
+        """.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(ComputerUseClickByCoordsParams.self, from: mixedPayload)
+        XCTAssertEqual(decoded.x, 116)
+        XCTAssertEqual(decoded.y, 421)
+        XCTAssertEqual(decoded.count, 1)
+        // No stateId/elementIndex on the struct — the wire layer cannot
+        // see them, so the service can never accidentally trip the
+        // StateCache and synthesize a `stateStale` error.
+    }
+
+    func testClickMethodNamesAreDistinct() {
+        XCTAssertEqual(RPCMethod.computerUseClickByElement, "computerUse.clickByElement")
+        XCTAssertEqual(RPCMethod.computerUseClickByCoords, "computerUse.clickByCoords")
+        XCTAssertNotEqual(
+            RPCMethod.computerUseClickByElement,
+            RPCMethod.computerUseClickByCoords
+        )
+    }
+
     // MARK: - Schema invariants
 
     func testProtocolVersionConstant() {

@@ -283,9 +283,16 @@ export const streamOpenaiResponses: StreamFunction<"openai-responses", OpenAIRes
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
+      // Idle watchdog: if codex stops emitting SSE for this long we abort
+      // the read instead of hanging forever. Concrete trigger we observed:
+      // an oversized `/responses` payload (accumulated tool-result
+      // screenshots) could leave the connection open with no events,
+      // making the agent loop wait indefinitely. Surfacing this as an
+      // `ui.error` is strictly better than the user staring at the
+      // shimmer until they cancel by hand.
       while (true) {
         if (options?.signal?.aborted) throw new DOMException("aborted", "AbortError");
-        const { value, done } = await reader.read();
+        const { value, done } = await readWithIdleTimeout(reader, RESPONSES_IDLE_TIMEOUT_MS);
         if (done) break;
         parser.feed(decoder.decode(value, { stream: true }));
       }
@@ -311,6 +318,39 @@ export const streamOpenaiResponses: StreamFunction<"openai-responses", OpenAIRes
 
   return stream;
 };
+
+/// 60s without a single SSE byte from codex is treated as a hung stream.
+/// Real reasoning + tool turns interleave keepalives / partial deltas at
+/// sub-second cadence; a full minute of silence is never normal traffic.
+const RESPONSES_IDLE_TIMEOUT_MS = 60_000;
+
+/// Exported for direct unit testing — exercising the 60s default by waiting
+/// in a real test would cripple the suite. Production paths only call this
+/// through the SSE read loop above.
+export async function readWithIdleTimeout<T>(
+  reader: { read(): Promise<{ value?: T; done: boolean }> },
+  timeoutMs: number,
+): Promise<{ value?: T; done: boolean }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const idle = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new Error(
+            `OpenAI Responses stream idle for ${timeoutMs}ms — aborted. ` +
+              `Likely cause: oversized request payload (e.g. accumulated tool-result screenshots) ` +
+              `causing the codex backend to stall without emitting events.`,
+          ),
+        ),
+      timeoutMs,
+    );
+  });
+  try {
+    return await Promise.race([reader.read(), idle]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 function cleanupPartials(output: AssistantMessage): void {
   for (const block of output.content as unknown as Array<Record<string, unknown>>) {

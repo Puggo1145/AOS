@@ -8,12 +8,14 @@ import { createReadTool } from "../src/agent/tools/read";
 import { createWriteTool } from "../src/agent/tools/write";
 import { createUpdateTool } from "../src/agent/tools/update";
 import { ToolUserError, type ToolExecContext } from "../src/agent/tools/types";
+import { getDefaultModel, PROVIDER_IDS } from "../src/llm";
 
 function ctx(signal?: AbortSignal): ToolExecContext {
   return {
     sessionId: "sess",
     turnId: "turn",
     toolCallId: "call",
+    model: getDefaultModel(PROVIDER_IDS.chatgptPlan),
     signal: signal ?? new AbortController().signal,
   };
 }

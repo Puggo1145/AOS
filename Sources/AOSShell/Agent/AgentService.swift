@@ -187,6 +187,76 @@ public struct ToolCallRecord: Identifiable, Sendable, Equatable {
     public var outputText: String?
 }
 
+/// "正在后台操作 X" indicator payload read by the Notch closed bar. Resolved
+/// from the in-flight `computer_use_*` tool call's `args.pid` via
+/// `NSRunningApplication`. We carry the icon (NSImage) and a one-word verb
+/// derived from the tool name so the indicator can render a glyph + label
+/// without re-doing the lookup on every redraw. Both fields are best-effort:
+/// if the target process exited mid-call we still surface the verb so the
+/// user knows *something* is happening, just without the icon.
+@MainActor
+public struct BackgroundOperation: @MainActor Equatable {
+    public let appName: String?
+    public let icon: NSImage?
+    /// Short present-continuous verb derived from the tool name. Used by the
+    /// closed-bar indicator's accessibility label and tooltip.
+    public let verb: String
+
+    public init(appName: String?, icon: NSImage?, verb: String) {
+        self.appName = appName
+        self.icon = icon
+        self.verb = verb
+    }
+
+    /// `NSImage` is not `Equatable` in a way SwiftUI's diff trusts — fall
+    /// back to identity equality plus name/verb so two snapshots of the same
+    /// in-flight call don't trigger spurious view rebuilds.
+    public static func == (lhs: BackgroundOperation, rhs: BackgroundOperation) -> Bool {
+        lhs.appName == rhs.appName && lhs.verb == rhs.verb && lhs.icon === rhs.icon
+    }
+
+    public static func resolve(toolName: String, args: JSONValue) -> BackgroundOperation? {
+        let pid = Self.extractPid(args: args)
+        let app: NSRunningApplication?
+        if let pid, pid > 0 {
+            app = NSRunningApplication(processIdentifier: pid)
+        } else {
+            app = nil
+        }
+        // No pid (computer_use_list_apps / computer_use_doctor) doesn't have a
+        // target app, but those calls are also typically too short to surface
+        // in the indicator. Skip them rather than render a nameless badge.
+        guard app != nil else { return nil }
+        return BackgroundOperation(
+            appName: app?.localizedName,
+            icon: app?.icon,
+            verb: Self.verb(for: toolName)
+        )
+    }
+
+    private static func extractPid(args: JSONValue) -> pid_t? {
+        guard case let .object(obj) = args, let raw = obj["pid"] else { return nil }
+        switch raw {
+        case .int(let i): return pid_t(i)
+        case .double(let d): return pid_t(d)
+        default: return nil
+        }
+    }
+
+    private static func verb(for tool: String) -> String {
+        switch tool {
+        case "computer_use_click_element", "computer_use_click_at": return "正在后台点击"
+        case "computer_use_drag": return "正在后台拖动"
+        case "computer_use_type_text": return "正在后台输入"
+        case "computer_use_press_key": return "正在后台按键"
+        case "computer_use_scroll": return "正在后台滚动"
+        case "computer_use_get_app_state": return "正在读取界面"
+        case "computer_use_list_windows": return "正在枚举窗口"
+        default: return "正在后台操作"
+        }
+    }
+}
+
 /// Display-side snapshot of the citedContext attached to a turn. The icon is
 /// reconstituted from the wire's base64 PNG so the UI can render it as an
 /// NSImage; behavior summaries are passed through as-is.
@@ -293,6 +363,25 @@ public final class AgentService {
     }
 
     public var currentSessionId: String? { sessionStore.activeId }
+
+    /// In-flight Computer Use target — the app the agent is operating in the
+    /// background right now. Drives the Notch closed-bar's "正在后台操作 X"
+    /// indicator. Resolved by walking the active mirror's `currentTurn` for
+    /// any tool call still in `.calling` whose name is a `computer_use_*`.
+    /// `nil` when no such call is active. We pick the LAST in-flight call so
+    /// concurrent tool fan-out (rare but possible) shows the most recent
+    /// target.
+    public var activeBackgroundOperation: BackgroundOperation? {
+        guard let mirror = sessionStore.activeMirror,
+              let turnId = mirror.currentTurn,
+              let turn = mirror.turns.last(where: { $0.id == turnId })
+        else { return nil }
+        let inflight = turn.toolCalls.last(where: {
+            $0.status == .calling && $0.name.hasPrefix("computer_use_")
+        })
+        guard let inflight else { return nil }
+        return BackgroundOperation.resolve(toolName: inflight.name, args: inflight.args)
+    }
 
     private let rpc: RPCClient
 

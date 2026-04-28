@@ -134,6 +134,15 @@ public enum RPCErrorCode {
     public static let agentContextOverflow: Int = -32300
     public static let agentConfigInvalid: Int = -32301
 
+    /// Computer Use segment (per docs/designs/rpc-protocol.md
+    /// "错误模型" allocation `-32100 ~ -32199`). The wire layer maps
+    /// `ComputerUseError` cases onto these codes; `error.data` carries
+    /// structured context per the same section's table.
+    public static let stateStale: Int = -32100
+    public static let operationFailed: Int = -32101
+    public static let windowMismatch: Int = -32102
+    public static let windowOffSpace: Int = -32103
+
     /// Session segment (session-manager errors). Per
     /// docs/designs/session-management.md "错误码新段" allocation `-32400 ~ -32499`.
     public static let unknownSession: Int = -32400
@@ -173,6 +182,16 @@ public enum RPCMethod {
     public static let configMarkOnboardingCompleted = "config.markOnboardingCompleted"
     public static let devContextGet = "dev.context.get"
     public static let devContextChanged = "dev.context.changed"
+    public static let computerUseListApps = "computerUse.listApps"
+    public static let computerUseListWindows = "computerUse.listWindows"
+    public static let computerUseGetAppState = "computerUse.getAppState"
+    public static let computerUseClickByElement = "computerUse.clickByElement"
+    public static let computerUseClickByCoords = "computerUse.clickByCoords"
+    public static let computerUseDrag = "computerUse.drag"
+    public static let computerUseTypeText = "computerUse.typeText"
+    public static let computerUsePressKey = "computerUse.pressKey"
+    public static let computerUseScroll = "computerUse.scroll"
+    public static let computerUseDoctor = "computerUse.doctor"
     public static let sessionCreate = "session.create"
     public static let sessionList = "session.list"
     public static let sessionActivate = "session.activate"

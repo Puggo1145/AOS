@@ -75,6 +75,12 @@ export const RPCErrorCode = {
   // agent.* segment — agent-loop-level failures
   agentContextOverflow: -32300,
   agentConfigInvalid: -32301,
+  // computerUse.* segment — per docs/designs/rpc-protocol.md "错误模型"
+  // table. Wire layer maps Kit `ComputerUseError` cases onto these codes.
+  stateStale: -32100,
+  operationFailed: -32101,
+  windowMismatch: -32102,
+  windowOffSpace: -32103,
   // session.* segment
   unknownSession: -32400,
   /// Reserved: emitted when an RPC implicitly needs an active session and
@@ -128,6 +134,16 @@ export const RPCMethod = {
   configMarkOnboardingCompleted: "config.markOnboardingCompleted",
   devContextGet: "dev.context.get",
   devContextChanged: "dev.context.changed",
+  computerUseListApps: "computerUse.listApps",
+  computerUseListWindows: "computerUse.listWindows",
+  computerUseGetAppState: "computerUse.getAppState",
+  computerUseClickByElement: "computerUse.clickByElement",
+  computerUseClickByCoords: "computerUse.clickByCoords",
+  computerUseDrag: "computerUse.drag",
+  computerUseTypeText: "computerUse.typeText",
+  computerUsePressKey: "computerUse.pressKey",
+  computerUseScroll: "computerUse.scroll",
+  computerUseDoctor: "computerUse.doctor",
   sessionCreate: "session.create",
   sessionList: "session.list",
   sessionActivate: "session.activate",
@@ -686,3 +702,175 @@ export interface SessionActivatedNotificationParams {
 }
 
 export type SessionListChangedNotificationParams = Record<string, never>;
+
+// ---------------------------------------------------------------------------
+// computerUse.* — Bun→Shell namespace
+//
+// Per docs/designs/computer-use.md §"RPC 方法" and rpc-protocol.md
+// §"computerUse.*". The agent loop calls `dispatcher.request("computerUse.*",
+// params)` and waits for a typed result; the Shell-hosted Kit performs the
+// background macOS operation and returns a structured response.
+//
+// Common conventions:
+//   - `pid` is `number` on the wire (matches Swift Int32 / macOS pid_t)
+//   - `windowId` is `number` (CGWindowID, fits in UInt32)
+//   - All coordinates are window-local screenshot pixels (top-left origin
+//     of the PNG returned by `getAppState`); the Kit translates internally
+//   - `(pid, windowId)` mismatch ⇒ `windowMismatch` (-32102)
+//   - `stateId` TTL = 30s; expiry / element invalidation ⇒ `stateStale`
+//
+// Capture-mode behaviour for `getAppState`:
+//   - "som"     (default) AX tree + screenshot
+//   - "vision"            screenshot only — no Accessibility required
+//   - "ax"                AX tree only — no Screen Recording required
+// ---------------------------------------------------------------------------
+
+export interface ComputerUseAppInfo {
+  pid: number;
+  bundleId: string | null;
+  name: string;
+  active: boolean;
+}
+
+export interface ComputerUseWindowBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface ComputerUseWindowInfo {
+  windowId: number;
+  title: string;
+  bounds: ComputerUseWindowBounds;
+  isOnScreen: boolean;
+  onCurrentSpace: boolean;
+  layer: number;
+}
+
+export interface ComputerUseScreenshot {
+  imageBase64: string;
+  format: "png" | "jpeg";
+  width: number;
+  height: number;
+  scaleFactor: number;
+  originalWidth?: number | null;
+  originalHeight?: number | null;
+}
+
+export type ComputerUseListAppsParams = Record<string, never>;
+export interface ComputerUseListAppsResult {
+  apps: ComputerUseAppInfo[];
+}
+
+export interface ComputerUseListWindowsParams {
+  pid: number;
+}
+export interface ComputerUseListWindowsResult {
+  windows: ComputerUseWindowInfo[];
+}
+
+export interface ComputerUseGetAppStateParams {
+  pid: number;
+  windowId: number;
+  captureMode?: "som" | "vision" | "ax" | null;
+  maxImageDimension?: number | null;
+}
+export interface ComputerUseGetAppStateResult {
+  stateId: string | null;
+  bundleId: string | null;
+  appName: string | null;
+  axTree: string | null;
+  elementCount: number | null;
+  screenshot: ComputerUseScreenshot | null;
+}
+
+/// Element-mode click. Pre-condition: caller holds a fresh `stateId` from
+/// `computerUse.getAppState` and an `elementIndex` valid for that snapshot.
+export interface ComputerUseClickByElementParams {
+  pid: number;
+  windowId: number;
+  stateId: string;
+  elementIndex: number;
+  action?: string | null;
+}
+
+/// Coordinate-mode click. Window-local screenshot pixels (top-left origin).
+/// Cannot fail with `stateStale` — there's no snapshot interaction.
+export interface ComputerUseClickByCoordsParams {
+  pid: number;
+  windowId: number;
+  x: number;
+  y: number;
+  count?: number | null;
+  modifiers?: string[] | null;
+}
+
+export interface ComputerUseClickResult {
+  success: boolean;
+  /// "axAction" | "axAttribute" | "eventPost" — which degradation layer landed.
+  method: string;
+}
+
+export interface ComputerUsePoint {
+  x: number;
+  y: number;
+}
+export interface ComputerUseDragParams {
+  pid: number;
+  windowId: number;
+  from: ComputerUsePoint;
+  to: ComputerUsePoint;
+}
+export interface ComputerUseDragResult {
+  success: boolean;
+}
+
+export interface ComputerUseTypeTextParams {
+  pid: number;
+  windowId: number;
+  text: string;
+}
+export interface ComputerUseTypeTextResult {
+  success: boolean;
+}
+
+export interface ComputerUsePressKeyParams {
+  pid: number;
+  windowId: number;
+  key: string;
+  modifiers?: string[] | null;
+}
+export interface ComputerUsePressKeyResult {
+  success: boolean;
+}
+
+export interface ComputerUseScrollParams {
+  pid: number;
+  windowId: number;
+  x: number;
+  y: number;
+  /// Pixel-quantized horizontal/vertical deltas. Positive y scrolls
+  /// content up; positive x scrolls content right (CGEvent convention).
+  dx: number;
+  dy: number;
+}
+export interface ComputerUseScrollResult {
+  success: boolean;
+}
+
+export type ComputerUseDoctorParams = Record<string, never>;
+export interface ComputerUseSkyLightStatus {
+  postToPid: boolean;
+  authMessage: boolean;
+  focusWithoutRaise: boolean;
+  windowLocation: boolean;
+  spaces: boolean;
+  getWindow: boolean;
+}
+export interface ComputerUseDoctorResult {
+  accessibility: boolean;
+  screenRecording: boolean;
+  automation: boolean;
+  skyLightSPI: ComputerUseSkyLightStatus;
+}

@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import AOSRPCSchema
 
 // MARK: - ToolUIRegistry
@@ -99,6 +100,20 @@ public enum ToolUIRegistry {
         register(name: "read", presenter: readPresenter())
         register(name: "write", presenter: writePresenter())
         register(name: "update", presenter: updatePresenter())
+        // Computer Use family — humane labels rooted in the target app's name.
+        // All operate the target in the background (no focus steal); the row
+        // wording leans on that ("clicked in Slack") to make it legible to the
+        // user that the agent is working OFF-screen for them.
+        register(name: "computer_use_list_apps", presenter: cuListAppsPresenter())
+        register(name: "computer_use_list_windows", presenter: cuListWindowsPresenter())
+        register(name: "computer_use_get_app_state", presenter: cuGetAppStatePresenter())
+        register(name: "computer_use_click_element", presenter: cuClickPresenter())
+        register(name: "computer_use_click_at", presenter: cuClickPresenter())
+        register(name: "computer_use_drag", presenter: cuDragPresenter())
+        register(name: "computer_use_type_text", presenter: cuTypeTextPresenter())
+        register(name: "computer_use_press_key", presenter: cuPressKeyPresenter())
+        register(name: "computer_use_scroll", presenter: cuScrollPresenter())
+        register(name: "computer_use_doctor", presenter: cuDoctorPresenter())
     }
 
     // MARK: - Built-in presenters
@@ -252,4 +267,200 @@ private func fileToolLabel(verb: String, args: JSONValue) -> String {
     guard let path = fileToolPath(args), !path.isEmpty else { return verb }
     let base = (path as NSString).lastPathComponent
     return base.isEmpty ? verb : "\(verb) \(base)"
+}
+
+// MARK: - Computer Use helpers
+
+/// Resolve the target app's display name from a tool call's `args.pid`.
+/// `NSRunningApplication` lookup is sync + cheap; if the process has already
+/// exited (rare — the agent only operates apps that are running) we return
+/// `nil` so the caller can fall back to the bare verb.
+@MainActor
+func computerUseAppName(args: AOSRPCSchema.JSONValue) -> String? {
+    let pid: pid_t?
+    if case let .object(obj) = args, let raw = obj["pid"] {
+        switch raw {
+        case .int(let i): pid = pid_t(i)
+        case .double(let d): pid = pid_t(d)
+        default: pid = nil
+        }
+    } else {
+        pid = nil
+    }
+    guard let pid, pid > 0,
+          let app = NSRunningApplication(processIdentifier: pid)
+    else { return nil }
+    return app.localizedName
+}
+
+/// "<verb> in Slack" if we resolved the app, else the bare verb. The "in"
+/// reads as "operating ON Slack from the background" — matches the
+/// BACKGROUND_NOTE on every computer_use tool.
+private func cuLabel(verb: String, args: AOSRPCSchema.JSONValue) -> String {
+    if let name = MainActor.assumeIsolated({ computerUseAppName(args: args) }) {
+        return "\(verb) in \(name)"
+    }
+    return verb
+}
+
+/// Pretty-print the args JSON for the expanded body. Computer use args are
+/// small (pid + windowId + a few primitives), so a stable two-space dump is
+/// readable without truncation. We don't strip pid / windowId — they are
+/// useful for debugging which window the agent picked.
+private func cuArgsBody(_ args: AOSRPCSchema.JSONValue) -> String {
+    do {
+        let data = try JSONEncoder.prettyForUI.encode(args)
+        return String(data: data, encoding: .utf8) ?? ""
+    } catch {
+        return ""
+    }
+}
+
+private extension JSONEncoder {
+    /// Shared pretty encoder for tool-call arg dumps. Stable key order keeps
+    /// the rendered body diff-friendly across reads.
+    static let prettyForUI: JSONEncoder = {
+        let e = JSONEncoder()
+        e.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return e
+    }()
+}
+
+private func cuListAppsPresenter() -> ToolUIPresenter {
+    ToolUIPresenter(
+        label: { _, isCalling in isCalling ? "listing apps" : "listed apps" },
+        callingBody: { _ in nil },
+        resultBody: { _, output, _ in output },
+        icon: "app.dashed"
+    )
+}
+
+private func cuListWindowsPresenter() -> ToolUIPresenter {
+    ToolUIPresenter(
+        label: { args, isCalling in
+            cuLabel(verb: isCalling ? "listing windows" : "listed windows", args: args)
+        },
+        callingBody: { args in cuArgsBody(args) },
+        resultBody: { _, output, _ in output },
+        icon: "macwindow.on.rectangle"
+    )
+}
+
+private func cuGetAppStatePresenter() -> ToolUIPresenter {
+    ToolUIPresenter(
+        label: { args, isCalling in
+            cuLabel(verb: isCalling ? "reading state" : "read state", args: args)
+        },
+        callingBody: { args in cuArgsBody(args) },
+        resultBody: { _, output, _ in output },
+        icon: "eye"
+    )
+}
+
+private func cuClickPresenter() -> ToolUIPresenter {
+    ToolUIPresenter(
+        label: { args, isCalling in
+            cuLabel(verb: isCalling ? "clicking" : "clicked", args: args)
+        },
+        callingBody: { args in cuArgsBody(args) },
+        resultBody: { args, output, _ in
+            // Result already says which degradation layer landed; prefix the
+            // arg dump so the row shows what the model targeted plus the
+            // outcome together.
+            let body = cuArgsBody(args)
+            return body.isEmpty ? output : "\(body)\n\n\(output)"
+        },
+        icon: "cursorarrow.click"
+    )
+}
+
+private func cuDragPresenter() -> ToolUIPresenter {
+    ToolUIPresenter(
+        label: { args, isCalling in
+            cuLabel(verb: isCalling ? "dragging" : "dragged", args: args)
+        },
+        callingBody: { args in cuArgsBody(args) },
+        resultBody: { args, output, _ in
+            let body = cuArgsBody(args)
+            return body.isEmpty ? output : "\(body)\n\n\(output)"
+        },
+        icon: "hand.draw"
+    )
+}
+
+private func cuTypeTextPresenter() -> ToolUIPresenter {
+    ToolUIPresenter(
+        label: { args, isCalling in
+            cuLabel(verb: isCalling ? "typing" : "typed", args: args)
+        },
+        // While typing show the verbatim text the model is sending — that's
+        // what the user wants to scan against their mental model. Cap at a
+        // generous 4KB so a runaway paste doesn't dominate the panel.
+        callingBody: { args in
+            guard case let .object(obj) = args,
+                  case let .string(text) = obj["text"]
+            else { return cuArgsBody(args) }
+            return text.count > 4_096 ? String(text.prefix(4_096)) + "…" : text
+        },
+        resultBody: { args, output, _ in
+            guard case let .object(obj) = args,
+                  case let .string(text) = obj["text"]
+            else { return output }
+            let preview = text.count > 4_096 ? String(text.prefix(4_096)) + "…" : text
+            return "\"\(preview)\"\n\n\(output)"
+        },
+        icon: "keyboard"
+    )
+}
+
+private func cuPressKeyPresenter() -> ToolUIPresenter {
+    ToolUIPresenter(
+        label: { args, isCalling in
+            // Surface the chord (e.g. "cmd+shift+a") in the row label — these
+            // are short and meaningful at a glance, unlike a free-text field.
+            let chord = chordString(args: args)
+            let verb = isCalling ? "pressing" : "pressed"
+            let withChord = chord.isEmpty ? verb : "\(verb) \(chord)"
+            return cuLabel(verb: withChord, args: args)
+        },
+        callingBody: { args in cuArgsBody(args) },
+        resultBody: { args, output, _ in
+            let body = cuArgsBody(args)
+            return body.isEmpty ? output : "\(body)\n\n\(output)"
+        },
+        icon: "command"
+    )
+}
+
+private func chordString(args: AOSRPCSchema.JSONValue) -> String {
+    guard case let .object(obj) = args else { return "" }
+    var parts: [String] = []
+    if case let .array(mods) = obj["modifiers"] ?? .null {
+        for m in mods { if case let .string(s) = m { parts.append(s) } }
+    }
+    if case let .string(key) = obj["key"] ?? .null { parts.append(key) }
+    return parts.joined(separator: "+")
+}
+
+private func cuScrollPresenter() -> ToolUIPresenter {
+    ToolUIPresenter(
+        label: { args, isCalling in
+            cuLabel(verb: isCalling ? "scrolling" : "scrolled", args: args)
+        },
+        callingBody: { args in cuArgsBody(args) },
+        resultBody: { args, output, _ in
+            let body = cuArgsBody(args)
+            return body.isEmpty ? output : "\(body)\n\n\(output)"
+        },
+        icon: "scroll"
+    )
+}
+
+private func cuDoctorPresenter() -> ToolUIPresenter {
+    ToolUIPresenter(
+        label: { _, isCalling in isCalling ? "checking computer-use" : "checked computer-use" },
+        callingBody: { _ in nil },
+        resultBody: { _, output, _ in output },
+        icon: "stethoscope"
+    )
 }
