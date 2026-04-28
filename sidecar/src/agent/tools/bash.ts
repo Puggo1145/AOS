@@ -21,9 +21,8 @@ const MAX_OUTPUT_LINES = 200;
 
 /// Default hard timeout when the model omits `timeout`. AOS runs as a
 /// background OS-level helper; an unbounded `tail -f` / `sleep 999` would
-/// pin the turn forever (MAX_TOOL_ROUNDS does not help once the loop is
-/// awaiting tool execution). 120s is generous for typical commands and
-/// short enough that a runaway is recoverable without manual intervention.
+/// pin the turn forever. 120s is generous for typical commands and short
+/// enough that a runaway is recoverable without manual intervention.
 const DEFAULT_TIMEOUT_SECONDS = 120;
 /// Hard ceiling on user-supplied `timeout`. The model can ask for a longer
 /// budget for genuine long-runners, but not unbounded — same reliability

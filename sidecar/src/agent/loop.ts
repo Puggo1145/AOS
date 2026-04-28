@@ -24,8 +24,12 @@
 //   call from that assistant message, push each result back into the
 //   conversation as a `ToolResultMessage`, and re-issue `streamSimple` with
 //   the updated history. Loop until the model returns `stopReason: "stop"`
-//   (terminal) or hits `MAX_TOOL_ROUNDS` (safety cap; surfaces as an
-//   internal error to break runaway tool-call cycles).
+//   (terminal) or hits `MAX_CONSECUTIVE_TOOL_ROUNDS` consecutive tool-only
+//   rounds without the assistant emitting any visible text (safety cap;
+//   surfaces as an internal error to break runaway tool-call cycles).
+//   Visible assistant text resets the counter; thinking does NOT — only
+//   user-facing speech proves the model is still narrating progress rather
+//   than spinning silently.
 //
 // Per docs/designs/llm-provider.md §"包边界" the loop only depends on the
 // public surface re-exported from `../llm`.
@@ -67,10 +71,14 @@ import { toolRegistry, ToolUserError, type ToolHandler, type ToolExecResult } fr
 import { buildSystemPrompt } from "./system-prompt";
 import { logger } from "../log";
 
-/// Hard ceiling on tool-call rounds inside a single turn. Prevents a model
-/// stuck in a self-call cycle from looping forever. 25 is generous — real
-/// tasks rarely exceed 5–10. Surfaces as `internalError` when hit.
-const MAX_TOOL_ROUNDS = 25;
+/// Hard ceiling on *consecutive* tool-call rounds in which the assistant
+/// produced no visible text. Prevents a model stuck in a silent self-call
+/// cycle from looping forever, while letting genuine long workflows proceed
+/// as long as the model keeps narrating progress to the user between tool
+/// bursts. Thinking is intentionally NOT counted as narration — only
+/// user-visible text resets the counter. Surfaces as `internalError` when
+/// hit.
+const MAX_CONSECUTIVE_TOOL_ROUNDS = 25;
 
 // ---------------------------------------------------------------------------
 // Test injection point.
@@ -369,7 +377,12 @@ export async function runTurn(
   };
 
   try {
-    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    // Counts tool rounds since the assistant last emitted visible text.
+    // Reset on any round whose final AssistantMessage carries a non-empty
+    // text content block; incremented on each tool-bearing round. When it
+    // exceeds MAX_CONSECUTIVE_TOOL_ROUNDS the turn bails as a runaway loop.
+    let consecutiveSilentToolRounds = 0;
+    while (true) {
       const messages = convo.llmMessages();
 
       // Dev-mode observability: capture the exact (systemPrompt, messages)
@@ -537,6 +550,33 @@ export async function runTurn(
         return;
       }
 
+      // Update the consecutive-silent-tool-round counter. Visible text in
+      // the round just streamed proves the assistant is still narrating
+      // progress to the user — reset and let the loop continue. Thinking
+      // blocks are deliberately ignored: silent reasoning between tool
+      // bursts is the exact failure mode this cap exists to break.
+      const spokeThisRound = final.content.some(
+        (c) => c.type === "text" && c.text.trim().length > 0,
+      );
+      if (spokeThisRound) {
+        consecutiveSilentToolRounds = 0;
+      } else {
+        consecutiveSilentToolRounds++;
+      }
+      if (consecutiveSilentToolRounds > MAX_CONSECUTIVE_TOOL_ROUNDS) {
+        closeThinkingIfOpen();
+        const overflowMsg = `tool-call budget exceeded (${MAX_CONSECUTIVE_TOOL_ROUNDS} consecutive tool rounds without assistant text)`;
+        if (convo.setError(turnId, RPCErrorCode.internalError, overflowMsg)) {
+          dispatcher.notify(RPCMethod.uiError, {
+            sessionId,
+            turnId,
+            code: RPCErrorCode.internalError,
+            message: overflowMsg,
+          });
+        }
+        return;
+      }
+
       // Tool round. Switch the visible status so the Notch UI shows a
       // "waiting" affordance while tools execute. We also close any open
       // thinking block here — between rounds, reasoning ends and a fresh
@@ -636,19 +676,6 @@ export async function runTurn(
       // or a terminal text response.
       convo.setStatus(turnId, "working");
       dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId, status: "working" });
-    }
-
-    // Tool-round budget exhausted — bail loud. This is almost always a
-    // model loop, not a real workload.
-    closeThinkingIfOpen();
-    const overflowMsg = `tool-call budget exceeded (${MAX_TOOL_ROUNDS} rounds)`;
-    if (convo.setError(turnId, RPCErrorCode.internalError, overflowMsg)) {
-      dispatcher.notify(RPCMethod.uiError, {
-        sessionId,
-        turnId,
-        code: RPCErrorCode.internalError,
-        message: overflowMsg,
-      });
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
