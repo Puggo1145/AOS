@@ -93,7 +93,7 @@ export class Conversation {
       prompt: input.prompt,
       citedContext: input.citedContext,
       reply: "",
-      status: "thinking",
+      status: "working",
       startedAt,
       messageStart: start,
       messageEnd: this._messages.length,
@@ -170,7 +170,7 @@ export class Conversation {
   /// Walks turns in order and pulls each turn's slice of `_messages`,
   /// skipping turns whose final status is `error` or `cancelled` — those
   /// shouldn't pollute the next attempt's context. In-flight turns
-  /// (`thinking`/`working`/`waiting`) and successfully completed turns
+  /// (`working`/`waiting`) and successfully completed turns
   /// (`done`) both contribute their full message slice.
   llmMessages(): Message[] {
     const out: Message[] = [];

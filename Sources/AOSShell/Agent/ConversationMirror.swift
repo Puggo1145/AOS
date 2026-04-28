@@ -30,14 +30,14 @@ public final class ConversationMirror {
 
     private var doneRevertTask: Task<Void, Never>?
     private var errorRevertTask: Task<Void, Never>?
-    /// Debounce for `.working` transitions. The sidecar emits
-    /// `ui.status tool_calling` before each tool round and `thinking` again
+    /// Debounce for `.waiting` transitions. The sidecar emits
+    /// `ui.status waiting` before each tool round and `working` again
     /// after the round completes; for fast tools (local file ops, small
-    /// subprocesses) this window is milliseconds and the working glyph would
-    /// flash visibly between two `:/` states. We delay applying `.working`
+    /// subprocesses) this window is milliseconds and the waiting glyph would
+    /// flash visibly between two `:/` states. We delay applying `.waiting`
     /// so only tools that actually take time produce the visible swap.
-    private var workingDebounceTask: Task<Void, Never>?
-    private static let workingDebounceNanos: UInt64 = 250_000_000
+    private var waitingDebounceTask: Task<Void, Never>?
+    private static let waitingDebounceNanos: UInt64 = 250_000_000
 
     public init(sessionId: String) {
         self.sessionId = sessionId
@@ -64,9 +64,9 @@ public final class ConversationMirror {
             turns.append(local)
         }
         currentTurn = p.turn.id
-        status = .thinking
+        status = .working
         cancelReverts()
-        cancelWorkingDebounce()
+        cancelWaitingDebounce()
     }
 
     public func applyConversationReset() {
@@ -75,7 +75,7 @@ public final class ConversationMirror {
         status = .idle
         lastErrorMessage = nil
         cancelReverts()
-        cancelWorkingDebounce()
+        cancelWaitingDebounce()
     }
 
     public func applyToken(_ p: UITokenParams) {
@@ -247,15 +247,17 @@ public final class ConversationMirror {
     public func applyStatus(_ p: UIStatusParams) {
         guard let idx = turns.lastIndex(where: { $0.id == p.turnId }) else { return }
         let mapped = AgentStatus.from(uiStatus: p.status)
-        // Any incoming status — including a follow-up `thinking` that
-        // supersedes a still-pending tool_calling — cancels the debounce.
-        cancelWorkingDebounce()
-        if mapped == .working {
-            scheduleWorkingDebounce(turnId: p.turnId)
+        cancelWaitingDebounce()
+        // Semantic state is always applied immediately — the turn record
+        // must reflect the sidecar's authoritative status at all times.
+        turns[idx].status = mapped
+        if mapped == .waiting {
+            // Display projection is debounced: fast tools emit waiting →
+            // working back-to-back; showing `:?` for milliseconds is flicker.
+            scheduleWaitingDebounce()
             cancelReverts()
             return
         }
-        turns[idx].status = mapped
         status = mapped
         switch p.status {
         case .done: scheduleDoneRevert()
@@ -268,7 +270,7 @@ public final class ConversationMirror {
         turns[idx].status = .error
         turns[idx].errorMessage = p.message
         status = .error
-        cancelWorkingDebounce()
+        cancelWaitingDebounce()
         scheduleErrorRevert()
     }
 
@@ -341,14 +343,13 @@ public final class ConversationMirror {
         // Sidecar drives `currentTurn` via `conversation.turnStarted`; on first
         // activate of a session that already has in-flight turns we surface the
         // last non-terminal one so the closed-bar emoji is meaningful.
-        currentTurn = merged.last(where: {
-            $0.status == .thinking || $0.status == .working || $0.status == .waiting
-        })?.id
-        // Resting glyph is the safer default; status will flip on the next
-        // notification if a turn is genuinely live.
-        status = currentTurn == nil ? .idle : .thinking
+        let liveTurn = merged.last(where: {
+            $0.status == .working || $0.status == .waiting
+        })
+        currentTurn = liveTurn?.id
+        status = liveTurn?.status ?? .idle
         cancelReverts()
-        cancelWorkingDebounce()
+        cancelWaitingDebounce()
     }
 
     // MARK: - Revert timers
@@ -378,21 +379,19 @@ public final class ConversationMirror {
         errorRevertTask = nil
     }
 
-    private func scheduleWorkingDebounce(turnId: String) {
-        workingDebounceTask?.cancel()
-        workingDebounceTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: Self.workingDebounceNanos)
+    private func scheduleWaitingDebounce() {
+        waitingDebounceTask?.cancel()
+        waitingDebounceTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.waitingDebounceNanos)
             guard !Task.isCancelled, let self else { return }
             await MainActor.run {
-                guard let i = self.turns.lastIndex(where: { $0.id == turnId }) else { return }
-                self.turns[i].status = .working
-                self.status = .working
+                self.status = .waiting
             }
         }
     }
 
-    private func cancelWorkingDebounce() {
-        workingDebounceTask?.cancel()
-        workingDebounceTask = nil
+    private func cancelWaitingDebounce() {
+        waitingDebounceTask?.cancel()
+        waitingDebounceTask = nil
     }
 }

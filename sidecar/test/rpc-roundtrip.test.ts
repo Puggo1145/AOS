@@ -140,7 +140,7 @@ test("conversation.turnStarted fixture roundtrips byte-equal", () => {
   const { parsed } = loadFixture("conversation.turnStarted.json");
   const note = parsed as RPCNotification<ConversationTurnStartedParams>;
   expect(note.method).toBe(RPCMethod.conversationTurnStarted);
-  expect(note.params.turn.status).toBe("thinking");
+  expect(note.params.turn.status).toBe("working");
 });
 
 test("conversation.reset fixture roundtrips byte-equal", () => {
@@ -253,7 +253,7 @@ test("ui.status fixture roundtrips byte-equal", () => {
   const { parsed } = loadFixture("ui.status.json");
   const note = parsed as RPCNotification<UIStatusParams>;
   expect(note.method).toBe(RPCMethod.uiStatus);
-  expect(["thinking", "tool_calling", "waiting_input", "done"]).toContain(
+  expect(["working", "waiting", "done"]).toContain(
     note.params.status
   );
 });

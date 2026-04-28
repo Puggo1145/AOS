@@ -50,7 +50,7 @@ struct AgentServiceTests {
         #expect(s.turns.isEmpty)
     }
 
-    @Test("conversation.turnStarted appends a turn and flips status to thinking")
+    @Test("conversation.turnStarted appends a turn and flips status to working")
     func turnStartedAppends() {
         let s = makeService()
         s._testTurnStarted(id: "T1", prompt: "hi")
@@ -58,44 +58,43 @@ struct AgentServiceTests {
         #expect(s.turns[0].id == "T1")
         #expect(s.turns[0].prompt == "hi")
         #expect(s.currentTurn == "T1")
-        #expect(s.status == .thinking)
+        #expect(s.status == .working)
     }
 
     @Test("ui.status maps to AgentStatus and updates the matching turn")
     func statusMapping() async throws {
         let s = makeService()
         s._testTurnStarted(id: "T1")
-        s.handleStatus(UIStatusParams(sessionId: "S", turnId: "T1", status: .thinking))
-        #expect(s.status == .thinking)
-        #expect(s.turns.last?.status == .thinking)
-        // tool_calling is debounced (~250ms) so a fast tool round doesn't
-        // produce a visible `X(` flicker between two `:/` states. After the
-        // debounce window elapses without a superseding status, the working
-        // glyph lands.
-        s.handleStatus(UIStatusParams(sessionId: "S", turnId: "T1", status: .toolCalling))
-        #expect(s.status == .thinking)
-        #expect(s.turns.last?.status == .thinking)
-        try await Task.sleep(nanoseconds: 400_000_000)
+        s.handleStatus(UIStatusParams(sessionId: "S", turnId: "T1", status: .working))
         #expect(s.status == .working)
         #expect(s.turns.last?.status == .working)
-        s.handleStatus(UIStatusParams(sessionId: "S", turnId: "T1", status: .waitingInput))
-        #expect(s.status == .waiting)
+        // Turn status is always set immediately — the semantic state must
+        // reflect the sidecar's authoritative value. The display projection
+        // (`status`) is debounced to suppress flicker for fast tools.
+        s.handleStatus(UIStatusParams(sessionId: "S", turnId: "T1", status: .waiting))
         #expect(s.turns.last?.status == .waiting)
+        #expect(s.status == .working)
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(s.status == .waiting)
     }
 
-    @Test("fast tool_calling → thinking does not flicker .working into the UI")
-    func toolCallingDebounceCancelled() async throws {
+    @Test("fast waiting → working does not flicker .waiting into the display")
+    func waitingDebounceCancelled() async throws {
         let s = makeService()
         s._testTurnStarted(id: "T1")
-        s.handleStatus(UIStatusParams(sessionId: "S", turnId: "T1", status: .toolCalling))
+        s.handleStatus(UIStatusParams(sessionId: "S", turnId: "T1", status: .waiting))
+        // Turn status is immediately `.waiting` — semantic state is never delayed.
+        #expect(s.turns.last?.status == .waiting)
+        // Display status stays `.working` during the debounce window.
+        #expect(s.status == .working)
         // Superseding status arrives well within the 250ms debounce window —
-        // matches the "fast local tool" path on the sidecar (tool_calling and
-        // thinking emit back-to-back with only millisecond-scale work between).
+        // matches the "fast local tool" path on the sidecar.
         try await Task.sleep(nanoseconds: 50_000_000)
-        s.handleStatus(UIStatusParams(sessionId: "S", turnId: "T1", status: .thinking))
+        s.handleStatus(UIStatusParams(sessionId: "S", turnId: "T1", status: .working))
         try await Task.sleep(nanoseconds: 400_000_000)
-        #expect(s.status == .thinking)
-        #expect(s.turns.last?.status == .thinking)
+        // Display never showed `.waiting` — debounce cancelled in time.
+        #expect(s.status == .working)
+        #expect(s.turns.last?.status == .working)
     }
 
     @Test("done auto-reverts global status to idle within ~1.5s but keeps the turn")

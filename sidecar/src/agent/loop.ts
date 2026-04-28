@@ -294,7 +294,7 @@ export async function runTurn(
   const { sessionId, turnId, signal } = params;
   const observer = params.observer ?? defaultContextObserver;
 
-  dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId, status: "thinking" });
+  dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId, status: "working" });
 
   let model: Model<Api>;
   let cfg: ReturnType<typeof readUserConfig>;
@@ -537,12 +537,13 @@ export async function runTurn(
         return;
       }
 
-      // Tool round. Switch the visible status so the Notch UI can swap to
-      // a "tool calling" affordance. We also close any open thinking block
-      // here — between rounds, reasoning ends and a fresh trace will open
-      // on the next streamSimple call if the model resumes thinking.
+      // Tool round. Switch the visible status so the Notch UI shows a
+      // "waiting" affordance while tools execute. We also close any open
+      // thinking block here — between rounds, reasoning ends and a fresh
+      // trace will open on the next streamSimple call if the model resumes.
       closeThinkingIfOpen();
-      dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId, status: "tool_calling" });
+      convo.setStatus(turnId, "waiting");
+      dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId, status: "waiting" });
 
       // Sequential execution per s02. Each tool gets the parent turn's
       // signal so `agent.cancel` propagates into long-running subprocesses.
@@ -633,7 +634,8 @@ export async function runTurn(
       // Loop back: the next round's `streamSimple` will see the appended
       // tool results in `llmMessages()` and either produce more tool calls
       // or a terminal text response.
-      dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId, status: "thinking" });
+      convo.setStatus(turnId, "working");
+      dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId, status: "working" });
     }
 
     // Tool-round budget exhausted — bail loud. This is almost always a

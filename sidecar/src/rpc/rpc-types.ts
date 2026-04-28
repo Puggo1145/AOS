@@ -224,7 +224,7 @@ export interface AgentResetResult {
 //   - `conversation.turnStarted { turn }` fires once per `agent.submit` once
 //     the turn has been registered in the sidecar's Conversation. `turn`
 //     carries the snapshot the sidecar persisted (id, prompt, citedContext,
-//     initial empty reply, status: thinking).
+//     initial empty reply, status: working).
 //   - `conversation.reset` fires after `agent.reset` clears the store.
 //   - reply token deltas continue to flow over the existing `ui.token`
 //     notification so tight streaming doesn't pay a serialization cost on
@@ -233,7 +233,6 @@ export interface AgentResetResult {
 // ---------------------------------------------------------------------------
 
 export type TurnStatus =
-  | "thinking"
   | "working"
   | "waiting"
   | "done"
@@ -387,7 +386,7 @@ export type UIToolCallParams =
       errorMessage: string;
     };
 
-export type UIStatus = "thinking" | "tool_calling" | "waiting_input" | "done";
+export type UIStatus = "working" | "waiting" | "done";
 
 export interface UIStatusParams {
   sessionId: string;

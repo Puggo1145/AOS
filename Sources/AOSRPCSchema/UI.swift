@@ -357,9 +357,8 @@ public struct UIToolCallParams: Codable, Sendable, Equatable {
 
 /// Discrete agent status pushed by the sidecar agent loop.
 public enum UIStatus: String, Codable, Sendable, Equatable, CaseIterable {
-    case thinking
-    case toolCalling = "tool_calling"
-    case waitingInput = "waiting_input"
+    case working
+    case waiting
     case done
 }
 

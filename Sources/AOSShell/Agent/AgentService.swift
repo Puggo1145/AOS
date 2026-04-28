@@ -12,7 +12,6 @@ import AOSRPCSchema
 public enum AgentStatus: Sendable, Equatable {
     case idle
     case listening
-    case thinking
     case working
     case done
     case waiting
@@ -34,10 +33,9 @@ public enum AgentStatus: Sendable, Equatable {
     /// states the sidecar never emits.
     public static func from(uiStatus: UIStatus) -> AgentStatus {
         switch uiStatus {
-        case .thinking:     return .thinking
-        case .toolCalling:  return .working
-        case .waitingInput: return .waiting
-        case .done:         return .done
+        case .working:  return .working
+        case .waiting:  return .waiting
+        case .done:     return .done
         }
     }
 
@@ -47,11 +45,10 @@ public enum AgentStatus: Sendable, Equatable {
     /// goes back to its resting state.
     public static func from(turnStatus: TurnStatus) -> AgentStatus {
         switch turnStatus {
-        case .thinking: return .thinking
-        case .working:  return .working
-        case .waiting:  return .waiting
-        case .done:     return .done
-        case .error:    return .error
+        case .working:   return .working
+        case .waiting:   return .waiting
+        case .done:      return .done
+        case .error:     return .error
         case .cancelled: return .idle
         }
     }
@@ -550,7 +547,7 @@ public final class AgentService {
                 prompt: prompt,
                 citedContext: CitedContext(),
                 reply: "",
-                status: .thinking,
+                status: .working,
                 startedAt: 0
             )
         ))

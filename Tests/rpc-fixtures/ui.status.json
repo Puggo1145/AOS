@@ -1,1 +1,1 @@
-{"jsonrpc":"2.0","method":"ui.status","params":{"sessionId":"sess_01abcdef01234567","status":"thinking","turnId":"01HABCDEF0123456789TURNSUBM"}}
+{"jsonrpc":"2.0","method":"ui.status","params":{"sessionId":"sess_01abcdef01234567","status":"working","turnId":"01HABCDEF0123456789TURNSUBM"}}

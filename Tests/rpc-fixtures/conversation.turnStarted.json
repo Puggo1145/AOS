@@ -1,1 +1,1 @@
-{"jsonrpc":"2.0","method":"conversation.turnStarted","params":{"sessionId":"sess_01abcdef01234567","turn":{"citedContext":{},"id":"01HABCDEF0123456789TURNSUBM","prompt":"hi","reply":"","startedAt":1714000000000,"status":"thinking"}}}
+{"jsonrpc":"2.0","method":"conversation.turnStarted","params":{"sessionId":"sess_01abcdef01234567","turn":{"citedContext":{},"id":"01HABCDEF0123456789TURNSUBM","prompt":"hi","reply":"","startedAt":1714000000000,"status":"working"}}}

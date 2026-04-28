@@ -194,11 +194,11 @@ Sidecar 是 Conversation 的唯一权威。Shell 的 `AgentService` 是被动镜
 
 | Method | 类型 | Params | 说明 |
 |---|---|---|---|
-| `conversation.turnStarted` | Notification | `{ sessionId, turn: ConversationTurnWire }` | 在 `agent.submit` 的 ack **之前**发出。`turn` 是 sidecar 刚 register 的 turn 快照（`reply: ""`、`status: "thinking"`）。Shell 按 `sessionId` 路由到对应 mirror、加入 `turns[]` |
+| `conversation.turnStarted` | Notification | `{ sessionId, turn: ConversationTurnWire }` | 在 `agent.submit` 的 ack **之前**发出。`turn` 是 sidecar 刚 register 的 turn 快照（`reply: ""`、`status: "working"`）。Shell 按 `sessionId` 路由到对应 mirror、加入 `turns[]` |
 | `conversation.reset` | Notification | `{ sessionId }` | `agent.reset` 完成后必发；Shell 按 sessionId 清空对应 mirror |
 
 ```ts
-type TurnStatus = "thinking" | "working" | "waiting" | "done" | "error" | "cancelled";
+type TurnStatus = "working" | "waiting" | "done" | "error" | "cancelled";
 
 interface ConversationTurnWire {
   id: string;
@@ -285,7 +285,7 @@ Shell 的 `ComputerUseHandlers` 通过 async handler 调用 `AOSComputerUseKit` 
 |---|---|---|---|
 | `ui.token` | Notification | `{ sessionId, turnId, delta }` | 流式 agent 输出增量（文本片段） |
 | `ui.thinking` | Notification | `{ sessionId, turnId, kind: "delta" \| "end", delta? }` | Reasoning 轨迹增量；`.delta` 累加，`.end` 关闭计时窗 |
-| `ui.status` | Notification | `{ sessionId, turnId, status }` | `status ∈ "thinking" \| "tool_calling" \| "waiting_input" \| "done"` |
+| `ui.status` | Notification | `{ sessionId, turnId, status }` | `status ∈ "working" \| "waiting" \| "done"` |
 | `ui.error` | Notification | `{ sessionId, turnId, code, message }` | Agent 层错误 |
 
 Shell 按 `sessionId` 把每帧路由到对应的 `ConversationMirror`；非 active session 的 ui.* 不会污染 active 投影。

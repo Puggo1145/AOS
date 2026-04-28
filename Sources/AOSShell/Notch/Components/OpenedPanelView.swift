@@ -372,7 +372,7 @@ struct OpenedPanelView: View {
             let isLastTurnLive: Bool = {
                 guard let last = agentService.turns.last else { return false }
                 switch last.status {
-                case .thinking, .working, .waiting: return true
+                case .working, .waiting: return true
                 case .idle, .listening, .done, .error: return false
                 }
             }()
@@ -481,7 +481,7 @@ struct OpenedPanelView: View {
     /// of a static glyph.
     @ViewBuilder
     private func turnEmojiView(_ turn: ConversationTurn) -> some View {
-        if turn.status == .thinking && turn.reply.isEmpty {
+        if turn.status == .working && turn.reply.isEmpty {
             TimelineView(.periodic(from: .now, by: 0.4)) { ctx in
                 let tick = Int(ctx.date.timeIntervalSinceReferenceDate / 0.4)
                 Text(tick.isMultiple(of: 2) ? ":/" : ":\\")
@@ -495,8 +495,7 @@ struct OpenedPanelView: View {
     private func turnEmoji(_ turn: ConversationTurn) -> String {
         switch turn.status {
         case .error: return ":("
-        case .thinking: return turn.reply.isEmpty ? ":/" : ":O"
-        case .working: return "X("
+        case .working: return turn.reply.isEmpty ? ":/" : ":O"
         case .waiting: return ":?"
         case .listening: return ":o"
         case .done, .idle:

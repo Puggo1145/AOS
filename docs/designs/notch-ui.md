@@ -242,10 +242,9 @@ assistantText 渲染于输入框上方：`AgentService.assistantText` 由 `ui.to
 |---|---|---|
 | `idle` | `:)` | 默认；turn 结束 1s 后自动回归 |
 | `listening` | `:o` | **view-local**：opened 态且 TextField focused 时本地覆盖 `AgentService.status` 的 display 值 |
-| `thinking` | `:/` | `ui.status { status: "thinking" }` |
-| `working` | `X(` | `ui.status { status: "tool_calling" }`，仅在 tool_calling 持续 >250ms 时显示（短工具不闪一下） |
+| `working` | `:/` | `ui.status { status: "working" }`（模型流式输出中） |
+| `waiting` | `:?` | `ui.status { status: "waiting" }`，仅在 waiting 持续 >250ms 时显示（短工具不闪一下） |
 | `done` | `:D` | `ui.status { status: "done" }`，由 AgentService 持有 1s 后回 `idle` |
-| `waiting` | `:?` | `ui.status { status: "waiting_input" }` |
 | `error` | `:(` | `ui.error` notification |
 
 **listening 注释**：`listening` 不是 `AgentService.status` 的合法值，仅是 `NotchView` 在「opened + 输入框 focused」条件下对显示层的本地覆盖。`AgentService.status` 不会因为输入框 focus 而变化，避免 view 状态污染 service 状态。view 层伪代码：

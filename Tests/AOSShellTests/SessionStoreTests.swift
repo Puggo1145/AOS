@@ -45,7 +45,7 @@ struct SessionStoreTests {
                 prompt: prompt,
                 citedContext: CitedContext(),
                 reply: "",
-                status: .thinking,
+                status: .working,
                 startedAt: 0
             )
         )
@@ -79,14 +79,16 @@ struct SessionStoreTests {
         ))
         agent.handleTurnStarted(turnStarted("Ta", sessionId: "A"))
         agent.handleTurnStarted(turnStarted("Tb", sessionId: "B"))
-        // A is .thinking from its turnStarted; flipping B's status to working
-        // must not leak into the active projection. `.working` is debounced
-        // (~250ms) on the receiving mirror to suppress the fast-tool flicker,
-        // so wait past the window before asserting B reached `.working`.
-        agent.handleStatus(UIStatusParams(sessionId: "B", turnId: "Tb", status: .toolCalling))
+        // A is .working from its turnStarted; flipping B's status to waiting
+        // must not leak into the active projection. Turn status is set
+        // immediately; the display `status` is debounced (~250ms).
+        agent.handleStatus(UIStatusParams(sessionId: "B", turnId: "Tb", status: .waiting))
+        // B's turn has the semantic state immediately.
+        #expect(store.mirrors["B"]?.turns.first?.status == .waiting)
+        // Wait past the debounce window so the display projection lands too.
         try await Task.sleep(nanoseconds: 400_000_000)
-        #expect(agent.status == .thinking)
-        #expect(store.mirrors["B"]?.status == .working)
+        #expect(agent.status == .working)
+        #expect(store.mirrors["B"]?.status == .waiting)
     }
 
     @Test("ui.error on inactive session leaves active error message unchanged")

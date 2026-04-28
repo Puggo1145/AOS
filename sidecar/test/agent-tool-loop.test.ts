@@ -5,7 +5,7 @@
 //   - ToolResultMessages land in the flat conversation history in order.
 //   - `ui.toolCall { phase: "called" }` fires on toolcall_end, `phase:
 //     "result"` fires after handler completion, with isError + outputText.
-//   - `ui.status` cycles thinking → tool_calling → thinking → done across
+//   - `ui.status` cycles working → waiting → working → done across
 //     rounds.
 //   - The loop re-issues `streamSimple` with the appended tool results so a
 //     second-round text-only response terminates the turn.
@@ -226,12 +226,12 @@ test("two-round tool-use: assistant calls a tool, then produces a final reply", 
     outputText: "echoed: hi",
   });
 
-  // ui.status cycle: thinking (initial) → tool_calling (between rounds) →
-  // thinking (round 2) → done (terminal). Filter for the unique sequence.
+  // ui.status cycle: working (initial) → waiting (tool round) →
+  // working (round 2) → done (terminal). Filter for the unique sequence.
   const statuses = captured.notifications
     .filter((n) => n.method === "ui.status")
     .map((n) => n.params.status);
-  expect(statuses).toEqual(["thinking", "tool_calling", "thinking", "done"]);
+  expect(statuses).toEqual(["working", "waiting", "working", "done"]);
 
   // Conversation flat history: user → assistant(toolCall) → toolResult →
   // assistant(text). The tool result must reference the originating call.

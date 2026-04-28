@@ -190,9 +190,9 @@ test("happy path: ack + turnStarted + thinking + tokens + done", async () => {
     id: "T1",
     prompt: "hi",
     reply: "",
-    status: "thinking",
+    status: "working",
   });
-  expect(captured.notifications[1].params).toEqual({ sessionId, turnId: "T1", status: "thinking" });
+  expect(captured.notifications[1].params).toEqual({ sessionId, turnId: "T1", status: "working" });
 
   const tokens = captured.notifications.filter((n) => n.method === "ui.token");
   expect(tokens.map((t) => t.params.delta).join("")).toBe("Hello, world");
@@ -452,9 +452,9 @@ test("error path: typed authInvalidated reason maps to permissionDenied", async 
     reason: "authInvalidated",
   });
 
-  // Only the initial "thinking" is emitted before the error short-circuit.
+  // Only the initial "working" is emitted before the error short-circuit.
   const statuses = captured.notifications.filter((n) => n.method === "ui.status");
-  expect(statuses.map((s) => s.params.status)).toEqual(["thinking"]);
+  expect(statuses.map((s) => s.params.status)).toEqual(["working"]);
 });
 
 test("error path: untyped errors fall through to internalError", async () => {

@@ -75,14 +75,13 @@ public struct AgentResetResult: Codable, Sendable, Equatable {
 // history derived from it). Shell mirrors it from these notifications:
 //   - `conversation.turnStarted { turn }` once per `agent.submit` after the
 //     sidecar has registered the turn. Carries the snapshot the sidecar
-//     persisted (initial empty reply, status: thinking).
+//     persisted (initial empty reply, status: working).
 //   - `conversation.reset` after `agent.reset` wipes the store.
 //   - reply token deltas keep flowing over the existing `ui.token` so tight
 //     streaming doesn't pay a serialization cost per character.
 //   - per-turn status changes flow over `ui.status` / `ui.error`.
 
 public enum TurnStatus: String, Codable, Sendable, Equatable {
-    case thinking
     case working
     case waiting
     case done
