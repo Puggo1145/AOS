@@ -195,6 +195,8 @@ struct DevContextSectionView: View {
     /// purely informational.
     var sessionStore: SessionStore?
 
+    @State private var messagesShowRaw: Bool = false
+
     var body: some View {
         Group {
             if let snap = service.snapshot {
@@ -226,22 +228,25 @@ struct DevContextSectionView: View {
 
     @ViewBuilder
     private func snapshotView(_ snap: DevContextSnapshot, error: String?) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                header(snap)
-                if let error {
-                    // Snapshot exists but the most recent refresh failed —
-                    // tell the user the data may be stale.
-                    refreshErrorBanner(error)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    header(snap)
+                        .id("snapshot-top")
+                    if let error {
+                        refreshErrorBanner(error)
+                    }
+                    Divider()
+                    section(title: "System Prompt", body: snap.systemPrompt)
+                    DevMessagesView(messagesJson: snap.messagesJson, showRaw: $messagesShowRaw)
                 }
-                Divider()
-                section(title: "System Prompt", body: snap.systemPrompt)
-                DevMessagesView(messagesJson: snap.messagesJson)
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .onChange(of: snap.turnId) { _, _ in
+                proxy.scrollTo("snapshot-top", anchor: .top)
+            }
         }
-        .id(snap.capturedAt)
     }
 
     private func refreshErrorBanner(_ message: String) -> some View {

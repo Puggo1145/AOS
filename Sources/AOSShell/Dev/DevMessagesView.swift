@@ -17,8 +17,9 @@ import AppKit
 
 struct DevMessagesView: View {
     let messagesJson: String
+    @Binding var showRaw: Bool
 
-    @State private var showRaw: Bool = false
+    @State private var copyFeedback: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -28,6 +29,15 @@ struct DevMessagesView: View {
                     .foregroundStyle(.secondary)
                     .textCase(.uppercase)
                 Spacer()
+                Button(action: copyRawToPasteboard) {
+                    HStack(spacing: 4) {
+                        Image(systemName: copyFeedback ? "checkmark" : "doc.on.doc")
+                        Text(copyFeedback ? "Copied" : "Copy raw")
+                    }
+                    .font(.system(size: 11))
+                }
+                .buttonStyle(.borderless)
+                .help("Copy the full raw messages JSON to the clipboard")
                 Picker("", selection: $showRaw) {
                     Text("Pretty").tag(false)
                     Text("Raw").tag(true)
@@ -47,7 +57,7 @@ struct DevMessagesView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(cardBackground)
                 } else {
-                    VStack(alignment: .leading, spacing: 8) {
+                    LazyVStack(alignment: .leading, spacing: 8) {
                         ForEach(messages.indices, id: \.self) { i in
                             MessageCard(message: messages[i])
                         }
@@ -61,17 +71,28 @@ struct DevMessagesView: View {
     }
 
     private var rawView: some View {
-        Text(messagesJson.isEmpty ? "—" : messagesJson)
-            .font(.system(size: 12, design: .monospaced))
-            .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(10)
+        // SwiftUI `Text` lays out the entire string in one pass, which freezes
+        // the UI for multi-MB payloads (typical when the context contains
+        // base64-encoded screenshots). NSTextView inside its own NSScrollView
+        // uses TextKit's chunked layout and stays responsive on huge blobs.
+        RawTextView(text: messagesJson.isEmpty ? "—" : messagesJson)
+            .frame(minHeight: 240, idealHeight: 480, maxHeight: 720)
             .background(cardBackground)
     }
 
     private var cardBackground: some View {
         RoundedRectangle(cornerRadius: 6, style: .continuous)
             .fill(Color.secondary.opacity(0.08))
+    }
+
+    private func copyRawToPasteboard() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(messagesJson, forType: .string)
+        copyFeedback = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            copyFeedback = false
+        }
     }
 
     private func parse(_ json: String) -> [ParsedMessage]? {
@@ -82,6 +103,49 @@ struct DevMessagesView: View {
         // authoritative payload is worse than one that shows raw fallback.
         // Non-dict elements become an "unknown" card carrying their JSON.
         return arr.map { ParsedMessage(any: $0) }
+    }
+}
+
+// MARK: - RawTextView
+
+/// AppKit-backed monospace viewer for very large JSON blobs. We avoid
+/// SwiftUI `Text` here because it lays out the full string up-front — a
+/// few megabytes of base64 image data freezes the main thread for
+/// seconds. `NSTextView`'s TextKit layout is incremental and stays
+/// responsive even on multi-MB inputs.
+fileprivate struct RawTextView: NSViewRepresentable {
+    let text: String
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSTextView.scrollableTextView()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = false
+
+        guard let textView = scrollView.documentView as? NSTextView else {
+            return scrollView
+        }
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.drawsBackground = false
+        textView.textContainerInset = NSSize(width: 10, height: 10)
+        textView.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        // Wrap long lines so the user doesn't have to scroll horizontally
+        // through 20K-char base64 strings on a single line.
+        textView.textContainer?.widthTracksTextView = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.string = text
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = scrollView.documentView as? NSTextView else { return }
+        if textView.string != text {
+            textView.string = text
+        }
     }
 }
 
@@ -287,14 +351,21 @@ private struct MessageCard: View {
         )
     }
 
+    private static let largeTextThreshold = 2000
+
     @ViewBuilder
     private func partView(_ part: ParsedPart) -> some View {
         switch part {
         case .text(let s):
-            Text(s)
-                .font(.system(size: 12))
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if s.count > Self.largeTextThreshold {
+                LargeTextView(text: s, fontSize: 12, monospaced: false)
+                    .frame(minHeight: 60, maxHeight: 300)
+            } else {
+                Text(s)
+                    .font(.system(size: 12))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         case .osContext(let s):
             CollapsibleBlock(title: "os-context", content: s, monospaced: true)
         case .thinking(let s, let redacted):
@@ -308,24 +379,39 @@ private struct MessageCard: View {
                 Text("call: \(name)")
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .foregroundStyle(.secondary)
-                Text(args)
-                    .font(.system(size: 11, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .fill(Color.secondary.opacity(0.10))
-                    )
+                if args.count > Self.largeTextThreshold {
+                    LargeTextView(text: args, fontSize: 11, monospaced: true)
+                        .frame(minHeight: 60, maxHeight: 300)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill(Color.secondary.opacity(0.10))
+                        )
+                } else {
+                    Text(args)
+                        .font(.system(size: 11, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill(Color.secondary.opacity(0.10))
+                        )
+                }
             }
         case .image(let mime, let base64):
             ImagePartView(mime: mime, base64: base64)
         case .unknown(let raw):
-            Text(raw)
-                .font(.system(size: 11, design: .monospaced))
-                .textSelection(.enabled)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if raw.count > Self.largeTextThreshold {
+                LargeTextView(text: raw, fontSize: 11, monospaced: true)
+                    .frame(minHeight: 60, maxHeight: 300)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text(raw)
+                    .font(.system(size: 11, design: .monospaced))
+                    .textSelection(.enabled)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 
@@ -341,6 +427,8 @@ private struct CollapsibleBlock: View {
     let title: String
     let content: String
     let monospaced: Bool
+
+    private static let largeThreshold = 2000
 
     @State private var expanded: Bool = false
 
@@ -361,19 +449,73 @@ private struct CollapsibleBlock: View {
             .buttonStyle(.plain)
 
             if expanded {
-                Text(content)
-                    .font(.system(
-                        size: monospaced ? 11 : 12,
-                        design: monospaced ? .monospaced : .default
-                    ))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
+                if content.count > Self.largeThreshold {
+                    LargeTextView(
+                        text: content,
+                        fontSize: monospaced ? 11 : 12,
+                        monospaced: monospaced
+                    )
+                    .frame(minHeight: 60, maxHeight: 300)
                     .background(
                         RoundedRectangle(cornerRadius: 4, style: .continuous)
                             .fill(Color.secondary.opacity(0.10))
                     )
+                } else {
+                    Text(content)
+                        .font(.system(
+                            size: monospaced ? 11 : 12,
+                            design: monospaced ? .monospaced : .default
+                        ))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill(Color.secondary.opacity(0.10))
+                        )
+                }
             }
+        }
+    }
+}
+
+/// NSTextView-backed text renderer for large content inside pretty-mode cards.
+/// Mirrors `RawTextView` but accepts font configuration for use in different
+/// part types (monospaced tool args vs proportional message text).
+fileprivate struct LargeTextView: NSViewRepresentable {
+    let text: String
+    let fontSize: CGFloat
+    let monospaced: Bool
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSTextView.scrollableTextView()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = false
+
+        guard let textView = scrollView.documentView as? NSTextView else {
+            return scrollView
+        }
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.drawsBackground = false
+        textView.textContainerInset = NSSize(width: 8, height: 8)
+        textView.font = monospaced
+            ? NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+            : NSFont.systemFont(ofSize: fontSize)
+        textView.textContainer?.widthTracksTextView = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.string = text
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = scrollView.documentView as? NSTextView else { return }
+        if textView.string != text {
+            textView.string = text
         }
     }
 }
