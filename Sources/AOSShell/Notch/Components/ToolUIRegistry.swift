@@ -100,6 +100,7 @@ public enum ToolUIRegistry {
         register(name: "read", presenter: readPresenter())
         register(name: "write", presenter: writePresenter())
         register(name: "update", presenter: updatePresenter())
+        register(name: "todo_write", presenter: todoWritePresenter())
         // Computer Use family — humane labels rooted in the target app's name.
         // All operate the target in the background (no focus steal); the row
         // wording leans on that ("clicked in Slack") to make it legible to the
@@ -226,6 +227,28 @@ public enum ToolUIRegistry {
         )
     }
 
+    /// `todo_write` row treatment. Whole-list semantics: each call replaces
+    /// the plan, so a single row that says "updating todos" / "updated todos"
+    /// reads correctly. The expanded body re-renders the list with status
+    /// markers so the user sees what the model wrote without expanding the
+    /// big TodoListView elsewhere in the panel — the inline row is the
+    /// audit trail of *when* the model planned/changed; the panel above the
+    /// composer is the live current state.
+    private static func todoWritePresenter() -> ToolUIPresenter {
+        ToolUIPresenter(
+            label: { _, isCalling in isCalling ? "updating todos" : "updated todos" },
+            // Pre-result we have the items the model is writing; render
+            // them verbatim so the row is informative even before the
+            // sidecar's render lands as `outputText`.
+            callingBody: { args in renderTodoArgs(args) },
+            // Post-result the wire's `outputText` is the manager's render
+            // (the `[ ] / [>] / [x] #id: text` listing). Show as-is — it
+            // matches what the user sees in the live panel.
+            resultBody: { _, output, _ in output },
+            icon: "checklist"
+        )
+    }
+
     private static func fallback(toolName: String) -> ToolUIPresenter {
         ToolUIPresenter(
             // Unknown tools fall back to the generic `using/used` framing —
@@ -239,6 +262,40 @@ public enum ToolUIRegistry {
             icon: "wrench.and.screwdriver"
         )
     }
+}
+
+// MARK: - todo_write helpers
+
+/// Render the `todo_write` tool call's args (the list the model is about
+/// to write) as the same `[ ] / [>] / [x] #id: text` shape the sidecar's
+/// `TodoManager.render()` produces. Keeps the inline row body consistent
+/// with the live panel's wording. Returns `nil` on a malformed wire shape
+/// so the view falls back to the generic "running…" placeholder.
+private func renderTodoArgs(_ args: AOSRPCSchema.JSONValue) -> String? {
+    guard case let .object(obj) = args, case let .array(rawItems) = obj["items"] ?? .null else {
+        return nil
+    }
+    var lines: [String] = []
+    var done = 0
+    for raw in rawItems {
+        guard case let .object(item) = raw,
+              case let .string(id) = item["id"] ?? .null,
+              case let .string(text) = item["text"] ?? .null,
+              case let .string(status) = item["status"] ?? .null
+        else { continue }
+        let marker: String
+        switch status {
+        case "pending": marker = "[ ]"
+        case "in_progress": marker = "[>]"
+        case "completed": marker = "[x]"; done += 1
+        default: marker = "[?]"
+        }
+        lines.append("\(marker) #\(id): \(text)")
+    }
+    if lines.isEmpty { return nil }
+    lines.append("")
+    lines.append("(\(done)/\(lines.count - 1) completed)")
+    return lines.joined(separator: "\n")
 }
 
 // MARK: - File-tool helpers

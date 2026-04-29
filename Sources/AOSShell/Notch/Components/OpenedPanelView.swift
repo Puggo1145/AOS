@@ -286,6 +286,13 @@ struct OpenedPanelView: View {
                             .fill(Color.red.opacity(0.12))
                     )
             }
+            // s03 TodoWrite plan is surfaced as a tray item in the system
+            // drawer (see `SystemTrayView` + `NotchViewModel.trayItems`,
+            // built-in source registered in `installBuiltinTraySources`)
+            // — one live row showing the in_progress step + a `done/total`
+            // badge. Keeping it out of the main panel avoids stealing
+            // history real estate while leaving the audit trail in the
+            // inline `todo_write` tool-call rows.
             liveComposer
         }
         .padding(.top, topSafeInset)

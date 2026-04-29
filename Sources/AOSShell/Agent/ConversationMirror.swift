@@ -31,6 +31,11 @@ public final class ConversationMirror {
     /// LLM round (NOT per streamed token), so the composer's context-usage
     /// ring tracks each round's grow. Cleared on `conversation.reset`.
     public var latestUsage: ContextUsageSnapshot?
+    /// Latest TodoWrite plan for this session, mirrored from `ui.todo`.
+    /// Whole-list semantics: every notification replaces the entire array.
+    /// Cleared on `conversation.reset` and on the explicit empty-list frame
+    /// the sidecar sends after `agent.reset`.
+    public var todos: [TodoItemWire] = []
 
     private var doneRevertTask: Task<Void, Never>?
     private var errorRevertTask: Task<Void, Never>?
@@ -79,8 +84,18 @@ public final class ConversationMirror {
         status = .idle
         lastErrorMessage = nil
         latestUsage = nil
+        todos = []
         cancelReverts()
         cancelWaitingDebounce()
+    }
+
+    /// Whole-list mirror update from `ui.todo`. The sidecar emits this on
+    /// every successful `todo_write` call, on `agent.reset` (with an empty
+    /// items array), and once on `session.activate` for hydration. We trust
+    /// the sidecar's `sessionId` routing — by the time the params land here,
+    /// `AgentService.handleTodo` has already picked the right mirror.
+    public func applyTodo(_ p: UITodoParams) {
+        todos = p.items
     }
 
     public func applyUsage(_ p: UIUsageParams) {

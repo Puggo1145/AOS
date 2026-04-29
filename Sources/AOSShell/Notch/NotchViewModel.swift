@@ -12,17 +12,11 @@ import AOSOSSenseKit
 // remainder of the run; the underlying condition still drives onboarding /
 // inline-disabled-input behaviour.
 
-public enum SystemNoticeKind: String, Hashable, Sendable, CaseIterable {
-    case missingPermission
-    case missingProvider
-    case configCorruption
-}
-
-public struct SystemNotice: Identifiable, Equatable, Sendable {
-    public let kind: SystemNoticeKind
-    public let message: String
-    public var id: SystemNoticeKind { kind }
-}
+// `TrayItem` and `TraySource` live in `Notch/Components/TrayItem.swift`.
+// The viewmodel composes registered sources into a single `trayItems`
+// array consumed by `SystemTrayView`. Built-in system notices and the
+// agent's live `todoProgress` row are themselves sources installed in
+// `init` — there is no privileged path for them.
 
 // MARK: - NotchViewModel
 //
@@ -112,9 +106,19 @@ public final class NotchViewModel {
     // surfacing it for the rest of the run. The underlying service signal
     // is still authoritative for routing (onboarding, disabled input).
 
-    public var dismissedNotices: Set<SystemNoticeKind> = []
+    /// Stable ids of tray items the user has dismissed this session.
+    /// Sources are still asked for their current row on every render —
+    /// the filter happens after composition, so the set survives a row
+    /// flickering in and out (state churn won't reset dismissal).
+    public var dismissedItemIds: Set<String> = []
     public var trayExpanded: Bool = false
     public var trayContentHeight: CGFloat = 0
+
+    /// Registered tray-item sources, in registration order. Each is invoked
+    /// on every `trayItems` read; empty returns are dropped silently.
+    /// Mutated only via `registerTraySource(_:)` so the order is
+    /// well-defined for the drawer (registration order = display order).
+    private var traySources: [TraySource] = []
 
     /// Tray ceiling per design — taller lists scroll. Independent of the
     /// main panel's 480 budget; the NSWindow strip is sized to the sum.
@@ -125,29 +129,33 @@ public final class NotchViewModel {
     /// inner row + 10pt outer top/bottom padding ≈ 42pt).
     public let notchTrayCollapsedHeight: CGFloat = 42
 
-    /// Active notices, ordered by severity (permission first, since the
-    /// agent literally can't act without OS access).
-    public var trayNotices: [SystemNotice] {
-        var out: [SystemNotice] = []
-        if !permissionsService.allGranted,
-           !dismissedNotices.contains(.missingPermission) {
-            out.append(SystemNotice(kind: .missingPermission, message: missingPermissionMessage))
+    /// Active drawer rows. Composes every registered source, then drops
+    /// rows whose ids the user has dismissed. Source registration order
+    /// is the display order — built-in system notices (permission /
+    /// provider / config) are registered first in `init`, so they always
+    /// render above later additions like the agent's todo-progress row.
+    public var trayItems: [TrayItem] {
+        var out: [TrayItem] = []
+        for source in traySources {
+            out.append(contentsOf: source())
         }
-        if !providerService.hasReadyProvider,
-           !dismissedNotices.contains(.missingProvider) {
-            out.append(SystemNotice(kind: .missingProvider, message: "No model configured"))
-        }
-        if configService.recoveredFromCorruption,
-           !dismissedNotices.contains(.configCorruption) {
-            out.append(SystemNotice(
-                kind: .configCorruption,
-                message: "Settings file was corrupt and has been reset."
-            ))
-        }
-        return out
+        if dismissedItemIds.isEmpty { return out }
+        return out.filter { !dismissedItemIds.contains($0.id) }
     }
 
-    public var hasTrayNotices: Bool { !trayNotices.isEmpty }
+    public var hasTrayItems: Bool { !trayItems.isEmpty }
+
+    /// Append a tray-item source. Sources are invoked on every render of
+    /// `trayItems`; they should be cheap, deterministic, and read from
+    /// `@Observable` state so SwiftUI re-evaluates when the underlying
+    /// signal changes. Sources cannot be removed today — registration
+    /// happens at viewmodel construction (or boot-time plugin install)
+    /// and survives for the process lifetime; if dynamic
+    /// register/unregister is needed later, swap the array for a
+    /// `[String: TraySource]` keyed by source id.
+    public func registerTraySource(_ source: @escaping TraySource) {
+        traySources.append(source)
+    }
 
     /// Tray rect — width matches the main panel.
     ///   • No notices → height 0 (drawer absent).
@@ -161,7 +169,7 @@ public final class NotchViewModel {
     public var notchTraySize: CGSize {
         Self.makeTraySize(
             width: notchOpenedWidth,
-            noticeCount: trayNotices.count,
+            itemCount: trayItems.count,
             expanded: trayExpanded,
             measuredContentHeight: trayContentHeight,
             collapsedHeight: notchTrayCollapsedHeight,
@@ -323,6 +331,87 @@ public final class NotchViewModel {
         // Per design: -4 if there is a real notch, 0 otherwise — expands the
         // hot rect slightly to absorb edge tracking error.
         self.inset = deviceNotchRect.height > 0 ? -4 : 0
+        installBuiltinTraySources()
+    }
+
+    /// Wire the built-in tray sources. Each closure captures `self` weakly
+    /// so the viewmodel can be torn down without the closures keeping it
+    /// alive through the registered array. Order here is also display
+    /// order in the drawer: action-bearing system notices first, then the
+    /// agent's live status row last (it disappears the moment no item is
+    /// in_progress, so it shouldn't push more important rows down when
+    /// it's present).
+    private func installBuiltinTraySources() {
+        registerTraySource { [weak self] in
+            guard let self else { return [] }
+            return self.systemNoticeItems()
+        }
+        registerTraySource { [weak self] in
+            guard let self else { return [] }
+            return self.todoProgressItems()
+        }
+    }
+
+    /// Action-required system rows (permissions / provider / corrupted
+    /// config). Each is dismissable; `dismissTrayItem(id:)` records the
+    /// id so subsequent renders skip it. The strings/ids match
+    /// `BuiltinTrayItemID.*` so external callers (and tests) can target
+    /// the exact row without cracking through internal lookup.
+    private func systemNoticeItems() -> [TrayItem] {
+        var out: [TrayItem] = []
+        if !permissionsService.allGranted {
+            out.append(TrayItem(
+                id: BuiltinTrayItemID.missingPermission,
+                icon: "exclamationmark.shield.fill",
+                tint: .orange,
+                message: missingPermissionMessage,
+                trailing: .action("Open Settings"),
+                onTap: { [weak self] in self?.showSettings = true }
+            ))
+        }
+        if !providerService.hasReadyProvider {
+            out.append(TrayItem(
+                id: BuiltinTrayItemID.missingProvider,
+                icon: "questionmark.circle.fill",
+                tint: .yellow,
+                message: "No model configured",
+                trailing: .action("Open Settings"),
+                onTap: { [weak self] in self?.showSettings = true }
+            ))
+        }
+        if configService.recoveredFromCorruption {
+            out.append(TrayItem(
+                id: BuiltinTrayItemID.configCorruption,
+                icon: "exclamationmark.triangle.fill",
+                tint: .yellow,
+                message: "Settings file was corrupt and has been reset.",
+                trailing: nil,
+                onTap: nil
+            ))
+        }
+        return out
+    }
+
+    /// s03 TodoWrite live row. Surfaces only when the plan has an active
+    /// in_progress step — empty / all-pending / all-completed plans don't
+    /// produce a current step and would render an ambiguous row. Marked
+    /// `dismissable: false` so the user can't accidentally hide live
+    /// agent state via the dismiss path.
+    private func todoProgressItems() -> [TrayItem] {
+        let todos = agentService.todos
+        guard let inProgress = todos.first(where: { $0.status == .inProgress }) else {
+            return []
+        }
+        let done = todos.filter({ $0.status == .completed }).count
+        return [TrayItem(
+            id: BuiltinTrayItemID.todoProgress,
+            icon: "checklist",
+            tint: .white.opacity(0.85),
+            message: inProgress.text,
+            trailing: .badge("\(done)/\(todos.count)"),
+            dismissable: false,
+            onTap: nil
+        )]
     }
 
     // MARK: - Derived geometry (pure functions)
@@ -412,16 +501,16 @@ public final class NotchViewModel {
     ///     parent's frame for a clean drawer-extending animation.
     public nonisolated static func makeTraySize(
         width: CGFloat,
-        noticeCount: Int,
+        itemCount: Int,
         expanded: Bool,
         measuredContentHeight: CGFloat,
         collapsedHeight: CGFloat,
         maxHeight: CGFloat
     ) -> CGSize {
-        guard noticeCount > 0 else {
+        guard itemCount > 0 else {
             return CGSize(width: width, height: 0)
         }
-        if noticeCount == 1 || expanded {
+        if itemCount == 1 || expanded {
             let h = min(max(measuredContentHeight, collapsedHeight), maxHeight)
             return CGSize(width: width, height: h)
         }
@@ -500,18 +589,33 @@ public final class NotchViewModel {
 
     // MARK: - Tray actions
 
-    /// Hide a notice for the rest of the session. Routes to ConfigService
-    /// for the corruption-banner case so its server-side flag is also
-    /// acknowledged.
-    public func dismissNotice(_ kind: SystemNoticeKind) {
-        dismissedNotices.insert(kind)
-        if kind == .configCorruption {
+    /// Hide a tray row for the rest of the session. Routes the
+    /// corruption-banner case through ConfigService so its server-side
+    /// acknowledgement also fires. Calling this with an id that's
+    /// non-dismissable (e.g. live `agent.todoProgress`) is a no-op — the
+    /// item's source is the lifecycle authority and re-emits the row on
+    /// the next render regardless of the dismissed set; we still record
+    /// the id so the contract is uniform, but `trayItems` deliberately
+    /// does NOT filter non-dismissable rows by id (defensive: future
+    /// callers can't accidentally hide live state by reusing this path).
+    public func dismissTrayItem(id: String) {
+        // Look up the row's dismissable flag from the current snapshot.
+        // A row that doesn't currently exist is a no-op — we don't speculate
+        // about whether it'll show up later.
+        // Default `false` (not `true`) so a dismiss call against a row that
+        // isn't currently visible is a true no-op. Otherwise a transiently
+        // hidden source (toggles with state, plugin between renders) would
+        // get its id silently recorded and filtered forever once it returns.
+        let isDismissable = trayItems.first(where: { $0.id == id })?.dismissable ?? false
+        guard isDismissable else { return }
+        dismissedItemIds.insert(id)
+        if id == BuiltinTrayItemID.configCorruption {
             configService.dismissCorruptionNotice()
         }
-        // Collapsing can leave the tray expanded with one item; that's fine —
-        // the next render shrinks it. But if the tray empties out, reset the
-        // expansion so the next time a notice arrives it starts collapsed.
-        if trayNotices.isEmpty {
+        // If the drawer just emptied, reset the expansion so the next time
+        // a row arrives it starts collapsed (matching the comment that
+        // used to live on `dismissNotice`).
+        if trayItems.isEmpty {
             trayExpanded = false
         }
     }

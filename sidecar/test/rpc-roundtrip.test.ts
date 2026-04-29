@@ -45,6 +45,7 @@ import {
   type ProviderLogoutParams,
   type DevContextGetParams,
   type DevContextChangedParams,
+  type UITodoParams,
   type SessionCreateParams,
   type SessionListParams,
   type SessionActivateParams,
@@ -280,6 +281,20 @@ test("ui.usage fixture roundtrips byte-equal", () => {
   expect(typeof note.params.contextWindow).toBe("number");
   expect(typeof note.params.modelId).toBe("string");
   expect(note.params.contextWindow).toBeGreaterThan(0);
+});
+
+test("ui.todo fixture roundtrips byte-equal", () => {
+  assertRoundtrip("ui.todo.json");
+  const { parsed } = loadFixture("ui.todo.json");
+  const note = parsed as RPCNotification<UITodoParams>;
+  expect(note.method).toBe(RPCMethod.uiTodo);
+  expect(typeof note.params.sessionId).toBe("string");
+  expect(Array.isArray(note.params.items)).toBe(true);
+  for (const item of note.params.items) {
+    expect(typeof item.id).toBe("string");
+    expect(typeof item.text).toBe("string");
+    expect(["pending", "in_progress", "completed"]).toContain(item.status);
+  }
 });
 
 test("provider.status fixture roundtrips byte-equal", () => {

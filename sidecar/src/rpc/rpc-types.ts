@@ -121,6 +121,7 @@ export const RPCMethod = {
   uiStatus: "ui.status",
   uiError: "ui.error",
   uiUsage: "ui.usage",
+  uiTodo: "ui.todo",
   providerStatus: "provider.status",
   providerStartLogin: "provider.startLogin",
   providerCancelLogin: "provider.cancelLogin",
@@ -428,6 +429,27 @@ export interface UIUsageParams {
   /// is reflected immediately.
   contextWindow: number;
   modelId: string;
+}
+
+/// Wire shape for one TodoWrite item. Mirrors `TodoItem` in
+/// `agent/todos/manager.ts`. Values for `status` are exactly the strings the
+/// LLM also writes; the closed enum is documented inline rather than typed
+/// as a Swift-side enum so the wire fixture stays a plain string.
+export interface TodoItemWire {
+  id: string;
+  text: string;
+  status: "pending" | "in_progress" | "completed";
+}
+
+/// `ui.todo` projects the session's TodoWrite plan onto the wire. Fired on
+/// every successful `todo_write` tool call, on `agent.reset` (with an empty
+/// list), and once on `session.activate` so the Shell can hydrate the todo
+/// panel for the freshly visible session. The whole list is sent each time —
+/// keying off `sessionId` lets the Shell route the snapshot to the right
+/// per-session mirror.
+export interface UITodoParams {
+  sessionId: string;
+  items: TodoItemWire[];
 }
 
 // ---------------------------------------------------------------------------

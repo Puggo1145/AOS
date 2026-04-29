@@ -29,20 +29,46 @@ struct NotchView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            // Layer 1: silhouette. Single Path-based Shape covering the
-            // whole notch outline — shoulders, vertical sides, rounded
-            // bottom. When the tray drawer is up, we just feed a taller
-            // panelSize so the silhouette extends downward as one
-            // geometry; no separate "Layer 0" extension rect, no
-            // compositingGroup-based shoulder overlay. The whole shape
-            // animates as one Path under the same animation curve.
+            // Layer 0: drawer silhouette — a literal "drawer pulled out from
+            // under the notch". Square top corners, rounded bottom matching
+            // the main notch radius. Top extends UPWARD by `containerCornerRadius`
+            // so it slides BEHIND the main notch's rounded bottom corners,
+            // filling the curve area so there's no visible gap; the visible
+            // top edge becomes the main notch's rounded bottom. Painted
+            // slightly grayer than pure black (white overlay) so the drawer
+            // band reads as a distinct surface even though it's continuous
+            // with the main notch geometry.
+            //
+            // Must render BEFORE the main NotchShape so the silhouette covers
+            // the drawer's hidden upper portion. A naïve `.offset(y: shapeHeight)`
+            // alone leaves a notched gap at the corners where the main panel
+            // curves inward but nothing fills the outer area.
+            UnevenRoundedRectangle(
+                bottomLeadingRadius: containerCornerRadius,
+                bottomTrailingRadius: containerCornerRadius
+            )
+            .fill(Color.black)
+            .overlay(
+                UnevenRoundedRectangle(
+                    bottomLeadingRadius: containerCornerRadius,
+                    bottomTrailingRadius: containerCornerRadius
+                )
+                .fill(Color.white.opacity(0.06))
+            )
+            .frame(
+                width: shapeWidth,
+                height: trayHeight > 0 ? trayHeight + containerCornerRadius : 0
+            )
+            .offset(y: shapeHeight - containerCornerRadius)
+
+            // Layer 1: main notch silhouette. Drawn AFTER the drawer so its
+            // rounded bottom corners cover the drawer's square top, leaving
+            // the drawer visible only as the band sliding out below — exactly
+            // the "抽屉" effect the design calls for.
             NotchShape(
                 status: viewModel.status,
                 deviceNotchRect: viewModel.deviceNotchRect,
-                panelSize: CGSize(
-                    width: viewModel.notchOpenedSize.width,
-                    height: viewModel.notchOpenedSize.height + trayHeight
-                )
+                panelSize: viewModel.notchOpenedSize
             )
 
             // Layer 2: content lives on a fixed, final-size canvas inside
@@ -62,20 +88,21 @@ struct NotchView: View {
                     )
                 )
 
-            // Layer 2.5: tray content. Same "always-mounted" rule as
-            // Layer 0 — gating on `status == .opened` would make the
-            // entire SystemTrayView insert into the ZStack on each open
-            // transition, producing the same phantom-opacity artefact.
-            // In closed/popping states `trayHeight` is 0, the frame
-            // collapses, and `clipShape(Rectangle())` cuts everything;
-            // the view is mounted but invisible.
+            // Layer 2.5: drawer rows. Sits on top of the drawer silhouette,
+            // clipped to its rounded-bottom shape so row content can't bleed
+            // past the curves at the bottom corners.
             SystemTrayView(viewModel: viewModel)
                 .frame(
                     width: shapeWidth,
                     height: trayHeight,
                     alignment: .top
                 )
-                .clipShape(Rectangle())
+                .clipShape(
+                    .rect(
+                        bottomLeadingRadius: containerCornerRadius,
+                        bottomTrailingRadius: containerCornerRadius
+                    )
+                )
                 .offset(y: shapeHeight)
 
             // Layer 3: edge highlight overlay (closed/popping only). The

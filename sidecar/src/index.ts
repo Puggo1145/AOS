@@ -18,6 +18,7 @@ import { registerProviderHandlers } from "./auth/register";
 import { registerConfigHandlers } from "./config/handlers";
 import { registerBuiltinTools } from "./agent/tools";
 import { registerComputerUseTools } from "./agent/tools/computer-use";
+import { registerTodoTool } from "./agent/tools/todo";
 import { ensureWorkspace } from "./agent/workspace";
 import { logger } from "./log";
 import { AOS_PROTOCOL_VERSION, RPCMethod, type HelloResult } from "./rpc/rpc-types";
@@ -47,6 +48,10 @@ async function main(): Promise<void> {
   // issues `session.create` after `rpc.hello` to obtain its bootstrap
   // sessionId. No implicit/default session — see docs/designs/session-management.md.
   const sessions = new SessionManager();
+  // s03 TodoWrite tool — needs the SessionManager to resolve per-session
+  // todo state, so it registers AFTER the manager exists but BEFORE the
+  // agent loop attaches (the loop snapshots the tool registry per turn).
+  registerTodoTool(sessions);
   registerSessionHandlers(dispatcher, sessions);
   registerAgentHandlers(dispatcher, { manager: sessions });
   registerProviderHandlers(dispatcher);

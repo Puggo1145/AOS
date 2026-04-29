@@ -20,5 +20,12 @@ export function buildSystemPrompt(input: SystemPromptInput = {}): string {
     "",
     `Personal workspace: ${workspace}`,
     "Use this directory by default for drafts, generated artifacts, and temp files.",
+    "",
+    // s03 TodoWrite guidance. The same playbook the playground reference
+    // ships in its system prompt: plan first, single in_progress, replace
+    // the list every update. The Notch UI renders this list live, so the
+    // model is also building user-visible progress as it works.
+    "Planning:",
+    "Use the `todo_write` tool whenever the user's request needs more than one step (multi-file edits, multi-app workflows, sequential research). Write the full plan up front, mark exactly one item `in_progress` while you work, and update statuses as steps complete. Each call replaces the entire list. Skip the tool for trivial single-step requests.",
   ].join("\n");
 }

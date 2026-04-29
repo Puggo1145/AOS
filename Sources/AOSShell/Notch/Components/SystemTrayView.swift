@@ -3,7 +3,11 @@ import SwiftUI
 // MARK: - SystemTrayView
 //
 // The drawer that pokes out below the main panel when there are pending
-// system notices (permission gap, missing provider, config-corruption).
+// system notices, agent live-state rows, or any other registered tray
+// items. Renders a generic `[TrayItem]` from `NotchViewModel.trayItems`;
+// per-row content (icon / tint / message / trailing slot / tap behaviour)
+// is fully described by the item itself, so adding a new row is a
+// `registerTraySource` call somewhere — not an edit here.
 //
 // Visual contract: this view paints NO surface of its own — the parent
 // NotchView paints a single black silhouette spanning main panel + tray as
@@ -22,15 +26,15 @@ import SwiftUI
 struct SystemTrayView: View {
     let viewModel: NotchViewModel
 
-    private var notices: [SystemNotice] { viewModel.trayNotices }
-    private var hasMultiple: Bool { notices.count > 1 }
+    private var items: [TrayItem] { viewModel.trayItems }
+    private var hasMultiple: Bool { items.count > 1 }
 
     @ViewBuilder
     var body: some View {
-        if notices.isEmpty {
+        if items.isEmpty {
             EmptyView()
         } else {
-            // ScrollView so the very rare case of >9 notices stays usable
+            // ScrollView so the very rare case of >9 items stays usable
             // when the drawer hits its 240pt ceiling. Disabled when the
             // drawer is collapsed so accidental scrolls don't reveal
             // hidden rows past the clipped frame.
@@ -51,15 +55,23 @@ struct SystemTrayView: View {
                     // cause an intermittent 1–4pt sliver of the second
                     // row to bleed through the clip line on first open.
                     HStack(spacing: 8) {
-                        noticeRow(notices[0])
+                        itemRow(items[0])
                         if hasMultiple { chevronButton }
                     }
                     .padding(.horizontal, 16)
+                    // Slight bottom padding inside the centered frame nudges
+                    // the row up by ~half its size, compensating for the
+                    // perceived extension of the drawer band into the main
+                    // notch's rounded-corner region above. Without this the
+                    // row reads as bottom-heavy because eye-centering uses
+                    // the full visual band including the curves, not just
+                    // the flat region.
+                    .padding(.bottom, 4)
                     .frame(height: viewModel.notchTrayCollapsedHeight)
 
                     if hasMultiple {
                         VStack(alignment: .leading, spacing: 6) {
-                            ForEach(notices.dropFirst()) { noticeRow($0) }
+                            ForEach(items.dropFirst()) { itemRow($0) }
                         }
                         .padding(.horizontal, 16)
                         .padding(.bottom, 10)
@@ -84,78 +96,91 @@ struct SystemTrayView: View {
 
     // MARK: - Rows
 
-    private func noticeRow(_ notice: SystemNotice) -> some View {
-        let style = NoticeStyle.style(for: notice.kind)
+    private func itemRow(_ item: TrayItem) -> some View {
         // Row body and dismiss `×` are SIBLINGS, not nested. Nesting the
         // × inside a row Button has two failure modes:
-        //   1. Action-less rows (configCorruption) need `.disabled(true)`
-        //      on the outer Button to avoid an inert tap region — but
-        //      SwiftUI then applies a system-wide disabled tint to ALL
-        //      contained views, dimming the icon, message, and ×.
+        //   1. Action-less rows need `.disabled(true)` on the outer Button
+        //      to avoid an inert tap region — but SwiftUI then applies a
+        //      system-wide disabled tint to ALL contained views.
         //   2. Even when the outer Button is enabled, the nested × tap
-        //      gets captured by the outer hit area first, so dismiss
-        //      never fires.
+        //      gets captured by the outer hit area first.
         // Splitting them solves both. The actionable row body is a real
         // `Button` (not `.onTapGesture`) so VoiceOver, Voice Control, and
         // keyboard activation all work; action-less rows render as plain
         // text with no hit region. The × is its own plain Button.
         return HStack(spacing: 8) {
-            if let action = style.action {
-                Button {
-                    action(viewModel)
-                } label: {
-                    rowContent(notice: notice, style: style)
+            if let onTap = item.onTap {
+                Button(action: onTap) {
+                    rowContent(item)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(Text(rowAccessibilityLabel(notice: notice, style: style)))
+                .accessibilityLabel(Text(rowAccessibilityLabel(item)))
             } else {
-                rowContent(notice: notice, style: style)
+                rowContent(item)
                     .accessibilityElement(children: .combine)
             }
 
-            Button {
-                viewModel.dismissNotice(notice.kind)
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.white)
-                    .padding(4)
-                    .contentShape(Rectangle())
+            if item.dismissable {
+                Button {
+                    viewModel.dismissTrayItem(id: item.id)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(4)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss notice")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Dismiss notice")
         }
     }
 
-    /// Visual content of a notice row, shared between the actionable
+    /// Visual content of an item row, shared between the actionable
     /// (Button-wrapped) and inert paths so both render identically.
-    private func rowContent(notice: SystemNotice, style: NoticeStyle) -> some View {
+    /// The trailing slot picks its font face from the trailing variant —
+    /// `.action` is regular weight (CTA reads naturally next to the
+    /// message), `.badge` is monospaced (digits don't jitter as the badge
+    /// updates between renders).
+    private func rowContent(_ item: TrayItem) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: style.icon)
+            Image(systemName: item.icon)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(style.tint)
+                .foregroundStyle(item.tint)
                 .frame(width: 14, alignment: .center)
-            Text(notice.message)
+            Text(item.message)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.white.opacity(0.85))
                 .lineLimit(1)
             Spacer(minLength: 6)
-            if let title = style.actionTitle {
-                Text(title)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.7))
+            if let trailing = item.trailing {
+                trailingLabel(trailing)
             }
         }
         .contentShape(Rectangle())
     }
 
-    /// VoiceOver label: "<message>, <action>" so the user hears both the
-    /// problem and the activation outcome before deciding to press.
-    private func rowAccessibilityLabel(notice: SystemNotice, style: NoticeStyle) -> String {
-        if let title = style.actionTitle {
-            return "\(notice.message), \(title)"
+    @ViewBuilder
+    private func trailingLabel(_ trailing: TrayItemTrailing) -> some View {
+        switch trailing {
+        case .action(let title):
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.7))
+        case .badge(let label):
+            Text(label)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.7))
         }
-        return notice.message
+    }
+
+    /// VoiceOver label: "<message>, <trailing>" so the user hears both the
+    /// problem and the activation outcome before deciding to press.
+    private func rowAccessibilityLabel(_ item: TrayItem) -> String {
+        if let trailing = item.trailing {
+            return "\(item.message), \(trailing.label)"
+        }
+        return item.message
     }
 
     private var chevronButton: some View {
@@ -170,41 +195,6 @@ struct SystemTrayView: View {
         }
         .buttonStyle(.notchPressable)
         .accessibilityLabel(viewModel.trayExpanded ? "Collapse notices" : "Expand notices")
-    }
-}
-
-// MARK: - Notice presentation
-
-private struct NoticeStyle {
-    let icon: String
-    let tint: Color
-    let actionTitle: String?
-    let action: (@MainActor (NotchViewModel) -> Void)?
-
-    static func style(for kind: SystemNoticeKind) -> NoticeStyle {
-        switch kind {
-        case .missingPermission:
-            return NoticeStyle(
-                icon: "exclamationmark.shield.fill",
-                tint: .orange,
-                actionTitle: "Open Settings",
-                action: { vm in vm.showSettings = true }
-            )
-        case .missingProvider:
-            return NoticeStyle(
-                icon: "questionmark.circle.fill",
-                tint: .yellow,
-                actionTitle: "Open Settings",
-                action: { vm in vm.showSettings = true }
-            )
-        case .configCorruption:
-            return NoticeStyle(
-                icon: "exclamationmark.triangle.fill",
-                tint: .yellow,
-                actionTitle: nil,
-                action: nil
-            )
-        }
     }
 }
 

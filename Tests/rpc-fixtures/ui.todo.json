@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","method":"ui.todo","params":{"items":[{"id":"1","status":"completed","text":"read existing implementation"},{"id":"2","status":"in_progress","text":"write the patch"},{"id":"3","status":"pending","text":"add tests"}],"sessionId":"sess_01abcdef01234567"}}

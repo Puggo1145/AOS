@@ -51,6 +51,13 @@ export function registerSessionHandlers(dispatcher: Dispatcher, manager: Session
     }
     manager.activate(sessionId);
     const snapshot = session.conversation.turns.map((t) => Conversation.toWire(t));
+    // s03: hydrate the Shell's todo panel for the freshly visible session.
+    // Sent regardless of whether the list is empty — the Shell mirror uses
+    // an empty list to clear any stale state from the previous session.
+    dispatcher.notify(RPCMethod.uiTodo, {
+      sessionId: session.id,
+      items: session.todos.snapshot(),
+    });
     return { snapshot };
   });
 }

@@ -169,6 +169,7 @@ public enum RPCMethod {
     public static let uiStatus = "ui.status"
     public static let uiError = "ui.error"
     public static let uiUsage = "ui.usage"
+    public static let uiTodo = "ui.todo"
     public static let providerStatus = "provider.status"
     public static let providerStartLogin = "provider.startLogin"
     public static let providerCancelLogin = "provider.cancelLogin"

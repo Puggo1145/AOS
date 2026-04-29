@@ -97,7 +97,7 @@ struct NotchGeometryTests {
     @Test("tray height is zero when there are no notices")
     func trayHeightZeroWhenEmpty() {
         let s = NotchViewModel.makeTraySize(
-            width: trayWidth, noticeCount: 0, expanded: false,
+            width: trayWidth, itemCount: 0, expanded: false,
             measuredContentHeight: 999, // ignored
             collapsedHeight: trayCollapsed, maxHeight: trayMax
         )
@@ -110,14 +110,14 @@ struct NotchGeometryTests {
         // layout pass writes `trayContentHeight`), we never paint shorter
         // than one row's worth — otherwise the drawer pops in.
         let undershoot = NotchViewModel.makeTraySize(
-            width: trayWidth, noticeCount: 1, expanded: false,
+            width: trayWidth, itemCount: 1, expanded: false,
             measuredContentHeight: 10,
             collapsedHeight: trayCollapsed, maxHeight: trayMax
         )
         #expect(undershoot.height == trayCollapsed)
         // Natural fit between floor and ceiling passes through.
         let natural = NotchViewModel.makeTraySize(
-            width: trayWidth, noticeCount: 1, expanded: false,
+            width: trayWidth, itemCount: 1, expanded: false,
             measuredContentHeight: 80,
             collapsedHeight: trayCollapsed, maxHeight: trayMax
         )
@@ -127,7 +127,7 @@ struct NotchGeometryTests {
     @Test("tray content taller than max is clamped — inner ScrollView takes over")
     func contentTallerThanMaxIsClamped() {
         let s = NotchViewModel.makeTraySize(
-            width: trayWidth, noticeCount: 4, expanded: true,
+            width: trayWidth, itemCount: 4, expanded: true,
             measuredContentHeight: 999,
             collapsedHeight: trayCollapsed, maxHeight: trayMax
         )
@@ -140,7 +140,7 @@ struct NotchGeometryTests {
         // *in the layout* per the SystemTrayView animation contract),
         // the collapsed drawer must render exactly one row's worth.
         let s = NotchViewModel.makeTraySize(
-            width: trayWidth, noticeCount: 3, expanded: false,
+            width: trayWidth, itemCount: 3, expanded: false,
             measuredContentHeight: 200,
             collapsedHeight: trayCollapsed, maxHeight: trayMax
         )
@@ -150,7 +150,7 @@ struct NotchGeometryTests {
     @Test("multi-notice + expanded uses measured height, clamped into [collapsed, max]")
     func multiExpandedUsesMeasured() {
         let s = NotchViewModel.makeTraySize(
-            width: trayWidth, noticeCount: 3, expanded: true,
+            width: trayWidth, itemCount: 3, expanded: true,
             measuredContentHeight: 130,
             collapsedHeight: trayCollapsed, maxHeight: trayMax
         )

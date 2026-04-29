@@ -68,6 +68,8 @@ import { Conversation } from "./conversation";
 import { contextObserver as defaultContextObserver, ContextObserver } from "./context-observer";
 import { SessionManager } from "./session/manager";
 import { toolRegistry, ToolUserError, type ToolHandler, type ToolExecResult } from "./tools";
+import { TODO_WRITE_TOOL_NAME } from "./tools/todo";
+import { TodoManager, type TodoItem } from "./todos/manager";
 import { buildSystemPrompt } from "./system-prompt";
 import { logger } from "../log";
 
@@ -79,6 +81,15 @@ import { logger } from "../log";
 /// user-visible text resets the counter. Surfaces as `internalError` when
 /// hit.
 const MAX_CONSECUTIVE_TOOL_ROUNDS = 25;
+
+/// s03 TodoWrite nag threshold. After this many consecutive tool rounds
+/// without a `todo_write` call AND while open work remains in the plan,
+/// the loop injects a short `<reminder>` user message before the next LLM
+/// round so the model is prompted to update its checklist. Mirrors the
+/// playground reference (`code-examples/s03_todo_write.py`). Reminders are
+/// gated on the plan having pending/in_progress items — empty plans mean
+/// the model judged the task trivial, and nagging there is just noise.
+const ROUNDS_BEFORE_TODO_NAG = 3;
 
 // ---------------------------------------------------------------------------
 // Test injection point.
@@ -244,6 +255,7 @@ export function registerAgentHandlers(dispatcher: Dispatcher, opts: RegisterAgen
       turnId,
       signal: controller.signal,
       observer,
+      todos: session.todos,
       onDone: () => manager.notifyListChanged(),
     })
       .catch((err) => logger.error("agent loop fatal", { sessionId: session.id, turnId, err: String(err) }))
@@ -273,7 +285,12 @@ export function registerAgentHandlers(dispatcher: Dispatcher, opts: RegisterAgen
     const session = resolveSession(sessionId);
     session.turns.abortAll();
     session.conversation.reset();
+    // s03: a wiped conversation owns no plan — clear and broadcast the
+    // empty list so the Shell's todo panel collapses in lockstep with the
+    // history.
+    session.todos.clear();
     dispatcher.notify(RPCMethod.conversationReset, { sessionId: session.id });
+    dispatcher.notify(RPCMethod.uiTodo, { sessionId: session.id, items: [] });
     // turnCount/lastActivityAt regress; surface to history list.
     manager.notifyListChanged();
     return { ok: true };
@@ -292,6 +309,12 @@ export async function runTurn(
     turnId: string;
     signal: AbortSignal;
     observer?: ContextObserver;
+    /// Per-session TodoWrite plan. When provided, the loop projects every
+    /// `todo_write` tool call onto the wire as `ui.todo` and injects a
+    /// `<reminder>` user message after `ROUNDS_BEFORE_TODO_NAG` consecutive
+    /// rounds without a todo update (only when open work remains). Tests
+    /// that don't exercise s03 may pass `null` to skip the entire path.
+    todos?: TodoManager | null;
     /// Called when the turn lands in a terminal `done` state (post-`markDone`).
     /// Loop uses this to fire `session.listChanged` (turnCount + lastActivityAt
     /// changed). Errored / cancelled paths do not increment turnCount, so they
@@ -301,6 +324,7 @@ export async function runTurn(
 ): Promise<void> {
   const { sessionId, turnId, signal } = params;
   const observer = params.observer ?? defaultContextObserver;
+  const todos = params.todos ?? null;
 
   dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId, status: "working" });
 
@@ -376,12 +400,35 @@ export async function runTurn(
     });
   };
 
+  // s03: subscribe to the per-session TodoManager so every successful
+  // `todo_write` call (i.e. one that passed validation and replaced the
+  // list) projects onto the wire as `ui.todo`. The subscriber fires
+  // synchronously inside `manager.update()`, so the wire ordering is
+  // tool-result → ui.todo → next round, matching what the Shell mirror
+  // expects. We unsubscribe at the bottom of the try/finally so a turn
+  // that errors out doesn't keep emitting after it has terminated.
+  const unsubTodo = todos
+    ? todos.subscribe((items) => {
+        dispatcher.notify(RPCMethod.uiTodo, {
+          sessionId,
+          items: todoItemsForWire(items),
+        });
+      })
+    : null;
+
   try {
     // Counts tool rounds since the assistant last emitted visible text.
     // Reset on any round whose final AssistantMessage carries a non-empty
     // text content block; incremented on each tool-bearing round. When it
     // exceeds MAX_CONSECUTIVE_TOOL_ROUNDS the turn bails as a runaway loop.
     let consecutiveSilentToolRounds = 0;
+    /// s03 nag counter — tool rounds since the last `todo_write` invocation
+    /// by the model (regardless of validation outcome — a rejected write
+    /// still proves the model is mindful of its plan; the validator's
+    /// message will steer the next round). Reset to 0 on any tool round
+    /// containing a `todo_write` call. The reminder is injected when this
+    /// hits `ROUNDS_BEFORE_TODO_NAG` and the plan still has open work.
+    let roundsSinceTodo = 0;
     while (true) {
       const messages = convo.llmMessages();
 
@@ -688,6 +735,35 @@ export async function runTurn(
         return;
       }
 
+      // s03 TodoWrite nag. The `ui.todo` notification is fired by the
+      // manager's subscriber (set up before the round loop), so this block
+      // only owns the reminder-injection counter. Counter resets on any
+      // round in which the model invoked `todo_write`; otherwise it
+      // increments, and once it crosses the threshold AND open work
+      // remains the loop appends a synthetic `<reminder>` user message
+      // before the next LLM round. The reminder rides as a UserMessage
+      // rather than a text block on a tool result because (a)
+      // `ToolResultContent` is strict text/image and (b) the playground
+      // reference inserts the reminder ahead of (not inside) the tool
+      // result list.
+      if (todos) {
+        const usedTodo = toolCalls.some((tc) => tc.name === TODO_WRITE_TOOL_NAME);
+        if (usedTodo) {
+          roundsSinceTodo = 0;
+        } else {
+          roundsSinceTodo += 1;
+          if (roundsSinceTodo >= ROUNDS_BEFORE_TODO_NAG && todos.hasOpenWork()) {
+            convo.appendUserMessage(
+              turnId,
+              "<reminder>You have an active to-do list. Update it via the `todo_write` tool — mark the current step completed and the next step in_progress before continuing.</reminder>",
+            );
+            // Don't keep nagging every round once the threshold crosses;
+            // reset so the model gets one prompt per stretch of silence.
+            roundsSinceTodo = 0;
+          }
+        }
+      }
+
       // Loop back: the next round's `streamSimple` will see the appended
       // tool results in `llmMessages()` and either produce more tool calls
       // or a terminal text response.
@@ -706,6 +782,8 @@ export async function runTurn(
         message,
       });
     }
+  } finally {
+    unsubTodo?.();
   }
 }
 
@@ -816,6 +894,14 @@ async function runTool(
     (wrapped as Error & { cause?: unknown }).cause = inner;
     throw wrapped;
   }
+}
+
+/// Project a TodoManager snapshot onto the wire shape. Identity transform
+/// (the manager's `TodoItem` already matches `TodoItemWire`); kept as a
+/// dedicated function so the call site reads as "convert internal to wire"
+/// and tests can assert against the wire shape directly.
+function todoItemsForWire(items: TodoItem[]): TodoItem[] {
+  return items.map((it) => ({ id: it.id, text: it.text, status: it.status }));
 }
 
 /// Render a tool result's content blocks down to a single string for the

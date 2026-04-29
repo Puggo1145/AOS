@@ -412,6 +412,12 @@ public final class AgentService {
     public var latestUsage: ContextUsageSnapshot? {
         sessionStore.activeMirror?.latestUsage
     }
+    /// Active session's TodoWrite plan, in render order. Empty when no plan
+    /// has been written for the active session yet. Drives the Notch panel's
+    /// inline todo card (see `TodoListView`).
+    public var todos: [TodoItemWire] {
+        sessionStore.activeMirror?.todos ?? []
+    }
 
     public var currentSessionId: String? { sessionStore.activeId }
 
@@ -481,6 +487,9 @@ public final class AgentService {
         }
         rpc.registerNotificationHandler(method: RPCMethod.uiUsage) { [weak self] (params: UIUsageParams) in
             await self?.handleUsage(params)
+        }
+        rpc.registerNotificationHandler(method: RPCMethod.uiTodo) { [weak self] (params: UITodoParams) in
+            await self?.handleTodo(params)
         }
     }
 
@@ -626,6 +635,10 @@ public final class AgentService {
 
     internal func handleUsage(_ p: UIUsageParams) {
         sessionStore.mirror(for: p.sessionId).applyUsage(p)
+    }
+
+    internal func handleTodo(_ p: UITodoParams) {
+        sessionStore.mirror(for: p.sessionId).applyTodo(p)
     }
 
     // MARK: - Test seams

@@ -390,6 +390,43 @@ public struct UIErrorParams: Codable, Sendable, Equatable {
     }
 }
 
+/// One TodoWrite plan item. Mirrors the sidecar's `TodoItem` (validated,
+/// rendered to the model, and projected onto the wire). `status` is a
+/// closed enum on the wire — the sidecar rejects any other string before
+/// the item ever rides a notification.
+public struct TodoItemWire: Codable, Sendable, Equatable {
+    public enum Status: String, Codable, Sendable, Equatable, CaseIterable {
+        case pending
+        case inProgress = "in_progress"
+        case completed
+    }
+
+    public let id: String
+    public let text: String
+    public let status: Status
+
+    public init(id: String, text: String, status: Status) {
+        self.id = id
+        self.text = text
+        self.status = status
+    }
+}
+
+/// `ui.todo` projects the active session's TodoWrite plan onto the wire.
+/// Fired on every successful `todo_write` tool call, on `agent.reset` (with
+/// an empty list), and once on `session.activate` so the Shell can hydrate
+/// the todo panel for the freshly visible session. Whole-list semantics:
+/// the Shell mirror replaces its per-session list with `items` verbatim.
+public struct UITodoParams: Codable, Sendable, Equatable {
+    public let sessionId: String
+    public let items: [TodoItemWire]
+
+    public init(sessionId: String, items: [TodoItemWire]) {
+        self.sessionId = sessionId
+        self.items = items
+    }
+}
+
 /// Token-usage snapshot emitted once per LLM round. Drives the live composer's
 /// context-usage ring. See `UIUsageParams` in `sidecar/src/rpc/rpc-types.ts`
 /// for the full contract. The headline "used context" is

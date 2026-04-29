@@ -7,12 +7,18 @@
 
 import { Conversation } from "../conversation";
 import { TurnRegistry } from "../registry";
+import { TodoManager } from "../todos/manager";
 import type { SessionId, SessionInfo, SessionListItem } from "./types";
 
 export class Session {
   readonly id: SessionId;
   readonly conversation: Conversation;
   readonly turns: TurnRegistry;
+  /// Per-session TodoWrite plan. Lifecycle matches the conversation:
+  /// fresh on session create, cleared on `agent.reset`. The `todo_write`
+  /// tool mutates this; the agent loop subscribes and projects every
+  /// update onto the wire as `ui.todo`.
+  readonly todos: TodoManager;
   private _info: SessionInfo;
 
   constructor(info: SessionInfo) {
@@ -20,6 +26,7 @@ export class Session {
     this._info = info;
     this.conversation = new Conversation();
     this.turns = new TurnRegistry();
+    this.todos = new TodoManager();
   }
 
   get info(): SessionInfo {

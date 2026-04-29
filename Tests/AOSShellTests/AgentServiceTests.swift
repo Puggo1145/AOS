@@ -287,4 +287,58 @@ struct AgentServiceTests {
         s.handleConversationReset(ConversationResetParams(sessionId: "S"))
         #expect(s.lastErrorMessage == nil)
     }
+
+    // MARK: - s03 TodoWrite mirror
+    //
+    // The Shell side just routes `ui.todo` notifications to the right
+    // per-session mirror; the wire shape is byte-equal to the sidecar's
+    // (covered by RPC fixture roundtrip), so these tests pin the
+    // session-routing + reset behaviour.
+
+    @Test("ui.todo replaces the active session's plan in whole-list shape")
+    func todoReplacesActivePlan() {
+        let s = makeService()
+        let items: [TodoItemWire] = [
+            TodoItemWire(id: "1", text: "draft", status: .inProgress),
+            TodoItemWire(id: "2", text: "review", status: .pending),
+        ]
+        s.handleTodo(UITodoParams(sessionId: "S", items: items))
+        #expect(s.todos.count == 2)
+        #expect(s.todos[0].status == .inProgress)
+        // A subsequent ui.todo with a tighter list MUST replace, not merge.
+        let next: [TodoItemWire] = [
+            TodoItemWire(id: "1", text: "draft", status: .completed),
+        ]
+        s.handleTodo(UITodoParams(sessionId: "S", items: next))
+        #expect(s.todos.count == 1)
+        #expect(s.todos[0].status == .completed)
+    }
+
+    @Test("conversation.reset wipes the todo plan along with the turns")
+    func todoClearedOnReset() {
+        let s = makeService()
+        s.handleTodo(UITodoParams(
+            sessionId: "S",
+            items: [TodoItemWire(id: "1", text: "x", status: .pending)]
+        ))
+        #expect(!s.todos.isEmpty)
+        s.handleConversationReset(ConversationResetParams(sessionId: "S"))
+        #expect(s.todos.isEmpty)
+    }
+
+    @Test("ui.todo for an inactive session is stored on its own mirror, not the active one")
+    func todoRoutesPerSession() {
+        let s = makeService()
+        // Active session is "S" — emit a plan for a different session id.
+        // The active projection (`s.todos`) must not pick it up.
+        s.handleTodo(UITodoParams(
+            sessionId: "OTHER",
+            items: [TodoItemWire(id: "1", text: "x", status: .pending)]
+        ))
+        #expect(s.todos.isEmpty)
+        // The OTHER session's mirror does carry the plan, so when the user
+        // activates it the panel hydrates correctly.
+        let other = s.sessionStore.mirror(for: "OTHER")
+        #expect(other.todos.count == 1)
+    }
 }
