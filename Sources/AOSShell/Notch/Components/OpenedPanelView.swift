@@ -55,6 +55,20 @@ struct OpenedPanelView: View {
     @State private var historyViewportHeight: CGFloat = 0
     @State private var historyBottomMaxY: CGFloat = 0
     @State private var shouldFollowLiveOutput: Bool = true
+    /// False until the ScrollView has been positioned at the bottom for the
+    /// first time after mount. The panel is dropped from the tree on close,
+    /// so reopening with non-empty turns starts a fresh ScrollView at offset
+    /// 0 — without an explicit initial restore the user sees the *top* of a
+    /// long history and a stale offset past actual content (LazyVStack
+    /// row-height estimates underflow, so `scrollTo(.bottom)` lands past the
+    /// real end of content until interaction realizes intermediate rows).
+    @State private var hasRestoredInitialScroll: Bool = false
+    /// Deferred reassertion of the initial restore. Lives in its own task
+    /// slot (not `pendingHistoryScroll`) so streaming-height-driven
+    /// `scrollHistoryToBottom` calls during the settle window can't cancel
+    /// it. While non-nil, live-follow scrolling is suppressed — the restore
+    /// task is the one in charge of pinning the bottom.
+    @State private var pendingInitialRestore: Task<Void, Never>?
 
     /// Top safe area equal to the physical notch height. The opened panel
     /// extends to the very top of the screen, so any content inside the
@@ -89,8 +103,11 @@ struct OpenedPanelView: View {
                 viewModel.historyContentHeight = 0
                 lastMeasuredTurnID = nil
                 shouldFollowLiveOutput = true
+                hasRestoredInitialScroll = false
                 pendingHistoryScroll?.cancel()
                 pendingHistoryScroll = nil
+                pendingInitialRestore?.cancel()
+                pendingInitialRestore = nil
                 pendingFollowDisable?.cancel()
                 pendingFollowDisable = nil
             }
@@ -379,17 +396,46 @@ struct OpenedPanelView: View {
                 }
 
                 let turnID = agentService.turns.last?.id
-                let didAppendTurn = turnID != lastMeasuredTurnID
+                let isInitialRestore = !hasRestoredInitialScroll && turnID != nil
+                let didAppendTurn = !isInitialRestore && turnID != lastMeasuredTurnID
                 lastMeasuredTurnID = turnID
 
-                if didAppendTurn {
+                if isInitialRestore || didAppendTurn {
                     shouldFollowLiveOutput = true
+                }
+
+                if isInitialRestore {
+                    // First measurement after mount with existing turns.
+                    // Snap to the last turn's id (not the bottom-anchor 1pt
+                    // sentinel) — under LazyVStack the sentinel's absolute
+                    // position is summed from estimated heights of unrealized
+                    // rows, so scrolling to it lands past real content. Targeting
+                    // a real id forces SwiftUI to realize that row and place it
+                    // correctly. Animation off: the panel is still mid-open
+                    // transition, animating the scroll on top of a growing frame
+                    // produces a stale offset.
+                    hasRestoredInitialScroll = true
+                    if isHistoryInternallyScrollable(contentHeight: rounded) {
+                        scrollHistoryToTurn(turnID, proxy: proxy, animated: false)
+                    }
+                    return
                 }
 
                 guard isHistoryInternallyScrollable(contentHeight: rounded) else { return }
                 if didAppendTurn {
+                    // A genuinely new turn supersedes any in-flight initial
+                    // restore; cancel it so the two scroll drivers don't fight.
+                    pendingInitialRestore?.cancel()
+                    pendingInitialRestore = nil
                     scrollHistoryToBottom(proxy, animated: true)
                 } else if isLastTurnLive && shouldFollowLiveOutput {
+                    // Streaming-height ticks during the initial restore's
+                    // settle window must not cancel the deferred reassertion
+                    // (which lives in its own task slot). Skip until the
+                    // restore completes — it's the one positioning the
+                    // bottom; reasserting via the sentinel anchor here would
+                    // re-introduce the LazyVStack stale-offset bug.
+                    guard pendingInitialRestore == nil else { return }
                     scrollHistoryToBottom(proxy, animated: false)
                 }
             }
@@ -434,6 +480,48 @@ struct OpenedPanelView: View {
             guard !Task.isCancelled else { return }
             shouldFollowLiveOutput = false
             pendingFollowDisable = nil
+        }
+    }
+
+    /// Snap to a specific turn's id with `.bottom` anchor. Used for the
+    /// initial restore-after-mount path where targeting a real row id (rather
+    /// than the post-LazyVStack sentinel) is critical for correct positioning.
+    /// Two scrolls: one immediate so the user never sees the top of a long
+    /// history, one after the open-transition settles to absorb any drift as
+    /// the panel's frame and the lazy stack's row heights finalize.
+    private func scrollHistoryToTurn(
+        _ turnID: String?,
+        proxy: ScrollViewProxy,
+        animated: Bool
+    ) {
+        guard let turnID else { return }
+        // Restore lives in its own task slot so live-follow's
+        // `pendingHistoryScroll?.cancel()` (triggered by streaming-height
+        // ticks on a still-`working` last turn) can't kill the settle-window
+        // reassertion below. Any in-flight prior restore is replaced here.
+        pendingInitialRestore?.cancel()
+        pendingFollowDisable?.cancel()
+        pendingFollowDisable = nil
+        pendingInitialRestore = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            var txn = Transaction()
+            txn.disablesAnimations = !animated || reduceMotion
+            withTransaction(txn) {
+                proxy.scrollTo(turnID, anchor: .bottom)
+            }
+            // Open transition is `.notchHeight` (0.32s) on the silhouette
+            // height; wait it out, then snap once more so any LazyVStack
+            // row-height adjustments that landed during the animation can't
+            // leave a stale offset (the empty-area-until-you-scroll bug).
+            try? await Task.sleep(for: .milliseconds(360))
+            guard !Task.isCancelled else { return }
+            var settle = Transaction()
+            settle.disablesAnimations = true
+            withTransaction(settle) {
+                proxy.scrollTo(turnID, anchor: .bottom)
+            }
+            pendingInitialRestore = nil
         }
     }
 
