@@ -27,6 +27,10 @@ public final class ConversationMirror {
     public var currentTurn: String?
     public var status: AgentStatus = .idle
     public var lastErrorMessage: String?
+    /// Most recent `ui.usage` snapshot for this session. Updated once per
+    /// LLM round (NOT per streamed token), so the composer's context-usage
+    /// ring tracks each round's grow. Cleared on `conversation.reset`.
+    public var latestUsage: ContextUsageSnapshot?
 
     private var doneRevertTask: Task<Void, Never>?
     private var errorRevertTask: Task<Void, Never>?
@@ -74,8 +78,21 @@ public final class ConversationMirror {
         turns = []
         status = .idle
         lastErrorMessage = nil
+        latestUsage = nil
         cancelReverts()
         cancelWaitingDebounce()
+    }
+
+    public func applyUsage(_ p: UIUsageParams) {
+        latestUsage = ContextUsageSnapshot(
+            inputTokens: p.inputTokens,
+            outputTokens: p.outputTokens,
+            cacheReadTokens: p.cacheReadTokens,
+            cacheWriteTokens: p.cacheWriteTokens,
+            totalTokens: p.totalTokens,
+            contextWindow: p.contextWindow,
+            modelId: p.modelId
+        )
     }
 
     public func applyToken(_ p: UITokenParams) {

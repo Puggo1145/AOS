@@ -184,6 +184,55 @@ public struct ToolCallRecord: Identifiable, Sendable, Equatable {
     public var outputText: String?
 }
 
+/// Per-session snapshot of the most recent `ui.usage` frame. The composer's
+/// context-usage ring reads this directly. "Used context" for ring/percentage
+/// purposes is `inputTokens + cacheReadTokens + cacheWriteTokens + outputTokens`
+/// — the byte-equivalent of what the next round will re-send. The discrete
+/// fields stay around so the hover tooltip can break out the cache portion.
+public struct ContextUsageSnapshot: Sendable, Equatable {
+    public let inputTokens: Int
+    public let outputTokens: Int
+    public let cacheReadTokens: Int
+    public let cacheWriteTokens: Int
+    public let totalTokens: Int
+    public let contextWindow: Int
+    public let modelId: String
+
+    public init(
+        inputTokens: Int,
+        outputTokens: Int,
+        cacheReadTokens: Int,
+        cacheWriteTokens: Int,
+        totalTokens: Int,
+        contextWindow: Int,
+        modelId: String
+    ) {
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.cacheReadTokens = cacheReadTokens
+        self.cacheWriteTokens = cacheWriteTokens
+        self.totalTokens = totalTokens
+        self.contextWindow = contextWindow
+        self.modelId = modelId
+    }
+
+    /// Sum that the composer ring renders. Includes cache hits — they still
+    /// occupy the prompt the model receives, so they count toward the
+    /// window's fill regardless of how cheaply they were billed.
+    public var usedTokens: Int {
+        inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens
+    }
+
+    /// Clamped 0…1 fill ratio for the ring. Capped so a usage frame that
+    /// briefly overshoots (e.g. a provider that double-counts) doesn't blow
+    /// the geometry out.
+    public var fillRatio: Double {
+        guard contextWindow > 0 else { return 0 }
+        let raw = Double(usedTokens) / Double(contextWindow)
+        return min(max(raw, 0), 1)
+    }
+}
+
 /// "正在后台操作 X" indicator payload read by the Notch closed bar. Resolved
 /// from the in-flight `computer_use_*` tool call's `args.pid` via
 /// `NSRunningApplication`. We carry the icon (NSImage) and a one-word verb
@@ -358,6 +407,11 @@ public final class AgentService {
     public var lastErrorMessage: String? {
         sessionStore.activeMirror?.lastErrorMessage
     }
+    /// Most recent context-usage frame for the active session. `nil` until
+    /// the first LLM round of any turn lands; cleared on `agent.reset`.
+    public var latestUsage: ContextUsageSnapshot? {
+        sessionStore.activeMirror?.latestUsage
+    }
 
     public var currentSessionId: String? { sessionStore.activeId }
 
@@ -424,6 +478,9 @@ public final class AgentService {
         }
         rpc.registerNotificationHandler(method: RPCMethod.uiError) { [weak self] (params: UIErrorParams) in
             await self?.handleError(params)
+        }
+        rpc.registerNotificationHandler(method: RPCMethod.uiUsage) { [weak self] (params: UIUsageParams) in
+            await self?.handleUsage(params)
         }
     }
 
@@ -565,6 +622,10 @@ public final class AgentService {
 
     internal func handleError(_ p: UIErrorParams) {
         sessionStore.mirror(for: p.sessionId).applyError(p)
+    }
+
+    internal func handleUsage(_ p: UIUsageParams) {
+        sessionStore.mirror(for: p.sessionId).applyUsage(p)
     }
 
     // MARK: - Test seams

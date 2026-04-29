@@ -34,6 +34,7 @@ import {
   type UIToolCallParams,
   type UIStatusParams,
   type UIErrorParams,
+  type UIUsageParams,
   type ProviderStatusParams,
   type ProviderStartLoginParams,
   type ProviderCancelLoginParams,
@@ -264,6 +265,21 @@ test("ui.error fixture roundtrips byte-equal", () => {
   const note = parsed as RPCNotification<UIErrorParams>;
   expect(note.method).toBe(RPCMethod.uiError);
   expect(typeof note.params.code).toBe("number");
+});
+
+test("ui.usage fixture roundtrips byte-equal", () => {
+  assertRoundtrip("ui.usage.json");
+  const { parsed } = loadFixture("ui.usage.json");
+  const note = parsed as RPCNotification<UIUsageParams>;
+  expect(note.method).toBe(RPCMethod.uiUsage);
+  expect(typeof note.params.inputTokens).toBe("number");
+  expect(typeof note.params.outputTokens).toBe("number");
+  expect(typeof note.params.cacheReadTokens).toBe("number");
+  expect(typeof note.params.cacheWriteTokens).toBe("number");
+  expect(typeof note.params.totalTokens).toBe("number");
+  expect(typeof note.params.contextWindow).toBe("number");
+  expect(typeof note.params.modelId).toBe("string");
+  expect(note.params.contextWindow).toBeGreaterThan(0);
 });
 
 test("provider.status fixture roundtrips byte-equal", () => {

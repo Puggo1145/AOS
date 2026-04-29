@@ -389,3 +389,42 @@ public struct UIErrorParams: Codable, Sendable, Equatable {
         self.data = data
     }
 }
+
+/// Token-usage snapshot emitted once per LLM round. Drives the live composer's
+/// context-usage ring. See `UIUsageParams` in `sidecar/src/rpc/rpc-types.ts`
+/// for the full contract. The headline "used context" is
+/// `inputTokens + cacheReadTokens + cacheWriteTokens + outputTokens` — the
+/// byte-equivalent the next round's prompt+reply round-trips through.
+public struct UIUsageParams: Codable, Sendable, Equatable {
+    public let sessionId: String
+    public let turnId: String
+    public let inputTokens: Int
+    public let outputTokens: Int
+    public let cacheReadTokens: Int
+    public let cacheWriteTokens: Int
+    public let totalTokens: Int
+    public let contextWindow: Int
+    public let modelId: String
+
+    public init(
+        sessionId: String,
+        turnId: String,
+        inputTokens: Int,
+        outputTokens: Int,
+        cacheReadTokens: Int,
+        cacheWriteTokens: Int,
+        totalTokens: Int,
+        contextWindow: Int,
+        modelId: String
+    ) {
+        self.sessionId = sessionId
+        self.turnId = turnId
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.cacheReadTokens = cacheReadTokens
+        self.cacheWriteTokens = cacheWriteTokens
+        self.totalTokens = totalTokens
+        self.contextWindow = contextWindow
+        self.modelId = modelId
+    }
+}

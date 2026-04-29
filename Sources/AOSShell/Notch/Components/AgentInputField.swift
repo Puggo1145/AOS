@@ -119,6 +119,9 @@ struct ComposerCard: View {
                 effortMenu
             }
             Spacer(minLength: 8)
+            if let usage = agentService.latestUsage {
+                ContextUsageRing(usage: usage)
+            }
             sendButton
         }
     }

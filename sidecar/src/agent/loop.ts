@@ -536,6 +536,23 @@ export async function runTurn(
         return;
       }
 
+      // Surface usage to the Shell composer's context-usage ring. Fired
+      // PER round (not once per turn) so multi-round tool flows show the
+      // window fill incrementally — see UIUsageParams. We deliberately emit
+      // after `appendAssistant` so the wire ordering matches the durable
+      // store: the assistant message exists before its usage frame lands.
+      dispatcher.notify(RPCMethod.uiUsage, {
+        sessionId,
+        turnId,
+        inputTokens: final.usage.input,
+        outputTokens: final.usage.output,
+        cacheReadTokens: final.usage.cacheRead,
+        cacheWriteTokens: final.usage.cacheWrite,
+        totalTokens: final.usage.totalTokens,
+        contextWindow: model.contextWindow,
+        modelId: model.id,
+      });
+
       const toolCalls = extractToolCalls(final);
 
       if (toolCalls.length === 0) {

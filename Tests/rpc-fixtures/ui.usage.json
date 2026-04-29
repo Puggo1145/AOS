@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","method":"ui.usage","params":{"cacheReadTokens":3072,"cacheWriteTokens":0,"contextWindow":400000,"inputTokens":50,"modelId":"gpt-5.5","outputTokens":54,"sessionId":"sess_01abcdef01234567","totalTokens":3176,"turnId":"01HABCDEF0123456789TURNSUBM"}}

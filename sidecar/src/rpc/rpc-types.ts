@@ -120,6 +120,7 @@ export const RPCMethod = {
   uiToolCall: "ui.toolCall",
   uiStatus: "ui.status",
   uiError: "ui.error",
+  uiUsage: "ui.usage",
   providerStatus: "provider.status",
   providerStartLogin: "provider.startLogin",
   providerCancelLogin: "provider.cancelLogin",
@@ -400,6 +401,33 @@ export interface UIErrorParams {
   code: number;
   message: string;
   data?: JSONValue;
+}
+
+/// Token-usage snapshot emitted once per LLM round, immediately after the
+/// model returns its final assistant message (BEFORE tool execution and
+/// BEFORE the next round). Drives the live composer's context-usage ring
+/// so the user sees their context window fill in real time, round by round,
+/// without waiting for the whole agent loop to terminate.
+///
+/// `inputTokens` here is the catalog `Usage.input` field (input tokens that
+/// were NOT served from cache). Cache reads/writes are tracked separately so
+/// the tooltip can break them out, but for the headline "used context" the
+/// Shell sums `input + cacheRead + cacheWrite + output` — that's the byte
+/// equivalent the next round's prompt+reply round-trips through.
+export interface UIUsageParams {
+  sessionId: string;
+  turnId: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  /// Catalog `model.contextWindow` for the model that just produced this
+  /// reply. Echoed on the wire so the Shell can render the ring without a
+  /// second `config.get` round trip and so a mid-conversation model swap
+  /// is reflected immediately.
+  contextWindow: number;
+  modelId: string;
 }
 
 // ---------------------------------------------------------------------------
