@@ -102,7 +102,10 @@ private struct BackgroundOpBadge: View {
         .frame(width: size, height: size)
         .opacity(reduceMotion ? 1.0 : (pulse ? 0.55 : 1.0))
         .animation(
-            reduceMotion ? .default : .easeInOut(duration: 0.9).repeatForever(autoreverses: true),
+            // Reduce Motion suppresses the perpetual pulse entirely.
+            // `.default` would still animate (just with a default curve),
+            // defeating the affordance.
+            reduceMotion ? nil : .easeInOut(duration: 0.9).repeatForever(autoreverses: true),
             value: pulse
         )
         .accessibilityLabel(Text(accessibilityLabel))

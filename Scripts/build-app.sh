@@ -48,6 +48,12 @@ rm -rf AOS.app/Contents/Resources/sidecar
 mkdir -p AOS.app/Contents/Resources/sidecar
 cp -R sidecar/src AOS.app/Contents/Resources/sidecar/src
 cp sidecar/package.json AOS.app/Contents/Resources/sidecar/package.json
+# Lockfile is the source of truth. Bun 1.1+ writes text-format
+# `bun.lock`; older binary `bun.lockb` is supported for legacy checkouts.
+# Either form is honoured; the install step below requires at least one.
+if [ -f sidecar/bun.lock ]; then
+  cp sidecar/bun.lock AOS.app/Contents/Resources/sidecar/bun.lock
+fi
 if [ -f sidecar/bun.lockb ]; then
   cp sidecar/bun.lockb AOS.app/Contents/Resources/sidecar/bun.lockb
 fi
@@ -71,14 +77,20 @@ if [ -z "$HOST_BUN" ]; then
 fi
 
 # Frozen install: lockfile is the source of truth, no resolution drift
-# at build time. Falls back to a regular install if no lockfile exists
-# (first build / locally-edited dep).
+# at build time. We REQUIRE a lockfile here — packaging a release with
+# floating dependency versions silently breaks supply-chain reproducibility
+# (the prior fallback to `bun install --production` would hit the network
+# at build time and resolve different versions per build host). Bun 1.1+
+# writes `bun.lock`; older checkouts may still carry `bun.lockb`. Either
+# form satisfies the gate.
 pushd AOS.app/Contents/Resources/sidecar > /dev/null
-if [ -f bun.lockb ]; then
+if [ -f bun.lock ] || [ -f bun.lockb ]; then
   "$HOST_BUN" install --frozen-lockfile --production
 else
-  echo "warning: no bun.lockb in sidecar/ — running unfrozen install" >&2
-  "$HOST_BUN" install --production
+  echo "error: no bun.lock or bun.lockb in sidecar/ — refusing to package" >&2
+  echo "  Generate one with: (cd sidecar && bun install)" >&2
+  popd > /dev/null
+  exit 1
 fi
 popd > /dev/null
 

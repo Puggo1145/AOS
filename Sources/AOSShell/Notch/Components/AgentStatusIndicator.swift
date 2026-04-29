@@ -72,7 +72,10 @@ private struct ToolIconBadge: View {
             .foregroundStyle(.white.opacity(0.55))
             .opacity(reduceMotion ? 1.0 : (pulse ? 0.4 : 1.0))
             .animation(
-                reduceMotion ? .default : .easeInOut(duration: 0.9).repeatForever(autoreverses: true),
+                // Reduce Motion suppresses the perpetual pulse entirely.
+                // `.default` would still animate (just with a default
+                // curve), defeating the affordance.
+                reduceMotion ? nil : .easeInOut(duration: 0.9).repeatForever(autoreverses: true),
                 value: pulse
             )
             .onAppear { pulse = !reduceMotion }

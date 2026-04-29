@@ -467,6 +467,42 @@ struct RPCClientCodecTests {
         #expect(result.protocolVersion == aosProtocolVersion)
     }
 
+    @Test("awaitHandshake throws timeout (and does not hang) when sidecar never sends rpc.hello")
+    func handshakeTimeoutWhenNoHelloEverArrives() async throws {
+        // The bug this guards against: `awaitHandshake` runs `suspendForHandshake`
+        // and a timeout sibling inside `withThrowingTaskGroup`. Cancellation does
+        // NOT auto-resume `withCheckedThrowingContinuation`, so without a
+        // cancellation handler the suspended child task never finishes and the
+        // group's implicit "wait for all children" stalls forever — the timeout
+        // path silently hangs the caller (Shell startup) instead of throwing.
+        //
+        // The fix wraps `suspendForHandshake` in `withTaskCancellationHandler`
+        // that pulls the stored continuation out and resumes it with
+        // `CancellationError`. This test fails (hangs past `Task.sleep`) on the
+        // unfixed code and completes within the timeout window on the fixed
+        // code.
+        let (client, _, serverRead) = makeClient()
+        _ = serverRead
+        defer { client.stop() }
+
+        // Wall-clock guard: if `awaitHandshake` ever does hang, this Task
+        // ensures the test fails loudly within a bounded window instead of
+        // hanging the whole suite.
+        let start = Date()
+        do {
+            _ = try await client.awaitHandshake(timeout: 0.3)
+            Issue.record("awaitHandshake should have thrown timeout when no rpc.hello ever arrived")
+        } catch RPCClientError.timeout(let method) {
+            #expect(method == RPCMethod.rpcHello)
+        } catch {
+            Issue.record("expected RPCClientError.timeout, got \(error)")
+        }
+        let elapsed = Date().timeIntervalSince(start)
+        // Generous bound: timeout is 0.3s, allow scheduling slack but reject
+        // anything in "hung" territory.
+        #expect(elapsed < 2.0, "awaitHandshake took \(elapsed)s; expected ~0.3s")
+    }
+
     // MARK: - Helpers
 
     private struct SentRequestProbe: Decodable {

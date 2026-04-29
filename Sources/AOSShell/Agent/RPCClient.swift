@@ -89,19 +89,38 @@ public final class RPCClient: @unchecked Sendable {
     )
 
     private let writeQueue = DispatchQueue(label: "aos.rpc.write")
-    private var readerStopped = false
 
-    /// Serial notification dispatcher. Inbound notifications are yielded to
-    /// `notificationContinuation` in arrival order; a single consumer Task
-    /// awaits each handler before pulling the next item.
+    /// Lifecycle + serial-notification state. Originally three plain
+    /// mutable properties (`readerStopped`, `notificationContinuation`,
+    /// `notificationConsumer`) accessed concurrently from the caller
+    /// thread (start/stop), the reader DispatchQueue (`runReaderSync`
+    /// reads `readerStopped`, `handle()` reads `notificationContinuation`),
+    /// and the consumer Task. That left the class depending on
+    /// `@unchecked Sendable` for exactly the lifecycle properties most
+    /// likely to race a stop/start cycle. Bundled here under the same
+    /// `OSAllocatedUnfairLock<State>` pattern used by `pendingLock` /
+    /// `handlerRegistry` / `handshakeState` so the whole class's mutable
+    /// state is uniformly serialized.
     ///
-    /// Why serial: streaming `ui.token` deltas must be applied in arrival
-    /// order. The earlier implementation spawned a `Task.detached` per
-    /// notification, which let two deltas race to the MainActor handler and
-    /// concatenate out of order (e.g. a reply streamed as "Hi", "! How"
-    /// landed in `turns[idx].reply` as "! HowHi"). One consumer = no race.
-    private var notificationContinuation: AsyncStream<@Sendable () async -> Void>.Continuation?
-    private var notificationConsumer: Task<Void, Never>?
+    /// `readerStopped` is read once per reader-loop iteration (cheap on
+    /// `OSAllocatedUnfairLock`). `notificationContinuation` is captured
+    /// once per inbound notification line; `notificationConsumer` is
+    /// only read on stop.
+    ///
+    /// Why serial notification consumer: streaming `ui.token` deltas must
+    /// be applied in arrival order. An earlier implementation spawned
+    /// `Task.detached` per notification, which let two deltas race to the
+    /// MainActor handler and concatenate out of order (e.g. a reply
+    /// streamed as "Hi", "! How" landed in `turns[idx].reply` as
+    /// "! HowHi"). One consumer = no race.
+    private struct LifecycleState {
+        var readerStopped: Bool = false
+        var notificationContinuation: AsyncStream<@Sendable () async -> Void>.Continuation?
+        var notificationConsumer: Task<Void, Never>?
+    }
+    private let lifecycle = OSAllocatedUnfairLock<LifecycleState>(
+        initialState: LifecycleState()
+    )
 
     private static let maxLineBytes = 2 * 1024 * 1024 // 2MB per protocol spec
 
@@ -117,16 +136,19 @@ public final class RPCClient: @unchecked Sendable {
         // so the synchronous `read(upToCount:)` doesn't pin a cooperative-pool
         // thread. This keeps Swift Concurrency's pool free for all the other
         // async work in tests + production.
-        readerStopped = false
 
         // Spin up the serial notification consumer before the reader starts
         // producing so the first inbound notification has somewhere to land.
         let (stream, continuation) = AsyncStream<@Sendable () async -> Void>.makeStream()
-        notificationContinuation = continuation
-        notificationConsumer = Task.detached {
+        let consumer = Task.detached {
             for await work in stream {
                 await work()
             }
+        }
+        lifecycle.withLock { state in
+            state.readerStopped = false
+            state.notificationContinuation = continuation
+            state.notificationConsumer = consumer
         }
 
         let q = DispatchQueue(label: "aos.rpc.reader", qos: .utility)
@@ -134,10 +156,14 @@ public final class RPCClient: @unchecked Sendable {
     }
 
     public func stop() {
-        readerStopped = true
-        notificationContinuation?.finish()
-        notificationContinuation = nil
-        notificationConsumer = nil
+        let priorContinuation = lifecycle.withLock { state -> AsyncStream<@Sendable () async -> Void>.Continuation? in
+            state.readerStopped = true
+            let c = state.notificationContinuation
+            state.notificationContinuation = nil
+            state.notificationConsumer = nil
+            return c
+        }
+        priorContinuation?.finish()
         // Close the inbound handle so the synchronous `read()` in
         // `runReaderSync` returns EOF and the reader queue's iteration
         // exits. Without this the reader holds a cooperative thread
@@ -349,25 +375,46 @@ public final class RPCClient: @unchecked Sendable {
     /// Suspend on the handshake gate. Returns immediately if the sidecar
     /// already sent `rpc.hello`; otherwise registers a continuation
     /// resolved by `resolveHandshake(_:)` from the inbound dispatcher.
+    ///
+    /// Wrapped in `withTaskCancellationHandler` so that when the parent
+    /// task group cancels this child (e.g. timeout sibling threw), the
+    /// stored continuation gets actively resumed with `CancellationError`.
+    /// Plain `withCheckedThrowingContinuation` is NOT cancellation-aware —
+    /// the cont stays suspended forever, the cancelled child task never
+    /// completes, and `withThrowingTaskGroup` waits indefinitely for it.
+    /// Without this handler, `awaitHandshake()`'s timeout path hangs the
+    /// caller (Shell startup) instead of throwing.
     private func suspendForHandshake() async throws -> HelloResult {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<HelloResult, Error>) in
-            handshakeState.withLock { state in
-                if let result = state.result {
-                    cont.resume(returning: result)
-                    return
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<HelloResult, Error>) in
+                handshakeState.withLock { state in
+                    if let result = state.result {
+                        cont.resume(returning: result)
+                        return
+                    }
+                    if let failed = state.failure {
+                        cont.resume(throwing: failed)
+                        return
+                    }
+                    // Two concurrent awaiters would be a programmer error;
+                    // resolve the prior one with cancellation so it surfaces
+                    // rather than silently leaking.
+                    if let prior = state.continuation {
+                        prior.resume(throwing: CancellationError())
+                    }
+                    state.continuation = cont
                 }
-                if let failed = state.failure {
-                    cont.resume(throwing: failed)
-                    return
-                }
-                // Two concurrent awaiters would be a programmer error;
-                // resolve the prior one with cancellation so it surfaces
-                // rather than silently leaking.
-                if let prior = state.continuation {
-                    prior.resume(throwing: CancellationError())
-                }
-                state.continuation = cont
             }
+        } onCancel: {
+            // Pull the stored cont out under the lock and resume it so
+            // the awaiting task actually unblocks. Safe to no-op if
+            // `resolveHandshake(_:)` already raced ahead and consumed it.
+            let pending: CheckedContinuation<HelloResult, Error>? = handshakeState.withLock { state in
+                let c = state.continuation
+                state.continuation = nil
+                return c
+            }
+            pending?.resume(throwing: CancellationError())
         }
     }
 
@@ -471,7 +518,7 @@ public final class RPCClient: @unchecked Sendable {
 
     private func runReaderSync() {
         var buffer = Data()
-        while !readerStopped {
+        while !lifecycle.withLock({ $0.readerStopped }) {
             // Use raw POSIX read(2) on the underlying fd. Foundation's
             // `FileHandle.read(upToCount:)` on a Pipe sometimes coalesces
             // multiple kernel reads and only returns once a larger threshold
@@ -554,7 +601,8 @@ public final class RPCClient: @unchecked Sendable {
                 // order. Critical for streaming `ui.token` deltas: detached
                 // tasks would let two deltas race the MainActor and append
                 // out of order.
-                notificationContinuation?.yield { await handler(line) }
+                let continuation = lifecycle.withLock { $0.notificationContinuation }
+                continuation?.yield { await handler(line) }
             }
             return
         }
