@@ -117,10 +117,10 @@ struct ContextChipsView: View {
             Image(systemName: screenshotToggleIcon)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white.opacity(screenshotToggleOpacity))
-                .frame(width: 22, height: 22)
+                .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.notchPressable)
         .help(screenshotToggleHelp(bundleId: bundleId))
         .accessibilityLabel(Text("Always capture screenshot for this app"))
         .accessibilityValue(Text(screenshotToggleAccessibilityValue))
