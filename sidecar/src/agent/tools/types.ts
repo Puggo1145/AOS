@@ -56,12 +56,15 @@ export interface ToolExecResult<TDetails = unknown> {
 /// handler to surface a clean `isError` result without building the
 /// `ToolExecResult` envelope by hand.
 ///
-/// Why this exists vs catching every exception: AOS follows fail-fast
-/// (AGENTS.md). Plain exceptions are treated as harness/programmer faults
-/// — they bubble out of the tool dispatch and terminate the turn with a
-/// `ui.error`, the same way a thrown `Error` from any other agent-loop
-/// component would. Only `ToolUserError` is laundered into a recoverable
-/// tool result.
+/// `ToolUserError` is the **preferred** way for handler authors to signal an
+/// anticipated failure: throwing it documents intent and keeps the
+/// recoverable path explicit. Unanticipated plain exceptions are also caught
+/// by the dispatch site and wrapped into an `isError` tool result so the
+/// loop continues — the model sees the failure and decides how to react,
+/// and the tool row renders red in the UI. Such throws are logged at
+/// `error` level for harness diagnostics; reach for `ToolUserError` (or
+/// return `{ isError: true }`) when the failure is part of the tool's
+/// designed contract rather than a leaked exception.
 export class ToolUserError extends Error {
   override readonly name = "ToolUserError";
   constructor(message: string) {

@@ -28,8 +28,9 @@ interface TodoWriteDetails {
 /// handler can resolve the session-scoped `TodoManager` at call time —
 /// `ToolExecContext` carries `sessionId` but not the SessionManager itself
 /// (keeping the context thin). A lookup miss is treated as a programmer
-/// fault and rethrown so it surfaces as a `ui.error`; tools should never
-/// see an unknown sessionId in normal operation.
+/// fault and thrown; the dispatch site wraps it into an isError tool result
+/// and logs at error level. Tools should never see an unknown sessionId in
+/// normal operation.
 export function createTodoWriteTool(opts: {
   getManager: (sessionId: string) => TodoManager | null;
 }): ToolHandler<TodoWriteArgs, TodoWriteDetails> {

@@ -630,6 +630,12 @@ export async function runTurn(
       if (consecutiveSilentToolRounds > MAX_CONSECUTIVE_TOOL_ROUNDS) {
         closeThinkingIfOpen();
         const overflowMsg = `tool-call budget exceeded (${MAX_CONSECUTIVE_TOOL_ROUNDS} consecutive tool rounds without assistant text)`;
+        // Drop the silent rounds + this round's orphan toolCall so a retry
+        // in this session doesn't drag the broken trace along.
+        convo.collapseToReminder(
+          turnId,
+          `<reminder>The previous attempt issued ${MAX_CONSECUTIVE_TOOL_ROUNDS} consecutive tool calls without producing any visible reply text and was stopped by the system. Try a different approach — narrate progress between tool calls or finish with a text response.</reminder>`,
+        );
         if (convo.setError(turnId, RPCErrorCode.internalError, overflowMsg)) {
           dispatcher.notify(RPCMethod.uiError, {
             sessionId,
@@ -682,24 +688,22 @@ export async function runTurn(
               signal,
             });
           } catch (err) {
-            // `runTool` only re-throws unexpected exceptions (non-
-            // ToolUserError). The wire already announced `phase: "called"`
-            // for this id; without a terminal frame the Shell mirror would
-            // leave the row stuck in `.calling` forever even after the
-            // turn-level `ui.error` lands. Emit a closing `result` so the
-            // tool row visibly fails, THEN re-throw so runTurn's top-level
-            // catch fires `ui.error` and ends the turn — fail-fast intact.
+            // Unexpected handler throw → recoverable tool failure. Synthesize
+            // an isError result so the loop continues and the slice stays
+            // replayable (no orphan `tool_use` on retry). Logged so genuine
+            // harness bugs are still observable.
             const message = err instanceof Error ? err.message : String(err);
-            dispatcher.notify(RPCMethod.uiToolCall, {
+            logger.error("tool execution threw", {
               sessionId,
               turnId,
-              phase: "result",
               toolCallId: tc.id,
               toolName: tc.name,
-              isError: true,
-              outputText: message,
+              err: String(err),
             });
-            throw err;
+            result = {
+              content: [{ type: "text", text: `Tool "${tc.name}" failed: ${message}` }],
+              isError: true,
+            };
           }
         }
         const toolResultMsg: ToolResultMessage = {
@@ -842,16 +846,11 @@ function prepareToolCall(
 /// `prepareToolCall`; this function only owns the handler's runtime
 /// behavior.
 ///
-/// Error policy (P2-1, AGENTS.md fail-fast):
-///   - Handler returns `{ isError: true }` → recoverable; surfaced to the
-///     model as the tool's output.
-///   - Handler throws `ToolUserError` → recoverable; same path, the message
-///     becomes the model-visible text. Sugar for handlers that prefer
-///     throwing over building the envelope.
-///   - Handler throws anything else → harness/programmer fault. We RE-THROW
-///     so `runTurn`'s top-level catch surfaces it as a `ui.error` (turn
-///     terminates). Swallowing it would let a real bug masquerade as
-///     model-correctable feedback and silently corrupt subsequent rounds.
+/// Error policy:
+///   - `{ isError: true }` or `ToolUserError` thrown → recoverable, surfaced
+///     to the model as the tool's output. Loop continues.
+///   - Any other throw → re-thrown. The dispatch site catches it, logs it,
+///     and synthesizes an isError result so the loop still continues.
 async function runTool(
   handler: ToolHandler<any, any>,
   args: Record<string, unknown>,

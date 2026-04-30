@@ -351,10 +351,15 @@ test("handler ToolUserError surfaces as isError result without aborting the turn
   expect(convo.turns[0].status).toBe("done");
 });
 
-test("unexpected handler exception terminates the turn with a ui.error", async () => {
-  // Plain exceptions are treated as harness/programmer faults per AGENTS.md
-  // fail-fast. They MUST NOT be laundered into recoverable tool results —
-  // that would let real bugs masquerade as model-correctable feedback.
+test("unexpected handler exception is surfaced as an isError tool result and the loop continues", async () => {
+  // A handler throwing a plain Error (i.e. not a `ToolUserError`) used to
+  // terminate the whole turn as a harness-fault `ui.error`. The new policy:
+  // one tool blowing up is recoverable. The dispatch site catches the
+  // exception, writes a synthetic isError tool result into the conversation,
+  // emits a `phase: "result"` frame, and lets the loop run another round so
+  // the model can react. This keeps the conversation slice consistent
+  // (no orphan `tool_use`) — important because errored turns now stay in
+  // the next request's context for retry.
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, convo, sessionId } = setupSession();
   registerAgentHandlers(dispatcher, { manager });
@@ -378,10 +383,15 @@ test("unexpected handler exception terminates the turn with a ui.error", async (
       s.push({ type: "done", reason: "toolUse", message: partial });
     });
   });
-  // Second round MUST NOT be reached. If it is, the test will hang waiting
-  // for the scripted stream — surface that as a clear failure instead.
-  scriptedRounds.push(() => {
-    throw new Error("loop should not have advanced past the failing tool round");
+  // Second round IS reached: the loop must continue past the failing tool.
+  // The model "sees" the isError result and replies with text, terminating
+  // the turn cleanly.
+  scriptedRounds.push((model) => {
+    return emitStream((s) => {
+      const partial = fakeAssistant(model, [{ type: "text", text: "ok, recovering" }], "stop");
+      s.push({ type: "text_delta", contentIndex: 0, delta: "ok, recovering", partial });
+      s.push({ type: "done", reason: "stop", message: partial });
+    });
   });
 
   pushInbound({
@@ -393,9 +403,8 @@ test("unexpected handler exception terminates the turn with a ui.error", async (
 
   await flush();
 
-  // The wire already announced `phase: "called"` for this id; the dispatch
-  // loop must emit a terminal `result` frame before re-throwing so the
-  // Shell tool row visibly fails instead of staying stuck on "running…".
+  // The wire still gets a closing `result` frame so the Shell row doesn't
+  // dangle; isError + the exception text round-trip to the UI.
   const toolResults = captured.notifications.filter(
     (n) => n.method === "ui.toolCall" && n.params.phase === "result",
   );
@@ -404,20 +413,22 @@ test("unexpected handler exception terminates the turn with a ui.error", async (
   expect(toolResults[0].params.isError).toBe(true);
   expect(toolResults[0].params.outputText).toContain("kaboom");
 
-  // Order matters: the closing tool frame fires before the turn-level
-  // ui.error so the UI never observes a finished turn with an unfinished
-  // tool row.
-  const toolCallEvents = captured.notifications.filter((n) => n.method === "ui.toolCall");
+  // No turn-level ui.error: the throw is treated as a recoverable tool
+  // failure, not a harness fault.
   const errorEvents = captured.notifications.filter((n) => n.method === "ui.error");
-  const lastToolIdx = captured.notifications.lastIndexOf(toolCallEvents[toolCallEvents.length - 1]);
-  const errorIdx = captured.notifications.indexOf(errorEvents[0]);
-  expect(lastToolIdx).toBeLessThan(errorIdx);
+  expect(errorEvents).toHaveLength(0);
 
-  // Turn ends in error, surfaced as ui.error with the wrapped message.
-  expect(errorEvents).toHaveLength(1);
-  expect(errorEvents[0].params.message).toContain("boom");
-  expect(errorEvents[0].params.message).toContain("kaboom");
-  expect(convo.turns[0].status).toBe("error");
+  // Loop continued and the second round's text reply settled the turn done.
+  expect(convo.turns[0].status).toBe("done");
+  expect(convo.turns[0].reply).toBe("ok, recovering");
+
+  // The synthetic tool result is in the durable history so the next LLM
+  // round (and any session retry) sees the failure inline rather than an
+  // orphan tool_use.
+  const tr = convo.messages.find(
+    (m) => m.role === "toolResult" && m.toolCallId === "tc_b",
+  );
+  expect(tr).toBeDefined();
 });
 
 test("cancellation mid-tool closes the turn quietly — no ui.error", async () => {

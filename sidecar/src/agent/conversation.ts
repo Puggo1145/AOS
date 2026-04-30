@@ -66,8 +66,7 @@ export class Conversation {
   }
 
   /// Test / observability accessor — the raw flat history. Loop callers
-  /// should go through `llmMessages()` so cancelled/errored turns are
-  /// filtered.
+  /// should go through `llmMessages()` so cancelled turns are filtered.
   get messages(): ReadonlyArray<Message> {
     return this._messages;
   }
@@ -179,22 +178,43 @@ export class Conversation {
     return true;
   }
 
+  /// Collapse the turn's slice down to `[user prompt, reminder]`. Used by the
+  /// runaway tool-call bailout to drop dead silent rounds while keeping the
+  /// original prompt and a note for the model.
+  ///
+  /// Must be the last turn: truncating `_messages` would shift later turns'
+  /// ranges. Single-active-turn invariant guarantees this.
+  collapseToReminder(turnId: string, reminderText: string): boolean {
+    const t = this.find(turnId);
+    if (!t) return false;
+    if (t !== this._turns[this._turns.length - 1]) {
+      throw new Error(`collapseToReminder requires ${turnId} to be the last turn`);
+    }
+    // Keep only the user prompt at messageStart.
+    this._messages.length = t.messageStart + 1;
+    this._messages.push({
+      role: "user",
+      content: reminderText,
+      timestamp: Date.now(),
+    });
+    t.messageEnd = this._messages.length;
+    return true;
+  }
+
   reset(): void {
     this._turns = [];
     this._messages = [];
   }
 
-  /// Build the LLM-facing message list for the next request.
-  ///
-  /// Walks turns in order and pulls each turn's slice of `_messages`,
-  /// skipping turns whose final status is `error` or `cancelled` — those
-  /// shouldn't pollute the next attempt's context. In-flight turns
-  /// (`working`/`waiting`) and successfully completed turns
-  /// (`done`) both contribute their full message slice.
+  /// LLM-facing message list. Drops `cancelled` turns (user-abandoned
+  /// partial work). Errored turns are kept so a transient failure (network,
+  /// 5xx, auth) doesn't wipe the prompt + pre-error progress on retry —
+  /// the loop is responsible for keeping each preserved slice replayable
+  /// (no orphan `tool_use`).
   llmMessages(): Message[] {
     const out: Message[] = [];
     for (const t of this._turns) {
-      if (t.status === "error" || t.status === "cancelled") continue;
+      if (t.status === "cancelled") continue;
       for (let i = t.messageStart; i < t.messageEnd; i++) {
         out.push(this._messages[i]);
       }
