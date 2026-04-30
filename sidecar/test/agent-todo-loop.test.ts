@@ -1,13 +1,14 @@
 // Agent loop — s03 TodoWrite integration.
 //
-// Pins the wire-level effects of the `todo_write` tool round and the
-// reminder-injection nag:
+// Pins the wire-level effects of the `todo_write` tool round:
 //   - A successful `todo_write` call emits `ui.todo` with the new plan.
 //   - The handler returns the rendered list as text content (visible to the
 //     model).
-//   - Three consecutive non-todo tool rounds AFTER a plan was written
-//     append a `<reminder>` user message before the next LLM round.
 //   - `agent.reset` clears the per-session plan and emits an empty `ui.todo`.
+//
+// The per-round todo surfacing now lives in the ambient subsystem
+// (`agent-ambient-loop.test.ts`); the legacy `<reminder>` nag mechanism is
+// removed.
 //
 // Test rig mirrors `agent-tool-loop.test.ts`: scripted multi-round LLM
 // stream, capturing dispatcher, real SessionManager + TodoManager.
@@ -19,6 +20,7 @@ import { registerAgentHandlers, setModelResolver, resetModelResolver } from "../
 import { SessionManager } from "../src/agent/session/manager";
 import { toolRegistry } from "../src/agent/tools/registry";
 import { registerTodoTool } from "../src/agent/tools/todo";
+import { ambientRegistry } from "../src/agent/ambient/registry";
 import {
   registerApiProvider,
   unregisterApiProviders,
@@ -82,12 +84,14 @@ beforeEach(() => {
   });
   setModelResolver(() => makeFakeModel());
   toolRegistry.clear();
+  ambientRegistry.clear();
 });
 
 afterEach(() => {
   unregisterApiProviders(FAKE_SOURCE_ID);
   resetModelResolver();
   toolRegistry.clear();
+  ambientRegistry.clear();
   scriptedRounds = [];
   observedContexts = [];
 });
@@ -285,89 +289,6 @@ test("invalid todo_write args (multiple in_progress) surface as a recoverable is
   // snapshot that would clobber any prior plan.
   const todoNotifs = captured.notifications.filter((n) => n.method === "ui.todo");
   expect(todoNotifs).toHaveLength(0);
-});
-
-test("3 consecutive non-todo rounds after a plan exists inject a <reminder> user message", async () => {
-  const { dispatcher, pushInbound } = makeCapturingDispatcher();
-  const { manager, session, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
-
-  // A no-op tool the model can call without bumping the todo nag counter.
-  toolRegistry.register({
-    spec: {
-      name: "noop",
-      description: "Noop",
-      parameters: { type: "object", properties: {} },
-    },
-    execute: async () => ({ content: [{ type: "text", text: "ok" }], isError: false }),
-  });
-
-  // Round 0: write the plan via todo_write so the manager has open work.
-  scriptedRounds.push((model) => {
-    const tc: ToolCall = {
-      type: "toolCall",
-      id: "tc_init",
-      name: "todo_write",
-      arguments: {
-        items: [{ id: "1", text: "step", status: "in_progress" }],
-      },
-    };
-    return emitStream((s) => {
-      const partial = fakeAssistant(model, [tc], "toolUse");
-      s.push({ type: "toolcall_end", contentIndex: 0, toolCall: tc, partial });
-      s.push({ type: "done", reason: "toolUse", message: partial });
-    });
-  });
-  // Rounds 1, 2, 3: the model uses noop (silent on todos). The 3rd of
-  // these must be the round that ALSO sees the reminder injected when
-  // computing the next round's history.
-  for (let i = 0; i < 3; i++) {
-    scriptedRounds.push((model) => {
-      const tc: ToolCall = { type: "toolCall", id: `tc_n${i}`, name: "noop", arguments: {} };
-      return emitStream((s) => {
-        const partial = fakeAssistant(model, [tc], "toolUse");
-        s.push({ type: "toolcall_end", contentIndex: 0, toolCall: tc, partial });
-        s.push({ type: "done", reason: "toolUse", message: partial });
-      });
-    });
-  }
-  // Round 4: terminal text reply, ending the turn.
-  scriptedRounds.push((model) => {
-    return emitStream((s) => {
-      const partial = fakeAssistant(model, [{ type: "text", text: "ok" }], "stop");
-      s.push({ type: "text_delta", contentIndex: 0, delta: "ok", partial });
-      s.push({ type: "done", reason: "stop", message: partial });
-    });
-  });
-
-  pushInbound({
-    jsonrpc: "2.0",
-    id: 1,
-    method: "agent.submit",
-    params: { sessionId, turnId: "T1", prompt: "go", citedContext: {} },
-  });
-
-  await flush(160);
-
-  // The 5th LLM round (index 4 — the final text reply) must have seen
-  // the synthetic reminder appended to the conversation. Its messages
-  // include the reminder string.
-  const finalRoundMessages = observedContexts[4]?.messages ?? [];
-  const sawReminder = finalRoundMessages.some(
-    (m) => m.role === "user" && typeof m.content === "string" && m.content.includes("<reminder>"),
-  );
-  expect(sawReminder).toBe(true);
-
-  // Reminder count: exactly one (the loop resets the counter after firing
-  // so the model isn't nagged on every subsequent round). Earlier rounds
-  // must NOT have carried a reminder.
-  const reminders = finalRoundMessages.filter(
-    (m) => m.role === "user" && typeof m.content === "string" && m.content.includes("<reminder>"),
-  );
-  expect(reminders).toHaveLength(1);
-  // The plan still has open work — the gating predicate that allowed the
-  // reminder fire in the first place.
-  expect(session.todos.hasOpenWork()).toBe(true);
 });
 
 test("agent.reset clears the per-session plan and emits an empty ui.todo", async () => {

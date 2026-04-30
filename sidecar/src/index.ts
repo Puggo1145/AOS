@@ -19,6 +19,7 @@ import { registerConfigHandlers } from "./config/handlers";
 import { registerBuiltinTools } from "./agent/tools";
 import { registerComputerUseTools } from "./agent/tools/computer-use";
 import { registerTodoTool } from "./agent/tools/todo";
+import { registerBuiltinAmbient } from "./agent/ambient";
 import { ensureWorkspace } from "./agent/workspace";
 import { logger } from "./log";
 import { AOS_PROTOCOL_VERSION, RPCMethod, type HelloResult } from "./rpc/rpc-types";
@@ -34,6 +35,10 @@ async function main(): Promise<void> {
   // global ToolRegistry before the agent loop ever runs.
   ensureWorkspace();
   registerBuiltinTools();
+  // Built-in ambient providers: today only the per-session todos block.
+  // Registered alongside the tool registry so every turn assembled below
+  // sees a populated ambient registry.
+  registerBuiltinAmbient();
 
   const transport = new StdioTransport();
   const dispatcher = new Dispatcher(transport);

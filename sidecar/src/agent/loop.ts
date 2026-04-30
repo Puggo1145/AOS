@@ -67,9 +67,10 @@ import { TurnRegistry } from "./registry";
 import { Conversation } from "./conversation";
 import { contextObserver as defaultContextObserver, ContextObserver } from "./context-observer";
 import { SessionManager } from "./session/manager";
+import { Session } from "./session/session";
 import { toolRegistry, ToolUserError, type ToolHandler, type ToolExecResult } from "./tools";
-import { TODO_WRITE_TOOL_NAME } from "./tools/todo";
-import { TodoManager, type TodoItem } from "./todos/manager";
+import { type TodoItem } from "./todos/manager";
+import { renderAmbient } from "./ambient";
 import { buildSystemPrompt } from "./system-prompt";
 import { logger } from "../log";
 
@@ -81,15 +82,6 @@ import { logger } from "../log";
 /// user-visible text resets the counter. Surfaces as `internalError` when
 /// hit.
 const MAX_CONSECUTIVE_TOOL_ROUNDS = 25;
-
-/// s03 TodoWrite nag threshold. After this many consecutive tool rounds
-/// without a `todo_write` call AND while open work remains in the plan,
-/// the loop injects a short `<reminder>` user message before the next LLM
-/// round so the model is prompted to update its checklist. Mirrors the
-/// playground reference (`code-examples/s03_todo_write.py`). Reminders are
-/// gated on the plan having pending/in_progress items — empty plans mean
-/// the model judged the task trivial, and nagging there is just noise.
-const ROUNDS_BEFORE_TODO_NAG = 3;
 
 // ---------------------------------------------------------------------------
 // Test injection point.
@@ -251,11 +243,10 @@ export function registerAgentHandlers(dispatcher: Dispatcher, opts: RegisterAgen
 
     // Detached: ack must return inside agent.submit's 1s budget.
     void runTurn(dispatcher, convo, {
-      sessionId: session.id,
+      session,
       turnId,
       signal: controller.signal,
       observer,
-      todos: session.todos,
       onDone: () => manager.notifyListChanged(),
     })
       .catch((err) => logger.error("agent loop fatal", { sessionId: session.id, turnId, err: String(err) }))
@@ -305,16 +296,14 @@ export async function runTurn(
   dispatcher: Dispatcher,
   convo: Conversation,
   params: {
-    sessionId: string;
+    /// The session that owns this turn. The loop reads `session.todos` for
+    /// `ui.todo` projection and threads the whole session into `renderAmbient`
+    /// so future ambient providers (worktree path, current time, etc.) can
+    /// pull from any session-scoped state without re-plumbing this signature.
+    session: Session;
     turnId: string;
     signal: AbortSignal;
     observer?: ContextObserver;
-    /// Per-session TodoWrite plan. When provided, the loop projects every
-    /// `todo_write` tool call onto the wire as `ui.todo` and injects a
-    /// `<reminder>` user message after `ROUNDS_BEFORE_TODO_NAG` consecutive
-    /// rounds without a todo update (only when open work remains). Tests
-    /// that don't exercise s03 may pass `null` to skip the entire path.
-    todos?: TodoManager | null;
     /// Called when the turn lands in a terminal `done` state (post-`markDone`).
     /// Loop uses this to fire `session.listChanged` (turnCount + lastActivityAt
     /// changed). Errored / cancelled paths do not increment turnCount, so they
@@ -322,9 +311,10 @@ export async function runTurn(
     onDone?: () => void;
   },
 ): Promise<void> {
-  const { sessionId, turnId, signal } = params;
+  const { session, turnId, signal } = params;
+  const sessionId = session.id;
   const observer = params.observer ?? defaultContextObserver;
-  const todos = params.todos ?? null;
+  const todos = session.todos;
 
   dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId, status: "working" });
 
@@ -387,7 +377,23 @@ export async function runTurn(
     dispatcher.notify(RPCMethod.uiThinking, { sessionId, turnId, kind: "end" });
   };
 
-  const publishContext = (): void => {
+  /// Build the exact `Message[]` we would hand to `streamSimple` right now —
+  /// persisted history plus a freshly-rendered ambient tail (when any
+  /// provider returned non-null). Centralized so the pre-stream call site
+  /// and the dev-mode snapshot share one view of the world; otherwise Dev
+  /// Mode would render persisted-only messages and the user could not see
+  /// the transient ambient block they're trying to debug.
+  const buildOutboundMessages = (): Message[] => {
+    const base = convo.llmMessages();
+    const ambient = renderAmbient(session);
+    if (!ambient) return base;
+    return [
+      ...base,
+      { role: "user", content: ambient, timestamp: Date.now() },
+    ];
+  };
+
+  const publishContext = (messages: Message[]): void => {
     observer.publish({
       capturedAt: Date.now(),
       sessionId,
@@ -396,7 +402,7 @@ export async function runTurn(
       providerId: model.provider,
       effort: effort ?? null,
       systemPrompt,
-      messagesJson: ContextObserver.renderMessages(convo.llmMessages()),
+      messagesJson: ContextObserver.renderMessages(messages),
     });
   };
 
@@ -407,14 +413,12 @@ export async function runTurn(
   // tool-result → ui.todo → next round, matching what the Shell mirror
   // expects. We unsubscribe at the bottom of the try/finally so a turn
   // that errors out doesn't keep emitting after it has terminated.
-  const unsubTodo = todos
-    ? todos.subscribe((items) => {
-        dispatcher.notify(RPCMethod.uiTodo, {
-          sessionId,
-          items: todoItemsForWire(items),
-        });
-      })
-    : null;
+  const unsubTodo = todos.subscribe((items) => {
+    dispatcher.notify(RPCMethod.uiTodo, {
+      sessionId,
+      items: todoItemsForWire(items),
+    });
+  });
 
   try {
     // Counts tool rounds since the assistant last emitted visible text.
@@ -422,27 +426,39 @@ export async function runTurn(
     // text content block; incremented on each tool-bearing round. When it
     // exceeds MAX_CONSECUTIVE_TOOL_ROUNDS the turn bails as a runaway loop.
     let consecutiveSilentToolRounds = 0;
-    /// s03 nag counter — tool rounds since the last `todo_write` invocation
-    /// by the model (regardless of validation outcome — a rejected write
-    /// still proves the model is mindful of its plan; the validator's
-    /// message will steer the next round). Reset to 0 on any tool round
-    /// containing a `todo_write` call. The reminder is injected when this
-    /// hits `ROUNDS_BEFORE_TODO_NAG` and the plan still has open work.
-    let roundsSinceTodo = 0;
     while (true) {
       const messages = convo.llmMessages();
 
+      // Ambient injection. `buildOutboundMessages` returns the persisted
+      // history plus a freshly-rendered `<ambient>...</ambient>` tail
+      // (when any provider returned non-null). The ambient block rides
+      // as a transient user-role message at the tail of the request —
+      // it is NOT persisted into the Conversation, so the next round (or
+      // a retry) recomputes it.
+      //
+      // Cache-control note: the sidecar does not yet plumb prompt-cache
+      // markers (`cache_control: ephemeral` or equivalent) through any
+      // provider. The current call surface (`streamSimple`) accepts a
+      // plain `Message[]` with no per-message cache annotation. Appending
+      // ambient at the tail therefore cannot break a cache layer that
+      // does not exist. When provider-side caching lands, the marker
+      // belongs on the LAST persisted message (the final entry of
+      // `messages`, i.e. NOT the ambient tail) so the cached prefix stays
+      // stable across rounds — ambient sits past that boundary and is
+      // naturally outside the cached region.
+      const messagesForRound = buildOutboundMessages();
+
       // Dev-mode observability: capture the exact (systemPrompt, messages)
-      // pair we are about to hand to the LLM. Publish BEFORE the network
-      // call so a Dev Mode window opened mid-turn always sees the latest
-      // input, not a stale snapshot.
-      publishContext();
+      // pair we are about to hand to the LLM, ambient tail included. Publish
+      // BEFORE the network call so a Dev Mode window opened mid-turn always
+      // sees the latest input, not a stale snapshot.
+      publishContext(messagesForRound);
 
       const eventStream = streamSimple(
         model,
         {
           systemPrompt,
-          messages,
+          messages: messagesForRound,
           tools: toolSpecs.length > 0 ? toolSpecs : undefined,
         },
         { signal, reasoning: effort },
@@ -605,9 +621,10 @@ export async function runTurn(
       if (toolCalls.length === 0) {
         // Terminal: model produced text-only output. Mark done, republish
         // the dev snapshot so the post-call view includes the assistant
-        // turn, then fire the visible-status closer.
+        // turn (and a fresh ambient tail reflecting any state changes
+        // during this turn), then fire the visible-status closer.
         const ok = convo.markDone(turnId);
-        publishContext();
+        publishContext(buildOutboundMessages());
         closeThinkingIfOpen();
         dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId, status: "done" });
         if (ok) params.onDone?.();
@@ -739,38 +756,11 @@ export async function runTurn(
         return;
       }
 
-      // s03 TodoWrite nag. The `ui.todo` notification is fired by the
-      // manager's subscriber (set up before the round loop), so this block
-      // only owns the reminder-injection counter. Counter resets on any
-      // round in which the model invoked `todo_write`; otherwise it
-      // increments, and once it crosses the threshold AND open work
-      // remains the loop appends a synthetic `<reminder>` user message
-      // before the next LLM round. The reminder rides as a UserMessage
-      // rather than a text block on a tool result because (a)
-      // `ToolResultContent` is strict text/image and (b) the playground
-      // reference inserts the reminder ahead of (not inside) the tool
-      // result list.
-      if (todos) {
-        const usedTodo = toolCalls.some((tc) => tc.name === TODO_WRITE_TOOL_NAME);
-        if (usedTodo) {
-          roundsSinceTodo = 0;
-        } else {
-          roundsSinceTodo += 1;
-          if (roundsSinceTodo >= ROUNDS_BEFORE_TODO_NAG && todos.hasOpenWork()) {
-            convo.appendUserMessage(
-              turnId,
-              "<reminder>You have an active to-do list. Update it via the `todo_write` tool — mark the current step completed and the next step in_progress before continuing.</reminder>",
-            );
-            // Don't keep nagging every round once the threshold crosses;
-            // reset so the model gets one prompt per stretch of silence.
-            roundsSinceTodo = 0;
-          }
-        }
-      }
-
       // Loop back: the next round's `streamSimple` will see the appended
       // tool results in `llmMessages()` and either produce more tool calls
-      // or a terminal text response.
+      // or a terminal text response. Open todos resurface automatically
+      // through the ambient block at the top of the next iteration — no
+      // counter, no reminder injection.
       convo.setStatus(turnId, "working");
       dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId, status: "working" });
     }
@@ -787,7 +777,7 @@ export async function runTurn(
       });
     }
   } finally {
-    unsubTodo?.();
+    unsubTodo();
   }
 }
 

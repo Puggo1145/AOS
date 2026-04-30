@@ -134,25 +134,6 @@ export class Conversation {
     return true;
   }
 
-  /// Push a synthetic user-role message into the flat history mid-turn. Used
-  /// by the agent loop's reminder-injection path (s03 TodoWrite nag) to
-  /// surface a `<reminder>...</reminder>` line ahead of the next LLM round
-  /// without claiming the caller composed a fresh user prompt. The message
-  /// extends the active turn's range so cancelled/errored turns drop their
-  /// reminders along with everything else they produced.
-  appendUserMessage(turnId: string, text: string): boolean {
-    const t = this.find(turnId);
-    if (!t) return false;
-    const msg: Message = {
-      role: "user",
-      content: text,
-      timestamp: Date.now(),
-    };
-    this._messages.push(msg);
-    t.messageEnd = this._messages.length;
-    return true;
-  }
-
   setStatus(turnId: string, status: TurnStatus): boolean {
     const t = this.find(turnId);
     if (!t) return false;
