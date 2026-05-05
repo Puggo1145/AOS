@@ -80,7 +80,7 @@ struct ComposerCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ContextChipsView(
-                senseStore: senseStore,
+                context: senseStore.context,
                 policyStore: policyStore,
                 screenshotToggle: screenshotToggleState,
                 deselectedBehaviorKeys: $deselectedBehaviorKeys

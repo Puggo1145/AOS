@@ -49,7 +49,7 @@ struct ContextChipsView: View {
     private static let chipCornerRadius: CGFloat = 8
     private static let rowVerticalPadding: CGFloat = 4
 
-    let senseStore: SenseStore
+    let context: SenseContext
     let policyStore: VisualCapturePolicyStore
     /// Derived screenshot-toggle state for the current (model, permission,
     /// per-app pick) tuple. Computed at the parent (`ComposerCard`) so
@@ -60,17 +60,17 @@ struct ContextChipsView: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                if let app = senseStore.context.app {
+                if let app = context.app {
                     appChipWithToggle(app: app)
                 }
-                ForEach(senseStore.context.behaviors, id: \.id) { envelope in
+                ForEach(context.behaviors, id: \.id) { envelope in
                     behaviorChip(envelope: envelope)
                 }
             }
             .padding(.vertical, Self.rowVerticalPadding)
         }
         .frame(height: Self.chipHeight + Self.rowVerticalPadding * 2)
-        .onChange(of: senseStore.context.app?.bundleId) { _, _ in
+        .onChange(of: context.app?.bundleId) { _, _ in
             // App switch invalidates per-app behavior chip identities;
             // reset behavior selections so the user starts each app fresh.
             // The capture-toggle state is keyed by bundleId in the policy

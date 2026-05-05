@@ -60,4 +60,10 @@ struct GeneralProbeTests {
         #expect(sel.displaySummary == "Selected text")
         #expect(inp.displaySummary == "Current input")
     }
+
+    @Test("focused editable empty field still emits currentInput")
+    func emptyEditableFieldEmitsCurrentInput() {
+        #expect(GeneralProbe.shouldEmitCurrentInput(selectedText: nil, value: "", editable: true))
+        #expect(GeneralProbe.shouldEmitCurrentInput(selectedText: nil, value: nil, editable: true))
+    }
 }

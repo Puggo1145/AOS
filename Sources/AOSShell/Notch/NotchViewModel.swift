@@ -679,7 +679,8 @@ public final class NotchViewModel {
         // notifications are unreliable in terminals (Ghostty), Electron, and
         // other custom-rendered apps — they only fire after subsequent focus
         // shifts, which is why the chip used to "appear after clicking the
-        // input". Snapshot-on-open removes that dependency.
+        // input". Refresh-on-open removes that dependency without freezing
+        // the target app for the rest of the notch session.
         senseStore.refreshGeneralProbe()
         broadcastStatus()
     }

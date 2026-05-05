@@ -43,6 +43,39 @@ struct SenseStoreTests {
         #expect(store.context.permissions.denied.isEmpty)
     }
 
+    @Test("Live context follows frontmost changes and replaces stale behaviors")
+    func liveContextFollowsFrontmostChanges() {
+        let store = makeStore()
+        let editor = AppIdentity(
+            bundleId: "com.example.editor",
+            name: "Editor",
+            pid: 123,
+            icon: nil
+        )
+        let finder = AppIdentity(
+            bundleId: "com.apple.finder",
+            name: "Finder",
+            pid: 456,
+            icon: nil
+        )
+        let editorWindow = WindowIdentity(title: "Draft", windowId: nil)
+        let finderWindow = WindowIdentity(title: "Downloads", windowId: nil)
+        let currentInput = BehaviorEnvelope(
+            kind: "general.currentInput",
+            citationKey: "general.currentInput:123",
+            displaySummary: "Current input",
+            payload: .object(["value": .string("draft")])
+        )
+
+        store._applyFrontmostForTesting(app: editor, window: editorWindow)
+        store._applyBehaviorsForTesting(source: "general", envelopes: [currentInput])
+        store._applyFrontmostForTesting(app: finder, window: finderWindow)
+
+        #expect(store.context.app == finder)
+        #expect(store.context.window == finderWindow)
+        #expect(store.context.behaviors.isEmpty)
+    }
+
     @Test("Permissions projection updates only the permissions slot")
     func permissionsProjection() {
         let store = makeStore()

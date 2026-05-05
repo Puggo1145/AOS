@@ -207,13 +207,17 @@ public final class GeneralProbe {
 
         let hasSelectedText = !(selectedText ?? "").isEmpty
         // Dedup: skip currentInput when selectedText already covers this element.
-        let currentInputApplies = !hasSelectedText && editable && !(value ?? "").isEmpty
+        let currentInputApplies = Self.shouldEmitCurrentInput(
+            selectedText: selectedText,
+            value: value,
+            editable: editable
+        )
 
         if hasSelectedText, let s = selectedText {
             envelopes.append(Self.makeSelectedTextEnvelope(text: s, pid: pid))
         }
-        if currentInputApplies, let s = value {
-            envelopes.append(Self.makeCurrentInputEnvelope(value: s, pid: pid))
+        if currentInputApplies {
+            envelopes.append(Self.makeCurrentInputEnvelope(value: value ?? "", pid: pid))
         }
 
         let items = readSelectedItems(element)
@@ -317,6 +321,15 @@ public final class GeneralProbe {
             displaySummary: "Current input",
             payload: .object(["value": .string(PayloadSizeGuard.clamp(value))])
         )
+    }
+
+    internal nonisolated static func shouldEmitCurrentInput(
+        selectedText: String?,
+        value: String?,
+        editable: Bool
+    ) -> Bool {
+        let hasSelectedText = !(selectedText ?? "").isEmpty
+        return !hasSelectedText && editable
     }
 
     internal nonisolated static func makeSelectedItemsEnvelope(items: [SelectedItem], pid: pid_t) -> BehaviorEnvelope {
