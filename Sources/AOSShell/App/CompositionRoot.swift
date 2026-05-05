@@ -132,6 +132,7 @@ public final class CompositionRoot {
         self.devContextService = devContext
         let devWindow = DevModeWindowController(
             contextService: devContext,
+            senseStore: senseStore,
             sessionStore: store,
             computerUseService: cuService,
             doctorService: cuDoctor

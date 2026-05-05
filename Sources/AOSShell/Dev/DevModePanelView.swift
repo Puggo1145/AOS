@@ -1,16 +1,17 @@
 import SwiftUI
 import AOSRPCSchema
 import AOSComputerUseKit
+import AOSOSSenseKit
 
 // MARK: - DevModePanelView
 //
 // Standalone Dev Mode window content. The panel is split into a sidebar of
-// sections and a detail area. Stage 0 ships a single section ("Context");
-// the layout is built so adding more sections later is a one-row edit to
-// `Section.allCases`.
+// diagnostic sections and a detail area; each section observes its own
+// production service/store rather than a copied debug mirror.
 
 struct DevModePanelView: View {
     let contextService: DevContextService
+    let senseStore: SenseStore
     var sessionStore: SessionStore?
     var computerUseService: ComputerUseService?
     var doctorService: ComputerUseDoctorService?
@@ -19,6 +20,7 @@ struct DevModePanelView: View {
 
     enum Section: String, CaseIterable, Identifiable, Hashable {
         case context = "Context"
+        case osSense = "OS Sense"
         case computerUse = "Computer Use"
         var id: String { rawValue }
     }
@@ -34,6 +36,8 @@ struct DevModePanelView: View {
             switch selected {
             case .context:
                 DevContextSectionView(service: contextService, sessionStore: sessionStore)
+            case .osSense:
+                DevOSSenseSectionView(senseStore: senseStore)
             case .computerUse:
                 if let computerUseService, let doctorService {
                     DevComputerUseSectionView(
@@ -59,6 +63,7 @@ struct DevModePanelView: View {
     private func icon(for section: Section) -> String {
         switch section {
         case .context: return "doc.text"
+        case .osSense: return "eye"
         case .computerUse: return "stethoscope"
         }
     }
