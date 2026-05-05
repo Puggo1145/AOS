@@ -31,8 +31,6 @@ Feature-level plans live in `docs/plans/`.
 ### Open source projects
 - learn-claude-code: Encyclopedic tutorials of how to build agent harness. Easy to read. A good agent harness development guidance
 - pi-mono: AI agent toolkit: coding agent CLI, unified LLM API, TUI & web UI libraries, Slack bot, vLLM pods. The sub-package: "coding agent" and "agent" provide a good reference of how to build a simplified agent framework/runtime/harness on top of LLMs
-- claude-code-sourcemap: Claude Code source code v2.1.88. This is a complete code reference of how to build great agent harness.
-- open-codex-computer-use: The open source implementation of computer use for AI Agents. Providing capabilities to manipulate Mac OS Applications directly without changing apps' focus. Full background operation.
 - cua: A open source computer use agent project, providing background app use functionality without stealing focus via a mix of SkyLight private APIs and yabai's focus-without-raise pattern
 - NotchDrop: A good example notch app reference. Learn how to develop a good notch app from it.
 
