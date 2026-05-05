@@ -17,6 +17,7 @@ private actor MockAdapter: SenseAdapter {
     private var continuation: AsyncStream<[BehaviorEnvelope]>.Continuation?
     private(set) var attachCount = 0
     private(set) var detachCount = 0
+    private(set) var refreshCount = 0
 
     func attach(hub: AXObserverHub, target: RunningApp) async -> AsyncStream<[BehaviorEnvelope]> {
         attachCount += 1
@@ -32,6 +33,10 @@ private actor MockAdapter: SenseAdapter {
         detachCount += 1
         continuation?.finish()
         continuation = nil
+    }
+
+    func refresh() async {
+        refreshCount += 1
     }
 
     func emit(_ envelopes: [BehaviorEnvelope]) {
@@ -370,5 +375,24 @@ struct SenseStoreAdapterPlumbingTests {
         await store._awaitPendingAdapterSwapForTesting()
 
         #expect(store._attachTimeoutCountForTesting == 1)
+    }
+
+    @Test("Manual OS Sense refresh forwards to attached adapters")
+    func manualRefreshForwardsToAttachedAdapters() async {
+        let mock = MockAdapter()
+        let store = await makeStore(adapters: [mock])
+
+        store._applyPermissionsForTesting(PermissionState(denied: []))
+        store._applyFrontmostForTesting(
+            app: AppIdentity(bundleId: "com.test.app", name: "Test", pid: 800, icon: nil),
+            window: WindowIdentity(title: "Test", windowId: nil)
+        )
+        await store._awaitPendingAdapterSwapForTesting()
+
+        store.refreshGeneralProbe()
+        try? await Task.sleep(for: .milliseconds(50))
+
+        let refreshes = await mock.refreshCount
+        #expect(refreshes == 1)
     }
 }

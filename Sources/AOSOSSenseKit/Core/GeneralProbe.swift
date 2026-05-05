@@ -266,33 +266,127 @@ public final class GeneralProbe {
         return arr
     }
 
-    /// Read role/title/value/identifier off a single selected element. `label`
-    /// follows the macOS-conventional fallback (title → value → role) so the
-    /// chip displays something user-recognizable even when AXTitle is empty.
-    private nonisolated static func projectSelectedItem(_ element: AXUIElement) -> SelectedItem? {
-        var roleRef: CFTypeRef?
-        var titleRef: CFTypeRef?
-        var valueRef: CFTypeRef?
-        var identifierRef: CFTypeRef?
-        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
-        AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &titleRef)
-        AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &valueRef)
-        AXUIElementCopyAttributeValue(element, kAXIdentifierAttribute as CFString, &identifierRef)
+    /// A testable projection boundary for AX selected items. Finder often
+    /// exposes the selected file/folder as an unlabeled `AXGroup`; the human
+    /// file name then lives on a direct child, so projection needs a shallow
+    /// child snapshot before choosing the label.
+    internal struct SelectedItemAXSnapshot: Sendable {
+        let role: String
+        let title: String?
+        let value: String?
+        let identifier: String?
+        let description: String?
+        let filename: String?
+        let children: [SelectedItemAXSnapshot]
 
-        let role = (roleRef as? String) ?? "AXUnknown"
-        let title = titleRef as? String
-        let value = valueRef as? String
-        let identifier = identifierRef as? String
-
-        let label: String
-        if let title, !title.isEmpty {
-            label = title
-        } else if let value, !value.isEmpty {
-            label = value
-        } else {
-            label = role
+        init(
+            role: String,
+            title: String?,
+            value: String?,
+            identifier: String?,
+            description: String?,
+            filename: String?,
+            children: [SelectedItemAXSnapshot] = []
+        ) {
+            self.role = role
+            self.title = title
+            self.value = value
+            self.identifier = identifier
+            self.description = description
+            self.filename = filename
+            self.children = children
         }
-        return SelectedItem(role: role, label: label, identifier: identifier)
+    }
+
+    /// Read role/title/value/identifier off a single selected element. `label`
+    /// prefers user-facing names, then stable Finder identifiers, and only
+    /// returns the AX role when no useful name exists.
+    private nonisolated static func projectSelectedItem(_ element: AXUIElement) -> SelectedItem? {
+        projectSelectedItem(readSelectedItemSnapshot(element))
+    }
+
+    internal nonisolated static func projectSelectedItem(_ snapshot: SelectedItemAXSnapshot) -> SelectedItem? {
+        SelectedItem(
+            role: snapshot.role,
+            label: bestLabel(in: snapshot) ?? snapshot.role,
+            identifier: nonEmpty(snapshot.identifier)
+        )
+    }
+
+    private nonisolated static func readSelectedItemSnapshot(
+        _ element: AXUIElement,
+        remainingChildDepth: Int = 1
+    ) -> SelectedItemAXSnapshot {
+        let role = readStringAttribute(element, kAXRoleAttribute as CFString) ?? "AXUnknown"
+        let title = readStringAttribute(element, kAXTitleAttribute as CFString)
+        let value = readStringAttribute(element, kAXValueAttribute as CFString)
+        let identifier = readStringAttribute(element, kAXIdentifierAttribute as CFString)
+        let description = readStringAttribute(element, kAXDescriptionAttribute as CFString)
+        let filename = readStringAttribute(element, "AXFilename" as CFString)
+
+        let children: [SelectedItemAXSnapshot]
+        if remainingChildDepth > 0,
+           role == "AXGroup",
+           title == nil,
+           value == nil,
+           let childElements = readChildren(element) {
+            children = childElements.map {
+                readSelectedItemSnapshot($0, remainingChildDepth: remainingChildDepth - 1)
+            }
+        } else {
+            children = []
+        }
+
+        return SelectedItemAXSnapshot(
+            role: role,
+            title: title,
+            value: value,
+            identifier: identifier,
+            description: description,
+            filename: filename,
+            children: children
+        )
+    }
+
+    private nonisolated static func readStringAttribute(_ element: AXUIElement, _ attribute: CFString) -> String? {
+        var ref: CFTypeRef?
+        let err = AXUIElementCopyAttributeValue(element, attribute, &ref)
+        guard err == .success else { return nil }
+        return nonEmpty(ref as? String)
+    }
+
+    private nonisolated static func readChildren(_ element: AXUIElement) -> [AXUIElement]? {
+        var ref: CFTypeRef?
+        let err = AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &ref)
+        guard err == .success, let value = ref else { return nil }
+        return value as? [AXUIElement]
+    }
+
+    private nonisolated static func bestLabel(in snapshot: SelectedItemAXSnapshot) -> String? {
+        if let label = directLabel(in: snapshot) {
+            return label
+        }
+
+        for child in snapshot.children {
+            if let label = bestLabel(in: child) {
+                return label
+            }
+        }
+
+        return nil
+    }
+
+    private nonisolated static func directLabel(in snapshot: SelectedItemAXSnapshot) -> String? {
+        nonEmpty(snapshot.title)
+            ?? nonEmpty(snapshot.value)
+            ?? nonEmpty(snapshot.filename)
+            ?? nonEmpty(snapshot.identifier)
+            ?? nonEmpty(snapshot.description)
+    }
+
+    private nonisolated static func nonEmpty(_ value: String?) -> String? {
+        guard let value, !value.isEmpty else { return nil }
+        return value
     }
 
     // MARK: - Envelope construction

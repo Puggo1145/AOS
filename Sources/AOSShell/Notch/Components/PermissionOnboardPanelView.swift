@@ -4,9 +4,10 @@ import AOSOSSenseKit
 // MARK: - PermissionOnboardPanelView
 //
 // First leg of the onboard flow: gate the user through the runtime
-// permissions OS Sense + Computer Use need (Screen Recording then
-// Accessibility) before the provider sign-in step. Shown by NotchView
-// when `!permissionsService.allGranted`.
+// permissions OS Sense + Computer Use need before the provider sign-in
+// step. Screen Recording / Accessibility are live probes; Automation has
+// no safe preflight API, so its step is an explicit user acknowledgement
+// that opens the matching Privacy pane.
 //
 // One permission card at a time. Tapping "Grant Access" triggers the
 // system prompt + opens the matching Privacy pane in System Settings
@@ -21,18 +22,22 @@ struct PermissionOnboardPanelView: View {
     let permissionsService: PermissionsService
     let topSafeInset: CGFloat
 
-    /// Order shown to the user. Screen Recording first because OS Sense
-    /// (the read leg) is the first capability AOS uses; Accessibility
-    /// follows for Computer Use.
-    private static let order: [Permission] = [.screenRecording, .accessibility]
-
     private var current: Permission? {
-        Self.order.first(where: { permissionsService.state.denied.contains($0) })
+        Permission.onboardingDisplayOrder.first(where: needsOnboarding)
     }
 
     private var stepIndex: Int? {
         guard let current else { return nil }
-        return Self.order.firstIndex(of: current)
+        return Permission.onboardingDisplayOrder.firstIndex(of: current)
+    }
+
+    private func needsOnboarding(_ permission: Permission) -> Bool {
+        switch permission {
+        case .screenRecording, .accessibility:
+            return permissionsService.state.denied.contains(permission)
+        case .automation:
+            return !permissionsService.automationOnboardingAcknowledged
+        }
     }
 
     var body: some View {
@@ -46,9 +51,12 @@ struct PermissionOnboardPanelView: View {
                 PermissionCard(
                     permission: current,
                     stepIndex: stepIndex ?? 0,
-                    totalSteps: Self.order.count,
+                    totalSteps: Permission.onboardingDisplayOrder.count,
                     onGrant: {
                         permissionsService.request(current)
+                        if current == .automation {
+                            permissionsService.acknowledgeAutomationOnboarding()
+                        }
                     }
                 )
                 .id(current)
@@ -117,7 +125,7 @@ private struct PermissionCard: View {
 
     private var grantButton: some View {
         Button(action: onGrant) {
-            Text("Grant Access")
+            Text(permission == .automation ? "Open Settings" : "Grant Access")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 14)
@@ -179,7 +187,7 @@ private extension Permission {
         case .screenRecording:
             return "Lets AOS see what's on your screen so the agent stays grounded in your current task."
         case .automation:
-            return "Lets AOS coordinate with other apps via Apple Events."
+            return "Lets AOS ask Finder and other apps for precise context, such as selected file URLs."
         }
     }
 }

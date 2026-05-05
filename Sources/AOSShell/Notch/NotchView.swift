@@ -163,7 +163,7 @@ struct NotchView: View {
                     .animation(.notchHeight, value: viewModel.showSettings)
                     .animation(.notchHeight, value: viewModel.showHistory)
                     .animation(.notchHeight, value: viewModel.providerService.hasReadyProvider)
-                    .animation(.notchHeight, value: viewModel.permissionsService.allGranted)
+                    .animation(.notchHeight, value: viewModel.permissionsService.onboardingPermissionsComplete)
             }
 
             if viewModel.status != .opened {
@@ -205,7 +205,7 @@ struct NotchView: View {
                 .modifier(SettingsMeasurement(viewModel: viewModel))
                 .transition(.blurReplace)
             } else if !viewModel.configService.hasCompletedOnboarding,
-                      !viewModel.permissionsService.allGranted {
+                      !viewModel.permissionsService.onboardingPermissionsComplete {
                 // First-run permission gate. Once `hasCompletedOnboarding`
                 // flips, this branch never runs again — permission drops
                 // post-onboarding surface as inline warnings on the
@@ -288,7 +288,7 @@ struct NotchView: View {
     private var shouldMarkOnboardingDone: Bool {
         viewModel.configService.loaded
             && !viewModel.configService.hasCompletedOnboarding
-            && viewModel.permissionsService.allGranted
+            && viewModel.permissionsService.onboardingPermissionsComplete
             && viewModel.providerService.hasReadyProvider
     }
 

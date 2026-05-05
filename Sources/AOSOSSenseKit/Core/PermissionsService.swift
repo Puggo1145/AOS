@@ -23,7 +23,9 @@ import ScreenCaptureKit
 //                       TCC fresh on every call; that's why Apple's
 //                       own "Quit & Reopen" prompt exists *for apps
 //                       that don't query the live API*.
-//   - Automation:       NOT probed (no caller). Schema slot is preserved.
+//   - Automation:       Not proactively probed. Live Apple Event callers
+//                       trigger the TCC prompt by performing the read; this
+//                       service can still open the Automation settings pane.
 //
 // Request APIs (used by the onboard permission panel):
 //   - Accessibility:    `AXIsProcessTrustedWithOptions(prompt: true)`
@@ -37,7 +39,10 @@ import ScreenCaptureKit
 @MainActor
 @Observable
 public final class PermissionsService {
+    private static let automationOnboardingAcknowledgedKey = "aos.permissions.automationOnboardingAcknowledged"
+
     public private(set) var state: PermissionState = PermissionState(denied: [])
+    public private(set) var automationOnboardingAcknowledged: Bool
 
     /// Whether `SCShareableContent.current` is safe to call as a
     /// non-prompting live probe. SC throws/returns based on TCC, BUT
@@ -52,8 +57,17 @@ public final class PermissionsService {
     /// Until safe, `refresh()` uses CGPreflight, which is documented
     /// to cache for the process lifetime but at least never prompts.
     private var screenRecordingProbeIsSafe: Bool = false
+    private let userDefaults: UserDefaults
 
-    public init() {
+    public convenience init() {
+        self.init(userDefaults: .standard)
+    }
+
+    internal init(userDefaults: UserDefaults) {
+        self.userDefaults = userDefaults
+        self.automationOnboardingAcknowledged = userDefaults.bool(
+            forKey: Self.automationOnboardingAcknowledgedKey
+        )
         // Pre-arm the live probe if we already know a TCC record
         // exists (i.e. permission was previously granted). Avoids
         // forcing the user to click Grant Access just so post-grant
@@ -102,6 +116,18 @@ public final class PermissionsService {
     /// True iff every probed permission is granted. `automation` is not
     /// probed yet so it does not gate this flag.
     public var allGranted: Bool { state.denied.isEmpty }
+
+    /// True iff probeable permissions are granted and the user has passed
+    /// the explicit Automation onboarding step. Automation TCC has no safe
+    /// preflight API, so this is an acknowledgement latch, not a grant probe.
+    public var onboardingPermissionsComplete: Bool {
+        allGranted && automationOnboardingAcknowledged
+    }
+
+    public func acknowledgeAutomationOnboarding() {
+        automationOnboardingAcknowledged = true
+        userDefaults.set(true, forKey: Self.automationOnboardingAcknowledgedKey)
+    }
 
     /// Trigger the macOS system prompt for `permission` AND open the
     /// matching Privacy pane in System Settings. The dual-trigger

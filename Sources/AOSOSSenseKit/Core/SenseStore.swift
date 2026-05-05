@@ -150,6 +150,12 @@ public final class SenseStore {
     /// need to tell it to look again.
     public func refreshGeneralProbe() {
         generalProbe?.refresh()
+        let adapters = Array(attachedAdapters.values)
+        for adapter in adapters {
+            Task {
+                await adapter.refresh()
+            }
+        }
     }
 
     /// Capture a single fresh window screenshot for the current frontmost app.
@@ -228,18 +234,24 @@ public final class SenseStore {
 
     private func mergeBehaviors() -> [BehaviorEnvelope] {
         var out: [BehaviorEnvelope] = []
+        var adapterEnvelopes: [BehaviorEnvelope] = []
+        for id in attachedAdapterOrder {
+            if let envelopes = behaviorsBySource[id] {
+                adapterEnvelopes.append(contentsOf: envelopes)
+            }
+        }
+        let hasFinderSelection = adapterEnvelopes.contains { $0.kind == "finder.selection" }
+
         if let general = behaviorsBySource["general"] {
-            out.append(contentsOf: general)
+            out.append(contentsOf: general.filter { envelope in
+                !(hasFinderSelection && envelope.kind == "general.selectedItems")
+            })
         }
         // Adapters in attach order — pinned to registry registration order
         // by `attachAdaptersForCurrentApp`. Iterating Dictionary directly
         // would surface adapter chips in an unstable order across app
         // switches.
-        for id in attachedAdapterOrder {
-            if let envelopes = behaviorsBySource[id] {
-                out.append(contentsOf: envelopes)
-            }
-        }
+        out.append(contentsOf: adapterEnvelopes)
         return out
     }
 

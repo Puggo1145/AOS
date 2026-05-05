@@ -193,7 +193,7 @@ protocol SenseAdapter: Actor {
 
 **AX 消费 adapter 必须声明 `.accessibility`**：任何通过 `AXObserverHub` 订阅 `kAX*` 通知的 adapter 都 MUST 把 `.accessibility` 加进 `requiredPermissions`。hub 只做路由不做授权——`AXObserverCreate` 在 Accessibility denied 时静默失败，hub 拿到 nil token，但 `attach()` 仍会成功返回一条空 stream，于是 chip 槽位会被一个不出 signal 的"空壳 adapter"占住。把 `.accessibility` 写进 `requiredPermissions` 才能让 revoke 时 swap 链路真正把 adapter 拉下来，恢复 degraded 模式契约。
 
-**Lazy enrichment 权限**：adapter 在 attach 之后通过 chip 操作触发的额外权限（如 Apple Event）不属于 `requiredPermissions`。adapter 只负责**触发** enrichment 动作（执行 Apple Event 等会触发系统授权 prompt 的调用）并把授权结果**回报给 `PermissionsService`**；权限状态的发布由 service 统一负责，`SenseContext.permissions` 由 service 投影。Adapter 不直接读写 `permissions.denied`。未授予时对应 envelope 字段缺省，chip 仍存在以便用户主动点击触发授权。
+**Apple Event 权限**：如果 Apple Event 只服务于 chip 点击后的额外 enrichment，则不属于 `requiredPermissions`，由该用户触发动作自己承担授权流。如果 Apple Event 是 live stream 生成最终 context 的必要步骤，则必须把 `.automation` 放进 `requiredPermissions`。`PermissionsService` 不主动 probe Automation；首次真实 Apple Event 调用会触发系统授权 prompt。未授权时对应 adapter 输出空 behavior 集合，degraded context 仍由 GeneralProbe 等通用来源承担。
 
 **依赖方向（核心契约）**：
 
@@ -216,15 +216,20 @@ emits `kind = "finder.selection"`，payload schema：
 
 ```ts
 {
-    items: SelectedItem[],
-    fileURLs: { [identifier: string]: string }   // 可能为空，详见 lazy enrichment
+    items: Array<{
+        role: "file" | "folder" | "alias" | "item";
+        label: string;
+        identifier: string; // canonical file:// URL
+    }>;
 }
 ```
 
 - `supportedBundleIds = ["com.apple.finder"]`
-- `requiredPermissions = [.accessibility]`（attach 通过 hub 订阅 AX 通知；按上节"AX 消费 adapter 必须声明 `.accessibility`"，此处必须把它写进来。`.automation` 是 lazy enrichment 权限，不属于 attach 必需集）
-- attach 仅做 hub 订阅与 stream 准备（参见 `SenseAdapter.attach` 契约：禁止 attach 内做同步 AX 属性读取或 AX 树遍历）。订阅 `kAXSelectedChildrenChangedNotification` 后立即返回 stream；`AXSelectedChildren` 的读取与 envelope emit 全部发生在 notification handler 内，**包括首次状态**——adapter 在 attach 返回后从自身 actor 上调度一次 handler 即可触发首屏读，与后续 AX 通知走同一条代码路径。`fileURLs` 在所有路径上初始为空，由 lazy enrichment 填充
-- **Lazy enrichment**：用户点击 chip 时才通过 Apple Event `tell application "Finder" to get selection` 拉路径回填 `fileURLs`。首次调用触发 Automation 系统授权 prompt；未授予则 `fileURLs` 保持空，授权结果回报 `PermissionsService`，由 service 投影 `.automation` 到 `SenseContext.permissions`；chip 仍存在以便用户后续重试
+- `requiredPermissions = [.accessibility, .automation]`（AX 负责 notification trigger；Apple Event 负责 live stream 的最终 selection payload）
+- attach 仅做 hub 订阅与 stream 准备（参见 `SenseAdapter.attach` 契约：禁止 attach 内做同步 AX 属性读取或 Apple Event）。订阅 Finder selection/window/focus 相关通知后立即返回 stream；首次状态与后续 AX 通知都走同一条 debounce handler。
+- AX 不生成最终 item。debounce handler 通过 Apple Event 读取 Finder 当前 `selection`，每个 item 解析为 canonical `file://` URL，并映射 role：`file` / `folder` / `alias` / `item`。
+- 空 selection emit `[]`，`SenseStore` 移除 `finder` source 的 chip；非空 selection emit 单个 `finder.selection` envelope。`displaySummary`：单项为 `Finder · Report.pdf`，多项为 `Finder · Report.pdf + 2`。
+- Submit 时不做二次 enrichment。`CitedContextProjection` 直接透传 live mirror 中的 `finder.selection` envelope；Sidecar / LLM 按 `kind = "finder.selection"` 解释 opaque payload。
 
 ### BrowserAdapter
 

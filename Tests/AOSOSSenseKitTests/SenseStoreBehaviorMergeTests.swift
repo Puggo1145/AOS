@@ -44,6 +44,34 @@ struct SenseStoreBehaviorMergeTests {
         #expect(kinds.contains("finder.selection"))
     }
 
+    @Test("Finder selection suppresses only the degraded general selectedItems")
+    func finderSelectionSuppressesGeneralSelectedItems() {
+        let store = makeStore()
+        let selectedItems = envelope(
+            kind: "general.selectedItems",
+            key: "general.selectedItems:100",
+            summary: "AXGroup"
+        )
+        let selectedText = envelope(
+            kind: "general.selectedText",
+            key: "general.selectedText:100",
+            summary: "text"
+        )
+        let finder = envelope(
+            kind: "finder.selection",
+            key: "finder.selection",
+            summary: "Finder · Report.pdf"
+        )
+
+        store._applyBehaviorsForTesting(source: "general", envelopes: [selectedItems, selectedText])
+        store._applyBehaviorsForTesting(source: "finder", envelopes: [finder])
+
+        #expect(store.context.behaviors.map(\.kind) == [
+            "general.selectedText",
+            "finder.selection",
+        ])
+    }
+
     @Test("Empty emit removes that source's contribution")
     func emptyRemovesSource() {
         let store = makeStore()

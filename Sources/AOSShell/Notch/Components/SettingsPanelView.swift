@@ -434,7 +434,14 @@ struct SettingsPanelView: View {
     // user has a clear at-a-glance signal even without opening the page.
 
     private var missingPermissions: [Permission] {
-        [.screenRecording, .accessibility].filter { permissionsService.state.denied.contains($0) }
+        Permission.settingsDisplayOrder.filter { permission in
+            switch permission {
+            case .screenRecording, .accessibility:
+                return permissionsService.state.denied.contains(permission)
+            case .automation:
+                return !permissionsService.automationOnboardingAcknowledged
+            }
+        }
     }
 
     private var permissionsRow: some View {
@@ -485,14 +492,28 @@ struct SettingsPanelView: View {
     private var permissionsPage: some View {
         pickerPage(title: "Permissions") {
             VStack(spacing: 8) {
-                ForEach([Permission.screenRecording, .accessibility], id: \.self) { p in
+                ForEach(Permission.settingsDisplayOrder, id: \.self) { p in
                     PermissionStatusRow(
                         permission: p,
-                        granted: !permissionsService.state.denied.contains(p),
-                        onOpenSettings: { permissionsService.openSystemSettings(for: p) }
+                        status: permissionStatus(for: p),
+                        onOpenSettings: {
+                            permissionsService.openSystemSettings(for: p)
+                            if p == .automation {
+                                permissionsService.acknowledgeAutomationOnboarding()
+                            }
+                        }
                     )
                 }
             }
+        }
+    }
+
+    private func permissionStatus(for permission: Permission) -> PermissionStatusRow.Status {
+        switch permission {
+        case .screenRecording, .accessibility:
+            return permissionsService.state.denied.contains(permission) ? .disabled : .granted
+        case .automation:
+            return permissionsService.automationOnboardingAcknowledged ? .reviewed : .needsReview
         }
     }
 
@@ -705,8 +726,15 @@ struct SettingsPanelView: View {
 /// Settings. The state pill mirrors the convention used elsewhere
 /// (green check / red dot).
 private struct PermissionStatusRow: View {
+    enum Status {
+        case granted
+        case disabled
+        case reviewed
+        case needsReview
+    }
+
     let permission: Permission
-    let granted: Bool
+    let status: Status
     let onOpenSettings: () -> Void
 
     var body: some View {
@@ -717,24 +745,22 @@ private struct PermissionStatusRow: View {
                 Text(permission.displayName)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.95))
-                Text(granted ? "Granted" : "Disabled")
+                Text(status.label)
                     .font(.system(size: 11))
-                    .foregroundStyle(granted
-                                     ? Color.green.opacity(0.85)
-                                     : Color.red.opacity(0.85))
+                    .foregroundStyle(status.tint)
             }
 
             Spacer(minLength: 8)
 
             Button(action: onOpenSettings) {
-                Text(granted ? "Manage" : "Open Settings")
+                Text(status.buttonTitle)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
                     .background(
                         Capsule()
-                            .fill(granted
+                            .fill(status == .granted || status == .reviewed
                                   ? Color.white.opacity(0.10)
                                   : Color.accentColor.opacity(0.85))
                     )
@@ -750,3 +776,29 @@ private struct PermissionStatusRow: View {
     }
 }
 
+private extension PermissionStatusRow.Status {
+    var label: String {
+        switch self {
+        case .granted: return "Granted"
+        case .disabled: return "Disabled"
+        case .reviewed: return "Reviewed"
+        case .needsReview: return "Review required"
+        }
+    }
+
+    var buttonTitle: String {
+        switch self {
+        case .granted, .reviewed: return "Manage"
+        case .disabled, .needsReview: return "Open Settings"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .granted, .reviewed:
+            return Color.green.opacity(0.85)
+        case .disabled, .needsReview:
+            return Color.red.opacity(0.85)
+        }
+    }
+}

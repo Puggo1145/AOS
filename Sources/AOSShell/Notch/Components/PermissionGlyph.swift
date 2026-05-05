@@ -31,12 +31,21 @@ struct PermissionGlyph: View {
                 .foregroundStyle(.white)
         }
         .frame(width: size, height: size)
+        .accessibilityHidden(true)
     }
 }
 
 // MARK: - Permission UI metadata (shared across views)
 
 extension Permission {
+    static var settingsDisplayOrder: [Permission] {
+        [.screenRecording, .accessibility, .automation]
+    }
+
+    static var onboardingDisplayOrder: [Permission] {
+        [.screenRecording, .accessibility, .automation]
+    }
+
     var displayName: String {
         switch self {
         case .accessibility:    return "Accessibility"

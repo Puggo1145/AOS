@@ -41,6 +41,50 @@ struct GeneralProbeTests {
         #expect(multi.displaySummary == "3 items")
     }
 
+    @Test("selected item projection unwraps unlabeled Finder groups")
+    func selectedItemProjectionUnwrapsFinderGroup() {
+        let item = GeneralProbe.projectSelectedItem(
+            GeneralProbe.SelectedItemAXSnapshot(
+                role: "AXGroup",
+                title: nil,
+                value: nil,
+                identifier: nil,
+                description: nil,
+                filename: nil,
+                children: [
+                    GeneralProbe.SelectedItemAXSnapshot(
+                        role: "AXStaticText",
+                        title: "Quarterly Report.pdf",
+                        value: nil,
+                        identifier: nil,
+                        description: nil,
+                        filename: nil
+                    ),
+                ]
+            )
+        )
+
+        #expect(item?.role == "AXGroup")
+        #expect(item?.label == "Quarterly Report.pdf")
+    }
+
+    @Test("selected item projection uses identifier before falling back to role")
+    func selectedItemProjectionUsesIdentifierAsLabel() {
+        let item = GeneralProbe.projectSelectedItem(
+            GeneralProbe.SelectedItemAXSnapshot(
+                role: "AXGroup",
+                title: nil,
+                value: nil,
+                identifier: "friend_accommodation_confirmation_letter",
+                description: nil,
+                filename: nil
+            )
+        )
+
+        #expect(item?.label == "friend_accommodation_confirmation_letter")
+        #expect(item?.identifier == "friend_accommodation_confirmation_letter")
+    }
+
     @Test("selectedText payload carries the full content (no truncation)")
     func selectedTextPayloadShape() {
         let raw = String(repeating: "x", count: 64 * 1024)

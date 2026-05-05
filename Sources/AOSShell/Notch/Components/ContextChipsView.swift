@@ -182,7 +182,7 @@ struct ContextChipsView: View {
             }
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: behaviorIcon(for: envelope.kind))
+                Image(systemName: Self.behaviorIcon(for: envelope))
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.white.opacity(selected ? 0.9 : 0.45))
                 Text(envelope.displaySummary)
@@ -213,13 +213,24 @@ struct ContextChipsView: View {
     /// Pick an SF Symbol per behavior kind. The chip surfaces the *kind* of
     /// signal (selection, input field, list selection, …); the actual content
     /// rides in the envelope payload and is the LLM's to read.
-    private func behaviorIcon(for kind: String) -> String {
-        switch kind {
+    static func behaviorIcon(for envelope: BehaviorEnvelope) -> String {
+        switch envelope.kind {
         case "general.selectedText": return "text.quote"
         case "general.currentInput": return "keyboard"
         case "general.selectedItems": return "checklist"
+        case "finder.selection": return finderSelectionIcon(payload: envelope.payload)
         default: return "sparkles"
         }
+    }
+
+    private static func finderSelectionIcon(payload: JSONValue) -> String {
+        guard case let .object(payloadObject) = payload,
+              case let .array(items)? = payloadObject["items"],
+              case let .object(firstItem)? = items.first,
+              case let .string(role)? = firstItem["role"] else {
+            return "doc"
+        }
+        return role == "folder" ? "folder" : "doc"
     }
 
 }

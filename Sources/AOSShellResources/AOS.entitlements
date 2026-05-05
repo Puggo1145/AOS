@@ -15,5 +15,11 @@
          keeps the bundled Bun usable across macOS releases. -->
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
+    <!-- FinderAdapter sends Apple Events to Finder to resolve selected
+         items to canonical file:// URLs. Hardened runtime builds must
+         declare this capability or Automation requests fail before the
+         normal TCC prompt path can run. -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
 </dict>
 </plist>

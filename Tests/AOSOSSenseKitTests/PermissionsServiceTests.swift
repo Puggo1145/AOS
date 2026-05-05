@@ -60,4 +60,25 @@ struct PermissionsServiceTests {
         let svc = PermissionsService()
         #expect(svc.state.denied.isEmpty)
     }
+
+    @MainActor
+    @Test("Automation onboarding acknowledgement is persisted separately from probed permissions")
+    func automationAcknowledgementPersistsSeparately() {
+        let suiteName = "aos.permissions.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+
+        let svc = PermissionsService(userDefaults: defaults)
+        #expect(!svc.automationOnboardingAcknowledged)
+        #expect(svc.allGranted)
+        #expect(!svc.onboardingPermissionsComplete)
+
+        svc.acknowledgeAutomationOnboarding()
+
+        #expect(svc.automationOnboardingAcknowledged)
+        #expect(svc.allGranted)
+        #expect(svc.onboardingPermissionsComplete)
+        let restored = PermissionsService(userDefaults: defaults)
+        #expect(restored.automationOnboardingAcknowledged)
+    }
 }

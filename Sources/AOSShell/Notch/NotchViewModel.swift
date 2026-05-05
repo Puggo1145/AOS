@@ -237,7 +237,7 @@ public final class NotchViewModel {
     /// drops surface inline and this stays false.
     public var isOnboarding: Bool {
         guard !configService.hasCompletedOnboarding else { return false }
-        return !permissionsService.allGranted || !providerService.hasReadyProvider
+        return !permissionsService.onboardingPermissionsComplete || !providerService.hasReadyProvider
     }
 
     /// True iff the *currently selected* provider is in `.ready`. Drives the

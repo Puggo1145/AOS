@@ -33,12 +33,10 @@ import Foundation
 //      `hub.subscribe(...)` and prepare its `AsyncStream`. Any attribute
 //      read MUST happen inside the per-notification handler (already on
 //      the main runloop, already debounced by the adapter).
-//   3. **No prefetching / enrichment.** Don't try to "warm up" the chip
-//      with extra info on attach. Heavy enrichment — fetching Finder
-//      Apple Event details, reading per-tab data from a browser — runs
-//      on the user-triggered path (e.g. chip click), not at app-switch
-//      time. Latency on attach is pure cost; latency on click is amortized
-//      against an explicit user gesture.
+//   3. **No work before the stream is returned.** If an adapter needs an
+//      initial read, it must schedule the same debounced handler used by
+//      later notifications after `attach` has prepared the stream. Latency
+//      inside attach is pure swap-chain cost.
 //   4. **Cancellation-aware.** The async work `attach` does (the few
 //      `await hub.subscribe(...)` hops) MUST honor `Task.isCancelled`. If
 //      the swap chain cancels mid-attach, return promptly without
@@ -80,9 +78,11 @@ public protocol SenseAdapter: Actor {
     /// Accessibility, the swap chain pulls the adapter back down instead
     /// of leaving a husk attached.
     ///
-    /// Lazy-enrichment permissions (e.g. `.automation` for Finder Apple
-    /// Events triggered on chip click) do NOT belong here — those run on
-    /// the user-triggered path and have their own re-prompt UX.
+    /// Permissions required by the live stream itself belong here. If an
+    /// adapter performs Apple Events as part of its live notification
+    /// handler, it must include `.automation`; if Apple Events are only used
+    /// for a separate user-triggered enrichment action, that action owns its
+    /// permission flow instead.
     var requiredPermissions: Set<Permission> { get }
 
     /// Subscribe to AX (or other) signals for `target` via the shared `hub`
@@ -98,4 +98,14 @@ public protocol SenseAdapter: Actor {
     /// Called when `target` leaves the foreground; adapter must release all
     /// subscriptions / observers it holds via the hub.
     func detach() async
+
+    /// Re-read the adapter's current lightweight context on demand. Called
+    /// when the user opens OS Sense so app-specific adapters get the same
+    /// fresh snapshot chance as `GeneralProbe`, without requiring an app
+    /// switch or a new AX notification.
+    func refresh() async
+}
+
+public extension SenseAdapter {
+    func refresh() async {}
 }

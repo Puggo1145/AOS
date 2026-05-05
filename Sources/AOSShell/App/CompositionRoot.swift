@@ -63,6 +63,8 @@ public final class CompositionRoot {
     }
 
     public func start() async {
+        await Self.registerBuiltinSenseAdapters(into: adapterRegistry)
+
         // 1. SenseStore: starts WindowMirror + initial permissions probe.
         await senseStore.start()
 
@@ -205,6 +207,13 @@ public final class CompositionRoot {
         //    is missing. Plan Stage 5: "权限或 SPI 缺失直接给用户反馈".
         //    Detached from view lifecycle so it survives notch open/close.
         scheduleDoctorAutoRun(doctor: cuDoctor)
+    }
+
+    /// Registers Shell-owned OS Sense adapters at the composition boundary.
+    /// Core stays typed only to `SenseAdapter`; concrete adapters are created
+    /// here where app wiring belongs.
+    internal static func registerBuiltinSenseAdapters(into registry: AdapterRegistry) async {
+        await registry.register(FinderAdapter())
     }
 
     /// Poll `permissionsService.allGranted` until it flips true (or already
