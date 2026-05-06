@@ -88,7 +88,7 @@ public final class GeneralProbe {
     /// either don't emit `kAXSelectedTextChangedNotification` at all or emit
     /// it only after focus shifts, so passive subscription is unreliable.
     public func refresh() {
-        recompute()
+        refocus()
         if let pid {
             scheduleWebAccessibilityActivation(pid: pid)
         }

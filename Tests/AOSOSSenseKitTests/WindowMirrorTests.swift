@@ -3,6 +3,27 @@ import Foundation
 import AppKit
 @testable import AOSOSSenseKit
 
+@MainActor
+private final class WindowMirrorTitleChangeFixture {
+    private var titles = ["First Tab", "Second Tab"]
+    private(set) var emissions: [(AppIdentity?, WindowIdentity?)] = []
+
+    func nextSnapshot(element: AXUIElement) -> WindowMirror.FocusedWindowSnapshot {
+        WindowMirror.FocusedWindowSnapshot(
+            element: element,
+            identity: WindowIdentity(title: titles.removeFirst(), windowId: 42)
+        )
+    }
+
+    func record(app: AppIdentity?, window: WindowIdentity?) {
+        emissions.append((app, window))
+    }
+
+    func reset() {
+        emissions.removeAll()
+    }
+}
+
 @Suite("WindowMirror — NSRunningApplication projection")
 struct WindowMirrorTests {
 
@@ -90,5 +111,36 @@ struct WindowMirrorTests {
             icon: nil
         )
         #expect(withIcon == withoutIcon)
+    }
+
+    @Test("Focused window title changes re-emit current window without app switch")
+    func focusedWindowTitleChangeReemitsCurrentWindow() async {
+        let pid = getpid()
+        let appElement = AXUIElementCreateApplication(pid)
+        let windowElement = AXUIElementCreateApplication(pid)
+        let app = AppIdentity(bundleId: "com.test.browser", name: "Browser", pid: pid, icon: nil)
+        let fixture = await WindowMirrorTitleChangeFixture()
+
+        let mirror = await MainActor.run {
+            WindowMirror(
+                hub: AXObserverHub(),
+                focusedWindowReader: { _, _ in
+                    fixture.nextSnapshot(element: windowElement)
+                },
+                appElementFactory: { _ in appElement },
+                onChange: { app, window in
+                    fixture.record(app: app, window: window)
+                }
+            )
+        }
+
+        await mirror.setAccessibilityGranted(true)
+        await fixture.reset()
+        await mirror._applyFrontmostForTesting(app: app)
+        await mirror._dispatchFocusedWindowTitleChangedForTesting()
+
+        let emissions = await fixture.emissions
+        #expect(emissions.map { $0.1?.title } == ["First Tab", "Second Tab"])
+        #expect(emissions.allSatisfy { $0.0 == app })
     }
 }

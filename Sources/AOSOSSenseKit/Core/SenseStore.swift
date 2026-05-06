@@ -190,6 +190,7 @@ public final class SenseStore {
     private func applyFrontmost(app: AppIdentity?, window: WindowIdentity?) {
         let oldPid = context.app?.pid
         let newPid = app?.pid
+        let oldWindow = context.window
 
         context = SenseContext(
             app: app,
@@ -212,6 +213,15 @@ public final class SenseStore {
             // Swap adapters for the new bundle id. Sequenced through
             // pendingSwap so detach/attach never overlap.
             scheduleAdapterSwap()
+        }
+
+        let sameAppWindowChanged = oldPid == newPid && oldWindow != window
+        if sameAppWindowChanged {
+            if !behaviorsBySource.isEmpty {
+                behaviorsBySource.removeAll()
+                applyBehaviorsRecompute()
+            }
+            refreshGeneralProbe()
         }
 
         // Attach probe to the new app iff Accessibility is granted.

@@ -396,6 +396,35 @@ struct SenseStoreAdapterPlumbingTests {
         #expect(refreshes == 1)
     }
 
+    @Test("Same-app window change clears stale behaviors and refreshes attached adapters")
+    func sameAppWindowChangeRefreshesAttachedAdapters() async {
+        let mock = MockAdapter()
+        let store = await makeStore(adapters: [mock])
+
+        store._applyPermissionsForTesting(PermissionState(denied: []))
+        store._applyFrontmostForTesting(
+            app: AppIdentity(bundleId: "com.test.app", name: "Test", pid: 802, icon: nil),
+            window: WindowIdentity(title: "First", windowId: 1)
+        )
+        await store._awaitPendingAdapterSwapForTesting()
+        await mock.emit([envelope("m:stale", "stale")])
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(store.context.behaviors.contains { $0.citationKey == "m:stale" })
+
+        store._applyFrontmostForTesting(
+            app: AppIdentity(bundleId: "com.test.app", name: "Test", pid: 802, icon: nil),
+            window: WindowIdentity(title: "Second", windowId: 2)
+        )
+        try? await Task.sleep(for: .milliseconds(50))
+
+        #expect(store.context.window == WindowIdentity(title: "Second", windowId: 2))
+        #expect(store.context.behaviors.isEmpty)
+        let refreshes = await mock.refreshCount
+        #expect(refreshes == 1)
+        let attaches = await mock.attachCount
+        #expect(attaches == 1)
+    }
+
     @Test("Deferred OS Sense refresh does not run during the current main-actor turn")
     func deferredRefreshYieldsBeforeForwardingToAdapters() async {
         let mock = MockAdapter()

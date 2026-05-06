@@ -27,6 +27,11 @@ import AOSAXSupport
 
 @MainActor
 public final class WindowMirror {
+    internal struct FocusedWindowSnapshot {
+        let element: AXUIElement
+        let identity: WindowIdentity
+    }
+
     public private(set) var app: AppIdentity?
     public private(set) var window: WindowIdentity?
 
@@ -37,6 +42,8 @@ public final class WindowMirror {
     /// state — breaking the documented "single writer" invariant. The
     /// synchronous form serializes naturally on @MainActor.
     private let onChange: @MainActor (AppIdentity?, WindowIdentity?) -> Void
+    private let focusedWindowReader: @MainActor (AXUIElement, AppIdentity) -> FocusedWindowSnapshot?
+    private let appElementFactory: @MainActor (pid_t) -> AXUIElement
     private let selfBundleId: String?
 
     private var workspaceObserver: NSObjectProtocol?
@@ -44,6 +51,9 @@ public final class WindowMirror {
     private var currentPid: pid_t?
     private var currentAppElement: AXUIElement?
     private var focusedWindowToken: AXObserverHub.Token?
+    private var mainWindowToken: AXObserverHub.Token?
+    private var focusedWindowTitleToken: AXObserverHub.Token?
+    private var currentFocusedWindowElement: AXUIElement?
 
     public init(
         hub: AXObserverHub? = nil,
@@ -52,6 +62,24 @@ public final class WindowMirror {
     ) {
         self.hub = hub
         self.selfBundleId = selfBundleId
+        self.focusedWindowReader = { appElement, app in
+            Self.readFocusedWindowSnapshot(appElement: appElement, fallbackTitle: app.name)
+        }
+        self.appElementFactory = { AXUIElementCreateApplication($0) }
+        self.onChange = onChange
+    }
+
+    internal init(
+        hub: AXObserverHub? = nil,
+        selfBundleId: String? = Bundle.main.bundleIdentifier,
+        focusedWindowReader: @escaping @MainActor (AXUIElement, AppIdentity) -> FocusedWindowSnapshot?,
+        appElementFactory: @escaping @MainActor (pid_t) -> AXUIElement,
+        onChange: @escaping @MainActor (AppIdentity?, WindowIdentity?) -> Void
+    ) {
+        self.hub = hub
+        self.selfBundleId = selfBundleId
+        self.focusedWindowReader = focusedWindowReader
+        self.appElementFactory = appElementFactory
         self.onChange = onChange
     }
 
@@ -123,7 +151,7 @@ public final class WindowMirror {
         if newPid != currentPid {
             detachAX()
             currentPid = newPid
-            currentAppElement = newPid.map { AXUIElementCreateApplication($0) }
+            currentAppElement = newPid.map { appElementFactory($0) }
             if accessibilityGranted {
                 attachAXForCurrentPid()
             }
@@ -141,6 +169,7 @@ public final class WindowMirror {
     private func reemitWithCurrentWindow() {
         guard let currentApp = app else {
             window = nil
+            detachFocusedWindowTitleObserver()
             self.onChange(nil, nil)
             return
         }
@@ -155,10 +184,12 @@ public final class WindowMirror {
     /// across permission flips.
     private func resolveWindow(for app: AppIdentity) -> WindowIdentity {
         if accessibilityGranted, let appElement = currentAppElement {
-            if let resolved = Self.readFocusedWindow(appElement: appElement, fallbackTitle: app.name) {
-                return resolved
+            if let snapshot = focusedWindowReader(appElement, app) {
+                attachFocusedWindowTitleObserverIfNeeded(to: snapshot.element)
+                return snapshot.identity
             }
         }
+        detachFocusedWindowTitleObserver()
         return WindowIdentity(title: app.name, windowId: nil)
     }
 
@@ -174,13 +205,52 @@ public final class WindowMirror {
                 self?.reemitWithCurrentWindow()
             }
         )
+        mainWindowToken = hub.subscribe(
+            pid: pid,
+            element: element,
+            notification: kAXMainWindowChangedNotification as String,
+            handler: { [weak self] in
+                self?.reemitWithCurrentWindow()
+            }
+        )
     }
 
     private func detachAX() {
         if let hub, let token = focusedWindowToken {
             hub.unsubscribe(token)
         }
+        if let hub, let token = mainWindowToken {
+            hub.unsubscribe(token)
+        }
         focusedWindowToken = nil
+        mainWindowToken = nil
+        detachFocusedWindowTitleObserver()
+    }
+
+    private func attachFocusedWindowTitleObserverIfNeeded(to element: AXUIElement) {
+        guard let hub, let pid = currentPid else { return }
+        if let currentFocusedWindowElement,
+           CFEqual(currentFocusedWindowElement, element) {
+            return
+        }
+        detachFocusedWindowTitleObserver()
+        currentFocusedWindowElement = element
+        focusedWindowTitleToken = hub.subscribe(
+            pid: pid,
+            element: element,
+            notification: kAXTitleChangedNotification as String,
+            handler: { [weak self] in
+                self?.reemitWithCurrentWindow()
+            }
+        )
+    }
+
+    private func detachFocusedWindowTitleObserver() {
+        if let hub, let token = focusedWindowTitleToken {
+            hub.unsubscribe(token)
+        }
+        focusedWindowTitleToken = nil
+        currentFocusedWindowElement = nil
     }
 
     // MARK: - Static helpers
@@ -192,6 +262,13 @@ public final class WindowMirror {
         appElement: AXUIElement,
         fallbackTitle: String
     ) -> WindowIdentity? {
+        readFocusedWindowSnapshot(appElement: appElement, fallbackTitle: fallbackTitle)?.identity
+    }
+
+    internal nonisolated static func readFocusedWindowSnapshot(
+        appElement: AXUIElement,
+        fallbackTitle: String
+    ) -> FocusedWindowSnapshot? {
         var focusedRef: CFTypeRef?
         let err = AXUIElementCopyAttributeValue(
             appElement,
@@ -209,7 +286,10 @@ public final class WindowMirror {
         )
         let title = (titleRef as? String).flatMap { $0.isEmpty ? nil : $0 } ?? fallbackTitle
         let windowId = axWindowID(for: windowElement)
-        return WindowIdentity(title: title, windowId: windowId)
+        return FocusedWindowSnapshot(
+            element: windowElement,
+            identity: WindowIdentity(title: title, windowId: windowId)
+        )
     }
 
     /// Pure projection helper, exposed `internal` so unit tests can cover
@@ -239,5 +319,25 @@ public final class WindowMirror {
     /// Test-only entry to drive the writer side without an NSWorkspace event.
     internal func _applyFrontmostForTesting(_ runningApp: NSRunningApplication?) {
         applyFrontmost(runningApp)
+    }
+
+    internal func _applyFrontmostForTesting(app: AppIdentity?) {
+        let newPid = app?.pid
+        if newPid != currentPid {
+            detachAX()
+            currentPid = newPid
+            currentAppElement = newPid.map { appElementFactory($0) }
+            if accessibilityGranted {
+                attachAXForCurrentPid()
+            }
+        }
+        let resolvedWindow = app.map { resolveWindow(for: $0) } ?? nil
+        self.app = app
+        self.window = resolvedWindow
+        self.onChange(app, resolvedWindow)
+    }
+
+    internal func _dispatchFocusedWindowTitleChangedForTesting() {
+        reemitWithCurrentWindow()
     }
 }
