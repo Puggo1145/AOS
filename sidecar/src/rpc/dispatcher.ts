@@ -31,6 +31,7 @@ import {
 } from "./rpc-types";
 import { StdioTransport } from "./transport";
 import { logger } from "../log";
+import { directionOf, inboundTimeoutMs, isFastPathMethod, splitKindOf } from "./method-catalog";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -59,124 +60,6 @@ export class DispatcherStopped extends Error {
     super("dispatcher stopped");
     this.name = "DispatcherStopped";
   }
-}
-
-// ---------------------------------------------------------------------------
-// Inbound timeouts (ms) — per rpc-protocol.md "Dispatcher 并发模型".
-// Only methods this round handles need entries. Unknown methods get the
-// generic default; handlers that hang past the budget receive ErrTimeout.
-// ---------------------------------------------------------------------------
-
-const INBOUND_HANDLER_TIMEOUTS: Record<string, number> = {
-  "rpc.ping": 1_000,
-  "agent.submit": 1_000, // ack budget; the streaming work is detached
-  "agent.cancel": 1_000,
-  // Manual /compact awaits a full summarization LLM round inline. The Shell
-  // side allows 120s (RPCClient.timeout); pad slightly so the dispatcher
-  // doesn't ErrTimeout before the Shell does, which would leave the handler
-  // racing on detached work while the user already saw a failure.
-  "agent.compact": 130_000,
-};
-
-const DEFAULT_HANDLER_TIMEOUT_MS = 5_000;
-
-// Methods that bypass the (currently nonexistent) long-running queue and run
-// as inline fast-path tasks. Encoded as a Set so the reader loop check is O(1).
-const FAST_PATH_METHODS = new Set<string>(["rpc.ping", "agent.cancel"]);
-
-// ---------------------------------------------------------------------------
-// Namespace direction enforcement
-// ---------------------------------------------------------------------------
-
-type Direction = "shellToBun" | "bunToShell" | "both";
-
-function namespaceOf(method: string): string {
-  const i = method.indexOf(".");
-  return i < 0 ? method : method.slice(0, i);
-}
-
-function directionOf(method: string): Direction {
-  const ns = namespaceOf(method);
-  switch (ns) {
-    case "rpc":
-      return "both";
-    case "agent":
-    case "settings":
-    case "config":
-      return "shellToBun";
-    case "computerUse":
-    case "ui":
-    case "conversation":
-      return "bunToShell";
-    case "dev":
-      // `dev.*` is split per-method like `provider.*`: requests are
-      // Shell→Bun (e.g. `dev.context.get`) and notifications are Bun→Shell
-      // (e.g. `dev.context.changed`). Method-level kind is enforced via
-      // `DEV_METHOD_KINDS` below — namespace returns `both` so the
-      // request/notification splits coexist.
-      return "both";
-    case "provider":
-      // Method-level direction: status/startLogin/cancelLogin are Shell→Bun
-      // (inbound requests we handle), while loginStatus/statusChanged are
-      // Bun→Shell notifications. The namespace is `both`; the per-method
-      // restriction is enforced via PROVIDER_METHOD_DIRECTIONS below so
-      // dispatcher.notify("provider.status", ...) throws (request method
-      // shouldn't be sent as a notification).
-      return "both";
-    case "session":
-      // `session.*` is split per-method like `provider.*` / `dev.*`:
-      // create/list/activate are Shell→Bun requests; created/activated/
-      // listChanged are Bun→Shell notifications. The split is enforced
-      // via SESSION_METHOD_KINDS below.
-      return "both";
-    default:
-      // Unknown namespace: be conservative — treat as "no direction allowed".
-      // Inbound: MethodNotFound; outbound: programmer error.
-      return "shellToBun"; // accept inbound; outbound will hit handler-not-found
-  }
-}
-
-/// Per-method direction within `provider.*`. Requests are Shell→Bun;
-/// notifications are Bun→Shell. Unknown methods fall through to
-/// MethodNotFound on the inbound side and a programmer-error on outbound.
-type SplitMethodKind = "request" | "notification";
-const PROVIDER_METHOD_KINDS: Record<string, SplitMethodKind> = {
-  "provider.status": "request",
-  "provider.startLogin": "request",
-  "provider.cancelLogin": "request",
-  "provider.loginStatus": "notification",
-  "provider.statusChanged": "notification",
-};
-
-/// Per-method direction within `dev.*`. Same shape as PROVIDER_METHOD_KINDS:
-/// the namespace is `both` so requests and notifications can coexist; this
-/// table is what makes `notify("dev.context.get", ...)` or
-/// `request("dev.context.changed", ...)` fail loudly at the dispatcher
-/// boundary (catches the exact category of mistake P2.1 flagged).
-const DEV_METHOD_KINDS: Record<string, SplitMethodKind> = {
-  "dev.context.get": "request",
-  "dev.context.changed": "notification",
-};
-
-/// Per-method direction within `session.*`. Same shape as the others; without
-/// this table sidecar emitting `session.created` would slip past direction
-/// enforcement and Shell calling `request("session.listChanged", …)` would
-/// silently succeed against a missing handler.
-const SESSION_METHOD_KINDS: Record<string, SplitMethodKind> = {
-  "session.create": "request",
-  "session.list": "request",
-  "session.activate": "request",
-  "session.created": "notification",
-  "session.activated": "notification",
-  "session.listChanged": "notification",
-};
-
-/// Look up a method's split kind across every `both`-direction namespace.
-/// Returns `undefined` when the namespace isn't split or the method isn't
-/// listed, in which case the existing namespace-level direction check is
-/// the only enforcement (matches today's `rpc.*` behavior).
-function splitKindOf(method: string): SplitMethodKind | undefined {
-  return PROVIDER_METHOD_KINDS[method] ?? DEV_METHOD_KINDS[method] ?? SESSION_METHOD_KINDS[method];
 }
 
 // ---------------------------------------------------------------------------
@@ -386,12 +269,12 @@ export class Dispatcher {
       return;
     }
 
-    const timeoutMs = INBOUND_HANDLER_TIMEOUTS[method] ?? DEFAULT_HANDLER_TIMEOUT_MS;
+    const timeoutMs = inboundTimeoutMs(method);
 
     // Fast path is currently equivalent to spawning a microtask, since this
     // round has no long-running queued handlers. The branch is preserved so a
     // future scheduler with a queued worker can short-circuit ping/cancel.
-    const isFastPath = FAST_PATH_METHODS.has(method);
+    const isFastPath = isFastPathMethod(method);
     const launch = () => this.runHandler(handler, params, id, method, timeoutMs);
     if (isFastPath) {
       // Run inline (still async, but not deferred behind any queue).

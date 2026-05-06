@@ -172,6 +172,16 @@ export class Conversation {
     return true;
   }
 
+  /// Append a completed assistant round and record the usage figure that
+  /// future auto-compaction reads. This keeps the transcript mutation and
+  /// token-accounting invariant at the Conversation seam instead of requiring
+  /// every caller to remember the ordering.
+  appendAssistantRound(turnId: string, msg: AssistantMessage): boolean {
+    if (!this.appendAssistant(turnId, msg)) return false;
+    this.recordTotalTokens(msg.usage.totalTokens);
+    return true;
+  }
+
   /// Push a tool-result message produced by executing one of the
   /// assistant's tool calls.
   appendToolResult(turnId: string, msg: ToolResultMessage): boolean {

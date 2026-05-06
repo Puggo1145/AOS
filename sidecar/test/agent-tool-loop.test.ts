@@ -13,10 +13,7 @@
 //     instead of killing the turn.
 
 import { test, expect, beforeEach, afterEach } from "bun:test";
-import { Dispatcher } from "../src/rpc/dispatcher";
-import { StdioTransport, type ByteSink, type ByteSource } from "../src/rpc/transport";
 import { registerAgentHandlers, setModelResolver, resetModelResolver } from "../src/agent/loop";
-import { SessionManager } from "../src/agent/session/manager";
 import { toolRegistry } from "../src/agent/tools/registry";
 import { ToolUserError } from "../src/agent/tools";
 import {
@@ -28,22 +25,17 @@ import {
   type ToolCall,
 } from "../src/llm";
 import { AssistantMessageEventStream } from "../src/llm/utils/event-stream";
+import {
+  flush,
+  makeCapturingDispatcher,
+  makeFakeModel as baseFakeModel,
+  setupSession,
+} from "./support/agent-harness";
 
 const FAKE_SOURCE_ID = "test-tool-loop";
 
 function makeFakeModel(): Model<Api> {
-  return {
-    id: "fake-tool-model",
-    name: "Fake",
-    api: "openai-responses",
-    provider: "test",
-    baseUrl: "",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 100_000,
-    maxTokens: 1_000,
-  };
+  return baseFakeModel({ id: "fake-tool-model" });
 }
 
 function fakeAssistant(model: Model<Api>, content: AssistantMessage["content"], stop: "stop" | "toolUse"): AssistantMessage {
@@ -87,60 +79,6 @@ afterEach(() => {
   scriptedRounds = [];
   observedContexts = [];
 });
-
-interface Captured {
-  notifications: { method: string; params: any }[];
-  responses: { id: any; result?: any; error?: any }[];
-}
-
-function makeCapturingDispatcher(): { dispatcher: Dispatcher; captured: Captured; pushInbound: (frame: object) => void } {
-  const inbound: string[] = [];
-  const inboundWaiters: ((s: string) => void)[] = [];
-  const source: ByteSource = (async function* () {
-    while (true) {
-      if (inbound.length > 0) {
-        yield Buffer.from(inbound.shift()!, "utf8");
-        continue;
-      }
-      yield Buffer.from(await new Promise<string>((r) => inboundWaiters.push(r)), "utf8");
-    }
-  })();
-  const captured: Captured = { notifications: [], responses: [] };
-  const sink: ByteSink = {
-    write(line: string): boolean {
-      const trimmed = line.endsWith("\n") ? line.slice(0, -1) : line;
-      const frame = JSON.parse(trimmed);
-      if ("method" in frame && !("id" in frame)) {
-        captured.notifications.push({ method: frame.method, params: frame.params });
-      } else if ("id" in frame) {
-        captured.responses.push({ id: frame.id, result: frame.result, error: frame.error });
-      }
-      return true;
-    },
-  };
-  const transport = new StdioTransport(source, sink);
-  const dispatcher = new Dispatcher(transport);
-  void dispatcher.start();
-  return {
-    dispatcher,
-    captured,
-    pushInbound: (frame: object) => {
-      const line = JSON.stringify(frame) + "\n";
-      if (inboundWaiters.length > 0) inboundWaiters.shift()!(line);
-      else inbound.push(line);
-    },
-  };
-}
-
-async function flush(ms = 80): Promise<void> {
-  await new Promise((r) => setTimeout(r, ms));
-}
-
-function setupSession() {
-  const manager = new SessionManager();
-  const session = manager.create();
-  return { manager, sessionId: session.id, convo: session.conversation };
-}
 
 function emitStream(events: (s: AssistantMessageEventStream) => void): AssistantMessageEventStream {
   const s = new AssistantMessageEventStream();

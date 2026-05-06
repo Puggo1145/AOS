@@ -6,21 +6,24 @@
 // stream lets us deterministically push text deltas, errors, or hang for cancel.
 
 import { test, expect, beforeEach, afterEach } from "bun:test";
-import { Dispatcher } from "../src/rpc/dispatcher";
-import { StdioTransport, type ByteSink, type ByteSource } from "../src/rpc/transport";
 import { registerAgentHandlers, setModelResolver, resetModelResolver } from "../src/agent/loop";
 import { ContextObserver, type DevContextSnapshot } from "../src/agent/context-observer";
-import { Conversation } from "../src/agent/conversation";
 import { SessionManager } from "../src/agent/session/manager";
 import {
   registerApiProvider,
   unregisterApiProviders,
   type Model,
   type Api,
-  type AssistantMessage,
 } from "../src/llm";
 import { AssistantMessageEventStream } from "../src/llm/utils/event-stream";
 import { RPCErrorCode } from "../src/rpc/rpc-types";
+import {
+  fakeAssistantMessage,
+  flush,
+  makeCapturingDispatcher,
+  makeFakeModel,
+  setupSession,
+} from "./support/agent-harness";
 
 // ---------------------------------------------------------------------------
 // Fake provider plumbing.
@@ -30,36 +33,6 @@ import { RPCErrorCode } from "../src/rpc/rpc-types";
 // ---------------------------------------------------------------------------
 
 const FAKE_SOURCE_ID = "test-agent-loop";
-
-function makeFakeModel(): Model<Api> {
-  return {
-    id: "fake-model",
-    name: "Fake",
-    api: "openai-responses",
-    provider: "test",
-    baseUrl: "",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 100_000,
-    maxTokens: 1_000,
-  };
-}
-
-function fakeAssistantMessage(model: Model<Api>, opts: { errorMessage?: string } = {}): AssistantMessage {
-  return {
-    role: "assistant",
-    content: [],
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-    stopReason: opts.errorMessage ? "error" : "stop",
-    errorMessage: opts.errorMessage,
-    timestamp: Date.now(),
-  };
-}
 
 // Each test installs its own stream behavior via this mutable ref.
 let nextStream: ((model: Model<Api>, signal?: AbortSignal) => AssistantMessageEventStream) | null = null;
@@ -81,70 +54,6 @@ afterEach(() => {
   resetModelResolver();
   nextStream = null;
 });
-
-// ---------------------------------------------------------------------------
-// Capturing dispatcher: collects outbound notifications + answers ack requests.
-// We don't need a real peer for these tests — we wire a one-sided dispatcher
-// whose stdout sink captures every frame.
-// ---------------------------------------------------------------------------
-
-interface Captured {
-  notifications: { method: string; params: any }[];
-  responses: { id: any; result?: any; error?: any }[];
-}
-
-function makeCapturingDispatcher(): { dispatcher: Dispatcher; captured: Captured; pushInbound: (frame: object) => void } {
-  const inbound: string[] = [];
-  const inboundWaiters: ((s: string) => void)[] = [];
-  const source: ByteSource = (async function* () {
-    while (true) {
-      if (inbound.length > 0) {
-        yield Buffer.from(inbound.shift()!, "utf8");
-        continue;
-      }
-      yield Buffer.from(await new Promise<string>((r) => inboundWaiters.push(r)), "utf8");
-    }
-  })();
-  const captured: Captured = { notifications: [], responses: [] };
-  const sink: ByteSink = {
-    write(line: string): boolean {
-      const trimmed = line.endsWith("\n") ? line.slice(0, -1) : line;
-      const frame = JSON.parse(trimmed);
-      if ("method" in frame && !("id" in frame)) {
-        captured.notifications.push({ method: frame.method, params: frame.params });
-      } else if ("id" in frame) {
-        captured.responses.push({ id: frame.id, result: frame.result, error: frame.error });
-      }
-      return true;
-    },
-  };
-  const transport = new StdioTransport(source, sink);
-  const dispatcher = new Dispatcher(transport);
-  void dispatcher.start();
-  return {
-    dispatcher,
-    captured,
-    pushInbound: (frame: object) => {
-      const line = JSON.stringify(frame) + "\n";
-      if (inboundWaiters.length > 0) inboundWaiters.shift()!(line);
-      else inbound.push(line);
-    },
-  };
-}
-
-async function flush(ms = 30): Promise<void> {
-  await new Promise((r) => setTimeout(r, ms));
-}
-
-/// Build a fresh SessionManager + bootstrap session and return the bits each
-/// test needs. Replaces the Stage-0 "construct Conversation+TurnRegistry by
-/// hand" pattern: per docs/designs/session-management.md the loop now reads
-/// per-session state from the manager, so tests must allocate one too.
-function setupSession() {
-  const manager = new SessionManager();
-  const session = manager.create();
-  return { manager, sessionId: session.id, convo: session.conversation };
-}
 
 // ---------------------------------------------------------------------------
 // Tests

@@ -41,13 +41,10 @@ import {
   isContextOverflow,
   PROVIDER_IDS,
   effectiveEffort,
-  validateToolArguments,
   type AssistantMessage,
   type Model,
   type Api,
-  type ToolCall,
   type ToolResultMessage,
-  type ToolResultContent,
   type Message,
 } from "../llm";
 import { readUserConfig } from "../config/storage";
@@ -70,11 +67,19 @@ import { Conversation } from "./conversation";
 import { contextObserver as defaultContextObserver, ContextObserver } from "./context-observer";
 import { SessionManager } from "./session/manager";
 import { Session } from "./session/session";
-import { toolRegistry, ToolUserError, type ToolHandler, type ToolExecResult } from "./tools";
+import { toolRegistry, type ToolExecResult } from "./tools";
 import { type TodoItem } from "./todos/manager";
-import { renderAmbient } from "./ambient";
 import { autoCompactIfNeeded, compactBreaker, compactConversation, COMPACT_NOOP_EMPTY } from "./compact";
 import { buildSystemPrompt } from "./system-prompt";
+import { buildOutboundMessages, publishTurnContext } from "./turn/outbound";
+import {
+  assistantSpoke,
+  extractToolCalls,
+  prepareToolCall,
+  renderToolResultForWire,
+  runTool,
+  type ToolCallOutcome,
+} from "./turn/tool-dispatch";
 import { logger } from "../log";
 
 /// Hard ceiling on *consecutive* tool-call rounds in which the assistant
@@ -473,10 +478,7 @@ export async function runTurn(
   // up-front so the wire's `called` / `rejected` decision is made before the
   // notification fires — preserving the strict per-phase invariant that
   // `called` only ever ships validated args.
-  type CallOutcome =
-    | { kind: "ready"; args: Record<string, unknown>; handler: ToolHandler<any, any> }
-    | { kind: "rejected"; errorMessage: string };
-  const callOutcomes = new Map<string, CallOutcome>();
+  const callOutcomes = new Map<string, ToolCallOutcome>();
 
   // Tracks whether a reasoning block has been opened on the wire and not yet
   // closed. The provider stream's `thinking_end` is the happy-path closer,
@@ -493,32 +495,15 @@ export async function runTurn(
     dispatcher.notify(RPCMethod.uiThinking, { sessionId, turnId, kind: "end" });
   };
 
-  /// Build the exact `Message[]` we would hand to `streamSimple` right now —
-  /// persisted history plus a freshly-rendered ambient tail (when any
-  /// provider returned non-null). Centralized so the pre-stream call site
-  /// and the dev-mode snapshot share one view of the world; otherwise Dev
-  /// Mode would render persisted-only messages and the user could not see
-  /// the transient ambient block they're trying to debug.
-  const buildOutboundMessages = (): Message[] => {
-    const base = convo.llmMessages();
-    const ambient = renderAmbient(session);
-    if (!ambient) return base;
-    return [
-      ...base,
-      { role: "user", content: ambient, timestamp: Date.now() },
-    ];
-  };
-
   const publishContext = (messages: Message[]): void => {
-    observer.publish({
-      capturedAt: Date.now(),
+    publishTurnContext({
+      observer,
       sessionId,
       turnId,
-      modelId: model.id,
-      providerId: model.provider,
-      effort: effort ?? null,
+      model,
+      effort,
       systemPrompt,
-      messagesJson: ContextObserver.renderMessages(messages),
+      messages,
     });
   };
 
@@ -617,8 +602,6 @@ export async function runTurn(
     let consecutiveSilentToolRounds = 0;
     session.setSilentToolRounds(0);
     while (true) {
-      const messages = convo.llmMessages();
-
       // Ambient injection. `buildOutboundMessages` returns the persisted
       // history plus a freshly-rendered `<ambient>...</ambient>` tail
       // (when any provider returned non-null). The ambient block rides
@@ -636,7 +619,7 @@ export async function runTurn(
       // `messages`, i.e. NOT the ambient tail) so the cached prefix stays
       // stable across rounds — ambient sits past that boundary and is
       // naturally outside the cached region.
-      const messagesForRound = buildOutboundMessages();
+      const messagesForRound = buildOutboundMessages(convo, session);
 
       // Dev-mode observability: capture the exact (systemPrompt, messages)
       // pair we are about to hand to the LLM, ambient tail included. Publish
@@ -791,30 +774,14 @@ export async function runTurn(
       }
 
       // Persist the assistant message into the flat history regardless of
-      // whether it carries tool calls or not. For tool-call rounds it is
-      // the bridge to the next round; for the terminal round it is the
-      // final reply.
-      if (!convo.appendAssistant(turnId, final)) {
+      // whether it carries tool calls or not, and record the provider usage
+      // figure at the same transcript seam for the next auto-compact check.
+      if (!convo.appendAssistantRound(turnId, final)) {
         // Turn was reset/cancelled mid-flight. Silently drop the message —
         // matches the appendDelta race policy.
         dropQueuedSteer();
         return;
       }
-
-      // s06: capture the provider-reported `totalTokens` figure on the
-      // Conversation so the next turn's auto-compact threshold check has
-      // a recent baseline to subtract from `model.contextWindow`. We
-      // record the *total* — input + output + cacheRead + cacheWrite —
-      // not just `usage.input`, because (a) `input` is the uncached
-      // delta only and drastically underestimates prompt fill once
-      // prompt caching is in use, and (b) the assistant `output` we
-      // just got is appended into history and will be part of the next
-      // request's prompt, so it must be counted toward the next round's
-      // ceiling estimate. This matches the same figure the UI ring shows.
-      // This is the only durable place we record token usage — the wire
-      // `ui.usage` notification below is for live UI rendering, not
-      // server-side state.
-      convo.recordTotalTokens(final.usage.totalTokens);
 
       // Surface usage to the Shell composer's context-usage ring. Fired
       // PER round (not once per turn) so multi-round tool flows show the
@@ -841,7 +808,7 @@ export async function runTurn(
         // turn (and a fresh ambient tail reflecting any state changes
         // during this turn), then fire the visible-status closer.
         const ok = convo.markDone(turnId);
-        publishContext(buildOutboundMessages());
+        publishContext(buildOutboundMessages(convo, session));
         closeThinkingIfOpen();
         dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId, status: "done" });
         if (ok) params.onDone?.();
@@ -858,9 +825,7 @@ export async function runTurn(
       // progress to the user — reset and let the loop continue. Thinking
       // blocks are deliberately ignored: silent reasoning between tool
       // bursts is the exact failure mode this cap exists to break.
-      const spokeThisRound = final.content.some(
-        (c) => c.type === "text" && c.text.trim().length > 0,
-      );
+      const spokeThisRound = assistantSpoke(final);
       if (spokeThisRound) {
         consecutiveSilentToolRounds = 0;
       } else {
@@ -997,7 +962,7 @@ export async function runTurn(
             toolCallId: tc.id,
             toolName: tc.name,
             isError: result.isError,
-            outputText: renderResultForWire(result.content),
+            outputText: renderToolResultForWire(result.content),
           });
         }
       }
@@ -1049,130 +1014,12 @@ export async function runTurn(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Tool dispatch
-// ---------------------------------------------------------------------------
-
-function extractToolCalls(msg: AssistantMessage): ToolCall[] {
-  const out: ToolCall[] = [];
-  for (const c of msg.content) {
-    if (c.type === "toolCall") out.push(c);
-  }
-  return out;
-}
-
-interface ToolDispatchCtx {
-  sessionId: string;
-  turnId: string;
-  toolCallId: string;
-  model: Model<Api>;
-  signal: AbortSignal;
-}
-
-/// Resolve a tool call's handler and validate its arguments without running
-/// anything. Returns `ready` with the validated args + handler on success,
-/// or `rejected` with a human-readable failure on missing-tool / schema
-/// violation. The agent loop calls this at `toolcall_end` time so the wire
-/// can decide between `ui.toolCall.called` and `ui.toolCall.rejected` before
-/// the dispatch round even starts.
-function prepareToolCall(
-  call: ToolCall,
-  byName: ReadonlyMap<string, ToolHandler<any, any>>,
-):
-  | { kind: "ready"; args: Record<string, unknown>; handler: ToolHandler<any, any> }
-  | { kind: "rejected"; errorMessage: string } {
-  const handler = byName.get(call.name);
-  if (!handler) {
-    const known = Array.from(byName.keys()).join(", ") || "<none>";
-    return {
-      kind: "rejected",
-      errorMessage: `Unknown tool "${call.name}". Available tools: ${known}.`,
-    };
-  }
-  try {
-    const args = validateToolArguments(handler.spec, call) as Record<string, unknown>;
-    return { kind: "ready", args, handler };
-  } catch (err) {
-    return {
-      kind: "rejected",
-      errorMessage: err instanceof Error ? err.message : String(err),
-    };
-  }
-}
-
-/// Run a pre-validated tool call. The args + handler come from
-/// `prepareToolCall`; this function only owns the handler's runtime
-/// behavior.
-///
-/// Error policy:
-///   - `{ isError: true }` or `ToolUserError` thrown → recoverable, surfaced
-///     to the model as the tool's output. Loop continues.
-///   - Any other throw → re-thrown. The dispatch site catches it, logs it,
-///     and synthesizes an isError result so the loop still continues.
-async function runTool(
-  handler: ToolHandler<any, any>,
-  args: Record<string, unknown>,
-  toolName: string,
-  ctx: ToolDispatchCtx,
-): Promise<ToolExecResult> {
-  try {
-    return await handler.execute(args, ctx);
-  } catch (err) {
-    if (err instanceof ToolUserError) {
-      return {
-        content: [{ type: "text", text: err.message }],
-        isError: true,
-      };
-    }
-    // Cancellation propagated through the tool. The dispatcher rejects
-    // an aborted outbound request with a plain `Error("... aborted")`
-    // — NOT an `RPCMethodError` — so the recoverable-error filter in
-    // computer-use's `callCU` doesn't catch it and it would otherwise
-    // bubble all the way to `runTurn`'s top-level catch, fire `ui.error`,
-    // and mark the turn as failed. The user pressed cancel; that's not
-    // an error. Return a closing frame so the toolCall row doesn't
-    // dangle in `.calling`, and let the outer `if (signal.aborted)`
-    // check in `runTurn` close the turn via `ui.status: done`.
-    //
-    // We trust the signal as the cancel oracle (not error message
-    // string-matching): only convert when the signal is actually
-    // aborted. Other transient I/O errors that happen to coincide with
-    // a non-aborted signal still fail loudly.
-    if (ctx.signal.aborted) {
-      return {
-        content: [{ type: "text", text: `${toolName} cancelled` }],
-        isError: true,
-      };
-    }
-    // Unexpected — let runTurn handle it. Annotate the message so the
-    // ui.error surface still tells the user which tool blew up.
-    const inner = err instanceof Error ? err : new Error(String(err));
-    const wrapped = new Error(`Tool "${toolName}" threw: ${inner.message}`);
-    (wrapped as Error & { cause?: unknown }).cause = inner;
-    throw wrapped;
-  }
-}
-
 /// Project a TodoManager snapshot onto the wire shape. Identity transform
 /// (the manager's `TodoItem` already matches `TodoItemWire`); kept as a
 /// dedicated function so the call site reads as "convert internal to wire"
 /// and tests can assert against the wire shape directly.
 function todoItemsForWire(items: TodoItem[]): TodoItem[] {
   return items.map((it) => ({ id: it.id, text: it.text, status: it.status }));
-}
-
-/// Render a tool result's content blocks down to a single string for the
-/// Shell's `ui.toolCall` notification. Concatenates text blocks and replaces
-/// images with a placeholder — Shell renders raw text in the panel today,
-/// and image bytes have no place on this notification (the model already
-/// got them via the ToolResultMessage).
-function renderResultForWire(content: ToolResultContent[]): string {
-  const out: string[] = [];
-  for (const c of content) {
-    if (c.type === "text") out.push(c.text);
-    else if (c.type === "image") out.push(`[image ${c.mimeType}]`);
-  }
-  return out.join("\n");
 }
 
 // Re-export for tests that touch llmMessages-derived behavior without

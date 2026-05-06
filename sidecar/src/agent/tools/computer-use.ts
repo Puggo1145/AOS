@@ -33,10 +33,10 @@ import {
   type ComputerUseDoctorResult,
 } from "../../rpc/rpc-types";
 import { Dispatcher, RPCMethodError } from "../../rpc/dispatcher";
-import type { ToolResultContent } from "../../llm/types";
+import type { Tool, ToolResultContent } from "../../llm/types";
 import { supportsVision } from "../../llm/models/capabilities";
 import { toolRegistry } from "./registry";
-import { ToolUserError, type ToolExecContext, type ToolHandler } from "./types";
+import { ToolUserError, type ToolExecContext, type ToolExecResult, type ToolHandler } from "./types";
 
 // ---------------------------------------------------------------------------
 // Per-method timeouts (ms) — `docs/designs/rpc-protocol.md` "Dispatcher 并发模型".
@@ -127,6 +127,46 @@ async function callCU<R>(
 const BACKGROUND_NOTE =
   "Operates the target app entirely in the background — does not steal focus, does not move the user's cursor, does not raise the target window. ";
 
+interface RpcJsonToolOptions<TArgs extends object, TResult> {
+  name: string;
+  description: string;
+  parameters: Tool["parameters"];
+  method: string;
+  params?: (args: TArgs) => object;
+  beforeCall?: (args: TArgs) => void;
+}
+
+function jsonToolResult<TResult>(result: TResult): ToolExecResult<TResult> {
+  return {
+    content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    details: result,
+    isError: false,
+  };
+}
+
+function buildRpcJsonTool<TArgs extends object, TResult>(
+  dispatcher: Dispatcher,
+  options: RpcJsonToolOptions<TArgs, TResult>,
+): ToolHandler<TArgs, TResult> {
+  return {
+    spec: {
+      name: options.name,
+      description: BACKGROUND_NOTE + options.description,
+      parameters: options.parameters,
+    },
+    execute: async (args, ctx) => {
+      options.beforeCall?.(args);
+      const result = await callCU<TResult>(
+        dispatcher,
+        options.method,
+        options.params ? options.params(args) : args,
+        ctx,
+      );
+      return jsonToolResult(result);
+    },
+  };
+}
+
 /// Build the computer-use tool set bound to a dispatcher. Called once
 /// from `index.ts` after the dispatcher has been constructed.
 export function registerComputerUseTools(dispatcher: Dispatcher): void {
@@ -149,75 +189,45 @@ export function registerComputerUseTools(dispatcher: Dispatcher): void {
 function buildListApps(
   dispatcher: Dispatcher,
 ): ToolHandler<ComputerUseListAppsParams, ComputerUseListAppsResult> {
-  return {
-    spec: {
-      name: "computer_use_list_apps",
-      description:
-        BACKGROUND_NOTE +
-        "Enumerate macOS apps. Use mode='running' to list apps currently running, or mode='all' to list every available app. " +
-        "Only running apps have a non-null pid and can be used with list_windows/get_app_state/click/type. " +
-        "If an app is not running, open it first before using Computer Use operations on it.",
-      parameters: {
-        type: "object",
-        properties: {
-          mode: {
-            type: "string",
-            enum: ["running", "all"],
-            description: "Use 'running' for currently running apps, or 'all' for all available apps.",
-          },
+  return buildRpcJsonTool(dispatcher, {
+    name: "computer_use_list_apps",
+    description:
+      "Enumerate macOS apps. Use mode='running' to list apps currently running, or mode='all' to list every available app. " +
+      "Only running apps have a non-null pid and can be used with list_windows/get_app_state/click/type. " +
+      "If an app is not running, open it first before using Computer Use operations on it.",
+    parameters: {
+      type: "object",
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["running", "all"],
+          description: "Use 'running' for currently running apps, or 'all' for all available apps.",
         },
-        required: ["mode"],
       },
+      required: ["mode"],
     },
-    execute: async (args, ctx) => {
-      const result = await callCU<ComputerUseListAppsResult>(
-        dispatcher,
-        RPCMethod.computerUseListApps,
-        args,
-        ctx,
-      );
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        details: result,
-        isError: false,
-      };
-    },
-  };
+    method: RPCMethod.computerUseListApps,
+  });
 }
 
 function buildListWindows(
   dispatcher: Dispatcher,
 ): ToolHandler<ComputerUseListWindowsParams, ComputerUseListWindowsResult> {
-  return {
-    spec: {
-      name: "computer_use_list_windows",
-      description:
-        BACKGROUND_NOTE +
-        "List every layer-0 window owned by `pid` along with bounds, on-screen state, " +
-        "and current-Space membership. Required before any state / click / type call — " +
-        "the Kit refuses to implicitly pick a window.",
-      parameters: {
-        type: "object",
-        properties: {
-          pid: { type: "number", description: "macOS pid from a running computer_use_list_apps entry." },
-        },
-        required: ["pid"],
+  return buildRpcJsonTool(dispatcher, {
+    name: "computer_use_list_windows",
+    description:
+      "List every layer-0 window owned by `pid` along with bounds, on-screen state, " +
+      "and current-Space membership. Required before any state / click / type call — " +
+      "the Kit refuses to implicitly pick a window.",
+    parameters: {
+      type: "object",
+      properties: {
+        pid: { type: "number", description: "macOS pid from a running computer_use_list_apps entry." },
       },
+      required: ["pid"],
     },
-    execute: async (args, ctx) => {
-      const result = await callCU<ComputerUseListWindowsResult>(
-        dispatcher,
-        RPCMethod.computerUseListWindows,
-        args,
-        ctx,
-      );
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        details: result,
-        isError: false,
-      };
-    },
-  };
+    method: RPCMethod.computerUseListWindows,
+  });
 }
 
 function buildGetAppState(
@@ -326,283 +336,181 @@ function buildGetAppState(
 function buildClickByElement(
   dispatcher: Dispatcher,
 ): ToolHandler<ComputerUseClickByElementParams, ComputerUseClickResult> {
-  return {
-    spec: {
-      name: "computer_use_click_element",
-      description:
-        BACKGROUND_NOTE +
-        "Semantic click on an AX-tree element addressed by `(stateId, elementIndex)`. " +
-        "Pre-condition: you must already have a fresh `stateId` from `computer_use_get_app_state` " +
-        "(TTL 30s) and an `elementIndex` you read from that snapshot's `[index]` markers. " +
-        "Use this whenever an element is available — it's more reliable than coordinates because " +
-        "the Kit walks the AX action → AX attribute → eventPost degradation chain. " +
-        "If you only have pixel coordinates (vision-only mode, or no AX node at the target), use " +
-        "`computer_use_click_at` instead. Returns which layer landed: 'axAction', 'axAttribute', or 'eventPost'.",
-      parameters: {
-        type: "object",
-        properties: {
-          pid: { type: "number" },
-          windowId: { type: "number" },
-          stateId: {
-            type: "string",
-            description: "stateId returned by the most recent computer_use_get_app_state for this (pid, windowId).",
-          },
-          elementIndex: {
-            type: "number",
-            description: "Index marker `[N]` from the AX tree. Must exist in the snapshot — there are no sentinel values.",
-          },
-          action: { type: "string", description: "AX action name (default 'AXPress')." },
+  return buildRpcJsonTool(dispatcher, {
+    name: "computer_use_click_element",
+    description:
+      "Semantic click on an AX-tree element addressed by `(stateId, elementIndex)`. " +
+      "Pre-condition: you must already have a fresh `stateId` from `computer_use_get_app_state` " +
+      "(TTL 30s) and an `elementIndex` you read from that snapshot's `[index]` markers. " +
+      "Use this whenever an element is available — it's more reliable than coordinates because " +
+      "the Kit walks the AX action → AX attribute → eventPost degradation chain. " +
+      "If you only have pixel coordinates (vision-only mode, or no AX node at the target), use " +
+      "`computer_use_click_at` instead. Returns which layer landed: 'axAction', 'axAttribute', or 'eventPost'.",
+    parameters: {
+      type: "object",
+      properties: {
+        pid: { type: "number" },
+        windowId: { type: "number" },
+        stateId: {
+          type: "string",
+          description: "stateId returned by the most recent computer_use_get_app_state for this (pid, windowId).",
         },
-        required: ["pid", "windowId", "stateId", "elementIndex"],
+        elementIndex: {
+          type: "number",
+          description: "Index marker `[N]` from the AX tree. Must exist in the snapshot — there are no sentinel values.",
+        },
+        action: { type: "string", description: "AX action name (default 'AXPress')." },
       },
+      required: ["pid", "windowId", "stateId", "elementIndex"],
     },
-    execute: async (args, ctx) => {
-      const result = await callCU<ComputerUseClickResult>(
-        dispatcher,
-        RPCMethod.computerUseClickByElement,
-        args,
-        ctx,
-      );
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        details: result,
-        isError: false,
-      };
-    },
-  };
+    method: RPCMethod.computerUseClickByElement,
+  });
 }
 
 function buildClickByCoords(
   dispatcher: Dispatcher,
 ): ToolHandler<ComputerUseClickByCoordsParams, ComputerUseClickResult> {
-  return {
-    spec: {
-      name: "computer_use_click_at",
-      description:
-        BACKGROUND_NOTE +
-        "Coordinate click at `(x, y)` in window-local screenshot pixels (top-left origin) within " +
-        "`(pid, windowId)`. Use this when you don't have an AX `elementIndex` — typically vision-only " +
-        "flows reading directly off a screenshot, or when the target has no AX node. Optional `count` " +
-        "1-3 for single/double/triple click. " +
-        "When an AX element is available, prefer `computer_use_click_element` — it's more robust.",
-      parameters: {
-        type: "object",
-        properties: {
-          pid: { type: "number" },
-          windowId: { type: "number" },
-          x: { type: "number", description: "Window-local x in screenshot pixels (top-left origin). Pass the raw pixel coordinate you read off the attached image — the Shell knows the real screenshot dimensions and converts internally. Do NOT pre-divide by any scale factor." },
-          y: { type: "number", description: "Window-local y in screenshot pixels (top-left origin). Pass the raw pixel coordinate you read off the attached image — the Shell knows the real screenshot dimensions and converts internally. Do NOT pre-divide by any scale factor." },
-          count: { type: "number", description: "1, 2 (double), or 3 (triple). Default 1." },
-          modifiers: {
-            type: "array",
-            items: { type: "string" },
-            description: "Subset of: cmd/command, shift, option/alt, ctrl/control, fn.",
-          },
+  return buildRpcJsonTool(dispatcher, {
+    name: "computer_use_click_at",
+    description:
+      "Coordinate click at `(x, y)` in window-local screenshot pixels (top-left origin) within " +
+      "`(pid, windowId)`. Use this when you don't have an AX `elementIndex` — typically vision-only " +
+      "flows reading directly off a screenshot, or when the target has no AX node. Optional `count` " +
+      "1-3 for single/double/triple click. " +
+      "When an AX element is available, prefer `computer_use_click_element` — it's more robust.",
+    parameters: {
+      type: "object",
+      properties: {
+        pid: { type: "number" },
+        windowId: { type: "number" },
+        x: { type: "number", description: "Window-local x in screenshot pixels (top-left origin). Pass the raw pixel coordinate you read off the attached image — the Shell knows the real screenshot dimensions and converts internally. Do NOT pre-divide by any scale factor." },
+        y: { type: "number", description: "Window-local y in screenshot pixels (top-left origin). Pass the raw pixel coordinate you read off the attached image — the Shell knows the real screenshot dimensions and converts internally. Do NOT pre-divide by any scale factor." },
+        count: { type: "number", description: "1, 2 (double), or 3 (triple). Default 1." },
+        modifiers: {
+          type: "array",
+          items: { type: "string" },
+          description: "Subset of: cmd/command, shift, option/alt, ctrl/control, fn.",
         },
-        required: ["pid", "windowId", "x", "y"],
       },
+      required: ["pid", "windowId", "x", "y"],
     },
-    execute: async (args, ctx) => {
-      const result = await callCU<ComputerUseClickResult>(
-        dispatcher,
-        RPCMethod.computerUseClickByCoords,
-        args,
-        ctx,
-      );
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        details: result,
-        isError: false,
-      };
-    },
-  };
+    method: RPCMethod.computerUseClickByCoords,
+  });
 }
 
 function buildDrag(dispatcher: Dispatcher): ToolHandler<ComputerUseDragParams, ComputerUseDragResult> {
-  return {
-    spec: {
-      name: "computer_use_drag",
-      description:
-        BACKGROUND_NOTE +
-        "Drag from one window-local pixel to another within `(pid, windowId)`. " +
-        "12-step linear interpolation; both endpoints must be inside the target window's bounds.",
-      parameters: {
-        type: "object",
-        properties: {
-          pid: { type: "number" },
-          windowId: { type: "number" },
-          from: {
-            type: "object",
-            properties: { x: { type: "number" }, y: { type: "number" } },
-            required: ["x", "y"],
-          },
-          to: {
-            type: "object",
-            properties: { x: { type: "number" }, y: { type: "number" } },
-            required: ["x", "y"],
-          },
+  return buildRpcJsonTool(dispatcher, {
+    name: "computer_use_drag",
+    description:
+      "Drag from one window-local pixel to another within `(pid, windowId)`. " +
+      "12-step linear interpolation; both endpoints must be inside the target window's bounds.",
+    parameters: {
+      type: "object",
+      properties: {
+        pid: { type: "number" },
+        windowId: { type: "number" },
+        from: {
+          type: "object",
+          properties: { x: { type: "number" }, y: { type: "number" } },
+          required: ["x", "y"],
         },
-        required: ["pid", "windowId", "from", "to"],
+        to: {
+          type: "object",
+          properties: { x: { type: "number" }, y: { type: "number" } },
+          required: ["x", "y"],
+        },
       },
+      required: ["pid", "windowId", "from", "to"],
     },
-    execute: async (args, ctx) => {
-      const result = await callCU<ComputerUseDragResult>(
-        dispatcher,
-        RPCMethod.computerUseDrag,
-        args,
-        ctx,
-      );
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        details: result,
-        isError: false,
-      };
-    },
-  };
+    method: RPCMethod.computerUseDrag,
+  });
 }
 
 function buildTypeText(
   dispatcher: Dispatcher,
 ): ToolHandler<ComputerUseTypeTextParams, ComputerUseTypeTextResult> {
-  return {
-    spec: {
-      name: "computer_use_type_text",
-      description:
-        BACKGROUND_NOTE +
-        "Type Unicode text into the focused field of `(pid, windowId)` using " +
-        "`CGEventKeyboardSetUnicodeString` — accents, symbols, and emoji all go through. " +
-        "30ms inter-character delay (IME / autocomplete friendly). The caller is " +
-        "responsible for ensuring an input field has focus first (e.g. via a click).",
-      parameters: {
-        type: "object",
-        properties: {
-          pid: { type: "number" },
-          windowId: { type: "number" },
-          text: { type: "string" },
-        },
-        required: ["pid", "windowId", "text"],
+  return buildRpcJsonTool(dispatcher, {
+    name: "computer_use_type_text",
+    description:
+      "Type Unicode text into the focused field of `(pid, windowId)` using " +
+      "`CGEventKeyboardSetUnicodeString` — accents, symbols, and emoji all go through. " +
+      "30ms inter-character delay (IME / autocomplete friendly). The caller is " +
+      "responsible for ensuring an input field has focus first (e.g. via a click).",
+    parameters: {
+      type: "object",
+      properties: {
+        pid: { type: "number" },
+        windowId: { type: "number" },
+        text: { type: "string" },
       },
+      required: ["pid", "windowId", "text"],
     },
-    execute: async (args, ctx) => {
+    method: RPCMethod.computerUseTypeText,
+    beforeCall: (args) => {
       if (typeof args.text !== "string") {
         throw new ToolUserError("computer_use_type_text: text must be a string.");
       }
-      const result = await callCU<ComputerUseTypeTextResult>(
-        dispatcher,
-        RPCMethod.computerUseTypeText,
-        args,
-        ctx,
-      );
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        details: result,
-        isError: false,
-      };
     },
-  };
+  });
 }
 
 function buildPressKey(
   dispatcher: Dispatcher,
 ): ToolHandler<ComputerUsePressKeyParams, ComputerUsePressKeyResult> {
-  return {
-    spec: {
-      name: "computer_use_press_key",
-      description:
-        BACKGROUND_NOTE +
-        "Press a single virtual key in `(pid, windowId)`, optionally with modifiers. " +
-        "Named keys: return/enter, tab, space, delete/backspace, escape, left/right/up/down, " +
-        "home/end, pageup/pagedown, f1..f12. Single letter / digit names also accepted. " +
-        "Modifiers: cmd/command, shift, option/alt, ctrl/control, fn.",
-      parameters: {
-        type: "object",
-        properties: {
-          pid: { type: "number" },
-          windowId: { type: "number" },
-          key: { type: "string" },
-          modifiers: { type: "array", items: { type: "string" } },
-        },
-        required: ["pid", "windowId", "key"],
+  return buildRpcJsonTool(dispatcher, {
+    name: "computer_use_press_key",
+    description:
+      "Press a single virtual key in `(pid, windowId)`, optionally with modifiers. " +
+      "Named keys: return/enter, tab, space, delete/backspace, escape, left/right/up/down, " +
+      "home/end, pageup/pagedown, f1..f12. Single letter / digit names also accepted. " +
+      "Modifiers: cmd/command, shift, option/alt, ctrl/control, fn.",
+    parameters: {
+      type: "object",
+      properties: {
+        pid: { type: "number" },
+        windowId: { type: "number" },
+        key: { type: "string" },
+        modifiers: { type: "array", items: { type: "string" } },
       },
+      required: ["pid", "windowId", "key"],
     },
-    execute: async (args, ctx) => {
-      const result = await callCU<ComputerUsePressKeyResult>(
-        dispatcher,
-        RPCMethod.computerUsePressKey,
-        args,
-        ctx,
-      );
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        details: result,
-        isError: false,
-      };
-    },
-  };
+    method: RPCMethod.computerUsePressKey,
+  });
 }
 
 function buildScroll(dispatcher: Dispatcher): ToolHandler<ComputerUseScrollParams, ComputerUseScrollResult> {
-  return {
-    spec: {
-      name: "computer_use_scroll",
-      description:
-        BACKGROUND_NOTE +
-        "Pixel-quantized wheel scroll at `(x, y)` in `(pid, windowId)`. `dy > 0` scrolls " +
-        "content up; `dx > 0` scrolls content right (CGEvent convention).",
-      parameters: {
-        type: "object",
-        properties: {
-          pid: { type: "number" },
-          windowId: { type: "number" },
-          x: { type: "number" },
-          y: { type: "number" },
-          dx: { type: "number" },
-          dy: { type: "number" },
-        },
-        required: ["pid", "windowId", "x", "y", "dx", "dy"],
+  return buildRpcJsonTool(dispatcher, {
+    name: "computer_use_scroll",
+    description:
+      "Pixel-quantized wheel scroll at `(x, y)` in `(pid, windowId)`. `dy > 0` scrolls " +
+      "content up; `dx > 0` scrolls content right (CGEvent convention).",
+    parameters: {
+      type: "object",
+      properties: {
+        pid: { type: "number" },
+        windowId: { type: "number" },
+        x: { type: "number" },
+        y: { type: "number" },
+        dx: { type: "number" },
+        dy: { type: "number" },
       },
+      required: ["pid", "windowId", "x", "y", "dx", "dy"],
     },
-    execute: async (args, ctx) => {
-      const result = await callCU<ComputerUseScrollResult>(
-        dispatcher,
-        RPCMethod.computerUseScroll,
-        args,
-        ctx,
-      );
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        details: result,
-        isError: false,
-      };
-    },
-  };
+    method: RPCMethod.computerUseScroll,
+  });
 }
 
 function buildDoctor(
   dispatcher: Dispatcher,
 ): ToolHandler<Record<string, never>, ComputerUseDoctorResult> {
-  return {
-    spec: {
-      name: "computer_use_doctor",
-      description:
-        BACKGROUND_NOTE +
-        "Diagnose Computer Use prerequisites: Accessibility / Screen Recording grants and " +
-        "the resolved status of each SkyLight private SPI the Kit depends on. Call this " +
-        "before issuing any operation when uncertain about permissions or SPI availability.",
-      parameters: { type: "object", properties: {}, required: [] },
-    },
-    execute: async (_args, ctx) => {
-      const result = await callCU<ComputerUseDoctorResult>(
-        dispatcher,
-        RPCMethod.computerUseDoctor,
-        {},
-        ctx,
-      );
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        details: result,
-        isError: false,
-      };
-    },
-  };
+  return buildRpcJsonTool(dispatcher, {
+    name: "computer_use_doctor",
+    description:
+      "Diagnose Computer Use prerequisites: Accessibility / Screen Recording grants and " +
+      "the resolved status of each SkyLight private SPI the Kit depends on. Call this " +
+      "before issuing any operation when uncertain about permissions or SPI availability.",
+    parameters: { type: "object", properties: {}, required: [] },
+    method: RPCMethod.computerUseDoctor,
+    params: () => ({}),
+  });
 }
