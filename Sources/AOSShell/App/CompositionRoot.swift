@@ -95,8 +95,7 @@ public final class CompositionRoot {
         let cuService = ComputerUseService()
         // Visualize agent operations: software cursor overlay rides on every
         // background-pid click / drag / scroll via the Kit's MouseInput
-        // observer hook. Frontmost HID-tap clicks (real cursor moves) are
-        // skipped automatically. Disable at runtime with `AOS_VISUAL_CURSOR=0`.
+        // observer hook. Disable at runtime with `AOS_VISUAL_CURSOR=0`.
         AOSComputerUseKit.installVisualCursor()
         let cuHandlers = ComputerUseHandlers(
             service: cuService, permissions: permissionsService

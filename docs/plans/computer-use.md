@@ -10,15 +10,15 @@
 - `FocusWithoutRaise.activateWithoutRaise` 完整 yabai 配方
 - `FocusGuard` 三层完整实现
 - `_AXUIElementGetWindow` 链接，`WindowEnumerator` + `SpaceDetector`
-- Swift Testing 覆盖：所有 SPI 解析、248 字节事件记录构造、focus state 还原、negative cache、frontmost 检测
-- grep 校验：所有非-frontmost 路径无 `CGEventPost(tap: .cghidEventTap)`
+- Swift Testing 覆盖：所有 SPI 解析、248 字节事件记录构造、focus state 还原、negative cache、鼠标投递路由
+- grep 校验：Computer Use 鼠标投递层无 `CGEventPost(tap: .cghidEventTap)` / `.cghidEventTap` raw HID 路径
 
 ### Stage 2：AX 快照 + 操作链路
 
 - `AccessibilitySnapshot` 含 Chromium 激活（AXObserver + main runloop + 500ms pump）
 - `StateCache` 按 `(pid, windowId)` 键 + TTL 30s
 - `AXInput` 含 hit-test 5×5 grid 自校准
-- `MouseInput` 后台走 focus-without-raise + primer 配方，frontmost 走 HID tap
+- `MouseInput` 坐标投放走 virtual cursor：普通左键单 / 双击用 focus-without-raise + primer 配方，其余鼠标事件走 NSEvent-bridged 双路径
 - `KeyboardInput` 走 SkyLight auth-signed → CGEvent.postToPid 降级
 - `WindowCapture` 三档 capture mode
 - `Permissions` + `doctor` 结构化状态

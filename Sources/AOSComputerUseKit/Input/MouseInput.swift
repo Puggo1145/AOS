@@ -5,20 +5,16 @@ import Foundation
 
 // MARK: - MouseInput
 //
-// Per `docs/designs/computer-use.md` §"事件投递路径". Three regimes:
+// Per `docs/designs/computer-use.md` §"事件投递路径". Two regimes:
 //
-//   1. **Frontmost target**: HID tap (`CGEventPost(tap: .cghidEventTap)`)
-//      with a leading `mouseMoved`. Required for OpenGL / GHOST viewports
-//      (Blender, Unity, games) that filter every per-pid path. Real cursor
-//      visibly moves — acceptable because the user is already looking at
-//      the target.
-//
-//   2. **Background, plain left single/double click**: focus-without-raise
+//   1. **Virtual cursor, plain left single/double click**:
+//      focus-without-raise
 //      + off-screen primer recipe. `(-1, 1441)` primer pair satisfies
 //      Chromium's user-activation gate without hitting any DOM, then the
 //      target down/up pair does the real work.
 //
-//   3. **Background, modified / triple+ / right / middle / drag**: standard
+//   2. **Virtual cursor, modified / triple+ / right / middle / drag**:
+//      standard
 //      NSEvent-bridged double-post (SLEventPostToPid + CGEvent.postToPid).
 //      Skips the primer prologue. The two paths can both deliver — net
 //      effect is two arrivals at the target, no observable side-effect
@@ -47,13 +43,16 @@ public enum MouseInput {
         case middle
     }
 
+    enum ClickRoute: Equatable {
+        case authSignedPost
+        case dualPost
+    }
+
     /// Optional sink for visualization / telemetry. Called from arbitrary
     /// threads on the synthetic-event paths (background dual-post and
-    /// auth-signed primer). Frontmost HID-tap clicks intentionally skip
-    /// this hook because they already move the real system cursor — adding
-    /// an overlay there would double-render. Set once at process boot
-    /// (typically from `AOSComputerUseKit.installVisualCursor()`); reading
-    /// it on the hot path is a single property load.
+    /// auth-signed primer). Set once at process boot (typically from
+    /// `AOSComputerUseKit.installVisualCursor()`); reading it on the hot
+    /// path is a single property load.
     nonisolated(unsafe) public static var observer: MouseInputObserver?
 
     /// Synthesize click(s) at `point` (screen points) and deliver to `pid`.
@@ -69,30 +68,29 @@ public enum MouseInput {
         modifiers: [String] = [],
         windowFrame: WindowBounds? = nil
     ) throws {
-        let targetIsFrontmost = NSRunningApplication(processIdentifier: pid)?.isActive ?? false
-        if targetIsFrontmost {
-            // Real cursor moves with the HID tap — visualization observer
-            // is intentionally NOT invoked here (would double-cursor).
-            try clickFrontmostViaHIDTap(
-                at: point, button: button, count: count, modifiers: modifiers)
-            return
-        }
-
         let observer = Self.observer
         observer?.willClick(at: point, button: button, count: count, windowId: windowId)
         defer { observer?.didClick(at: point, button: button, count: count, windowId: windowId) }
 
-        if button == .left, count == 1 || count == 2, modifiers.isEmpty {
+        switch routeForClick(button: button, count: count, modifiers: modifiers) {
+        case .authSignedPost:
             try clickViaAuthSignedPost(
                 at: point, toPid: pid, windowId: windowId, count: count,
                 windowFrame: windowFrame)
-            return
+        case .dualPost:
+            try clickViaDualPost(
+                at: point, toPid: pid, windowId: windowId,
+                button: button, count: count, modifiers: modifiers
+            )
         }
+    }
 
-        try clickViaDualPost(
-            at: point, toPid: pid, windowId: windowId,
-            button: button, count: count, modifiers: modifiers
-        )
+    static func _routeForClickForTesting(
+        button: Button,
+        count: Int = 1,
+        modifiers: [String] = []
+    ) -> ClickRoute {
+        routeForClick(button: button, count: count, modifiers: modifiers)
     }
 
     /// Drag — `mouseDown` at `from`, `mouseDragged` interpolation, `mouseUp`
@@ -367,73 +365,17 @@ public enum MouseInput {
         }
     }
 
-    // MARK: - Recipe: HID tap (frontmost target, viewport-friendly)
+    // MARK: - Helpers
 
-    private static func clickFrontmostViaHIDTap(
-        at point: CGPoint,
+    private static func routeForClick(
         button: Button,
         count: Int,
         modifiers: [String]
-    ) throws {
-        let clamped = max(1, min(3, count))
-        let (downType, upType) = cgEventTypes(for: button)
-        let mouseButton: CGMouseButton = {
-            switch button {
-            case .left: return .left
-            case .right: return .right
-            case .middle: return .center
-            }
-        }()
-        let modifierFlags = cgEventFlags(for: modifiers)
-
-        // hidSystemState mimics hardware origin; some viewports
-        // (Blender's GHOST) check this.
-        let src = CGEventSource(stateID: .hidSystemState)
-
-        guard
-            let move = CGEvent(
-                mouseEventSource: src,
-                mouseType: .mouseMoved,
-                mouseCursorPosition: point,
-                mouseButton: mouseButton
-            )
-        else { throw MouseInputError.eventCreationFailed("frontmost hid-tap mouseMoved") }
-        move.flags = modifierFlags
-        move.post(tap: .cghidEventTap)
-        usleep(30_000)  // give the OS a frame to propagate cursor position
-
-        for clickIndex in 1...clamped {
-            guard
-                let down = CGEvent(
-                    mouseEventSource: src, mouseType: downType,
-                    mouseCursorPosition: point, mouseButton: mouseButton
-                ),
-                let up = CGEvent(
-                    mouseEventSource: src, mouseType: upType,
-                    mouseCursorPosition: point, mouseButton: mouseButton
-                )
-            else { throw MouseInputError.eventCreationFailed("frontmost hid-tap click") }
-            down.flags = modifierFlags
-            up.flags = modifierFlags
-            down.setIntegerValueField(.mouseEventClickState, value: Int64(clickIndex))
-            up.setIntegerValueField(.mouseEventClickState, value: Int64(clickIndex))
-            down.post(tap: .cghidEventTap)
-            usleep(20_000)
-            up.post(tap: .cghidEventTap)
-            if clickIndex < clamped {
-                usleep(80_000)
-            }
+    ) -> ClickRoute {
+        if button == .left, count == 1 || count == 2, modifiers.isEmpty {
+            return .authSignedPost
         }
-    }
-
-    // MARK: - Helpers
-
-    private static func cgEventTypes(for button: Button) -> (down: CGEventType, up: CGEventType) {
-        switch button {
-        case .left: return (.leftMouseDown, .leftMouseUp)
-        case .right: return (.rightMouseDown, .rightMouseUp)
-        case .middle: return (.otherMouseDown, .otherMouseUp)
-        }
+        return .dualPost
     }
 
     private static func nsEventTypes(for button: Button) -> (down: NSEvent.EventType, up: NSEvent.EventType) {
@@ -442,21 +384,6 @@ public enum MouseInput {
         case .right: return (.rightMouseDown, .rightMouseUp)
         case .middle: return (.otherMouseDown, .otherMouseUp)
         }
-    }
-
-    private static func cgEventFlags(for modifiers: [String]) -> CGEventFlags {
-        var flags: CGEventFlags = []
-        for raw in modifiers {
-            switch raw.lowercased() {
-            case "cmd", "command": flags.insert(.maskCommand)
-            case "shift": flags.insert(.maskShift)
-            case "option", "alt", "opt": flags.insert(.maskAlternate)
-            case "ctrl", "control": flags.insert(.maskControl)
-            case "fn", "function": flags.insert(.maskSecondaryFn)
-            default: break
-            }
-        }
-        return flags
     }
 
     private static func modifierMask(for modifiers: [String]) -> NSEvent.ModifierFlags {

@@ -6,15 +6,13 @@ import Foundation
 //
 // Hook surface that `MouseInput` calls around every synthetic mouse event.
 // Exists so visualization (and future telemetry / mirroring) can ride on the
-// existing event path without `MouseInput` knowing anything about the
-// overlay. Observers MUST be cheap and non-blocking — `MouseInput` runs on
-// hot dispatch paths and any observer cost shows up as click latency.
+// existing virtual-cursor event path without `MouseInput` knowing anything
+// about the overlay. Observers MUST be cheap and non-blocking —
+// `MouseInput` runs on hot dispatch paths and any observer cost shows up
+// as click latency.
 //
 // All callbacks may fire from arbitrary threads. Implementations are
-// responsible for hopping to the main actor when they touch UI. Frontmost
-// HID-tap clicks (which move the real system cursor) deliberately do NOT
-// invoke the observer — the OS already shows the cursor and a software
-// overlay would double-render. See `MouseInput.click` for the dispatch.
+// responsible for hopping to the main actor when they touch UI.
 
 public protocol MouseInputObserver: AnyObject, Sendable {
     func willClick(

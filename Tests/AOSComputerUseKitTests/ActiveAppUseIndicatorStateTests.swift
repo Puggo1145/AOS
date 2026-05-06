@@ -170,18 +170,15 @@ struct ActiveAppUseIndicatorStateTests {
         #expect(afterResetOrder)
     }
 
-    @Test("overlay uses a stable elevated window level")
-    func overlayUsesStableElevatedWindowLevel() throws {
-        #expect(ActiveAppUseIndicatorWindowLevel.overlay.rawValue > NSWindow.Level.statusBar.rawValue)
-        #expect(ActiveAppUseIndicatorWindowLevel.overlay.rawValue < NSWindow.Level.statusBar.rawValue + 8)
-
+    @Test("overlay uses the target window layer instead of an elevated global layer")
+    func overlayUsesTargetWindowLayer() throws {
         let source = try String(
             contentsOf: Self.sourceURL("Sources/AOSComputerUseKit/VisualCursor/ActiveAppUseIndicatorOverlay.swift"),
             encoding: .utf8
         )
 
-        #expect(source.contains("panel.level = ActiveAppUseIndicatorWindowLevel.overlay"))
-        #expect(!source.contains("panel.level = NSWindow.Level(rawValue: info.layer)"))
+        #expect(source.contains("panel.level = NSWindow.Level(rawValue: info.layer)"))
+        #expect(!source.contains("panel.level = ActiveAppUseIndicatorWindowLevel.overlay"))
     }
 
     @Test("computer use service operations own the active app indicator")

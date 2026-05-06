@@ -97,48 +97,51 @@ struct SyntheticAppFocusEnforcerTests {
     }
 }
 
-// MARK: - Frontmost target detection
+// MARK: - Mouse click route selection
 //
-// `MouseInput.click` shells out to the HID-tap path when the target is
-// frontmost. Test that the helper used to make that decision agrees with
-// `NSWorkspace.frontmostApplication.processIdentifier`.
+// Coordinate-mode clicking is the agent's virtual mouse path. AX can use
+// semantic actions when the tree is sufficient; every coordinate fallback
+// must drive the software cursor and must not infer "real HID is OK" from
+// the target process currently being active.
 
-import AppKit
-
-@Suite("Frontmost target detection")
-struct FrontmostDetectionTests {
-    @Test("Test process pid matches NSWorkspace.frontmost when active in CI")
-    func testProcessAgreement() {
-        // The test process won't always be frontmost (especially in CI),
-        // but `NSRunningApplication(processIdentifier:).isActive` should
-        // never crash and should agree with NSWorkspace's frontmost
-        // pointer when nonzero.
-        let pid = getpid()
-        let app = NSRunningApplication(processIdentifier: pid)
-        if let app, let frontmost = NSWorkspace.shared.frontmostApplication {
-            // If the test process IS frontmost, isActive should be true.
-            if frontmost.processIdentifier == pid {
-                #expect(app.isActive)
-            }
-        }
+@Suite("Mouse click route selection")
+struct MouseClickRouteSelectionTests {
+    @Test("Default coordinate click route is virtual cursor primer path")
+    func defaultClickIsVirtualCursorPrimerPath() {
+        #expect(
+            MouseInput._routeForClickForTesting(button: .left, count: 1, modifiers: [])
+                == .authSignedPost
+        )
     }
+
+    @Test("Modified and non-left coordinate clicks stay on virtual cursor dual-post path")
+    func modifiedAndNonLeftClicksStayVirtual() {
+        #expect(
+            MouseInput._routeForClickForTesting(button: .left, count: 1, modifiers: ["cmd"])
+                == .dualPost
+        )
+        #expect(
+            MouseInput._routeForClickForTesting(button: .right, count: 1, modifiers: [])
+                == .dualPost
+        )
+        #expect(
+            MouseInput._routeForClickForTesting(button: .left, count: 3, modifiers: [])
+                == .dualPost
+        )
+    }
+
 }
 
-// MARK: - HID tap regression guard
+// MARK: - HID regression guard
 //
-// Per `docs/designs/computer-use.md` §"事件投递路径": the HID tap path is
-// reserved for FRONTMOST targets only. Any other use would warp the user's
-// real cursor. This test grep-walks the kit source and pins the only
-// usages to `MouseInput.clickFrontmostViaHIDTap` (which is gated on
-// `NSRunningApplication.isActive`).
+// Coordinate-mode computer use is the agent's virtual mouse. Raw HID posts
+// are global hardware events and cannot target a background process, so the
+// mouse delivery layer must not contain a HID path at all.
 
-@Suite("HID tap usage scope")
-struct HIDTapScopeTests {
-    @Test("Only MouseInput.clickFrontmostViaHIDTap may post to .cghidEventTap")
-    func onlyFrontmostPathUsesHIDTap() throws {
-        // Walk every Swift file under Sources/AOSComputerUseKit and count
-        // `.cghidEventTap` references. Only `MouseInput.swift`'s
-        // `clickFrontmostViaHIDTap` recipe should contain the symbol.
+@Suite("HID usage scope")
+struct HIDScopeTests {
+    @Test("AOSComputerUseKit does not post raw HID mouse events")
+    func computerUseKitDoesNotPostRawHIDMouseEvents() throws {
         let kitDir = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent() // AOSComputerUseKitTests/
             .deletingLastPathComponent() // Tests/
@@ -153,12 +156,19 @@ struct HIDTapScopeTests {
         for case let url as URL in enumerator where url.pathExtension == "swift" {
             let body = try String(contentsOf: url, encoding: .utf8)
             guard body.contains(".cghidEventTap") else { continue }
-            // The only legal home for this symbol is MouseInput.swift's
-            // frontmost-only path.
-            if url.lastPathComponent != "MouseInput.swift" {
-                offendingFiles.append(url.path)
-            }
+            offendingFiles.append(url.path)
         }
-        #expect(offendingFiles.isEmpty, "Found .cghidEventTap outside MouseInput.swift: \(offendingFiles)")
+        #expect(offendingFiles.isEmpty, "Found raw HID mouse posts: \(offendingFiles)")
+    }
+
+    @Test("MouseInput.click does not implicitly route through NSRunningApplication.isActive")
+    func clickDoesNotUseActiveApplicationHeuristic() throws {
+        let mouseInput = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // AOSComputerUseKitTests/
+            .deletingLastPathComponent() // Tests/
+            .deletingLastPathComponent() // repo root
+            .appendingPathComponent("Sources/AOSComputerUseKit/Input/MouseInput.swift")
+        let body = try String(contentsOf: mouseInput, encoding: .utf8)
+        #expect(!body.contains("NSRunningApplication(processIdentifier: pid)?.isActive"))
     }
 }

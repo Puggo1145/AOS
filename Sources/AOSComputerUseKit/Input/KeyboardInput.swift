@@ -11,11 +11,6 @@ import Foundation
 // `typeText` uses `CGEventKeyboardSetUnicodeString` with virtualKey=0,
 // 30ms gap between characters so IME / autocomplete pipelines don't lose
 // composition state.
-//
-// Frontmost-target HID tap (CGEvent.post via the system-wide HID stream)
-// is **deliberately** absent for keyboard. Per-pid is universally available
-// for keyboard surfaces; HID tap was needed only for mouse + viewport
-// edge cases.
 
 public enum KeyboardError: Error, CustomStringConvertible, Sendable {
     case unknownKey(String)

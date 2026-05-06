@@ -123,13 +123,6 @@ enum ActiveAppUseIndicatorRefreshPolicy {
     static let breathHalfCycleDuration: TimeInterval = 1
 }
 
-enum ActiveAppUseIndicatorWindowLevel {
-    // The indicator describes active background control. It must remain visible
-    // even when the controlled app is not the frontmost app, but stay below the
-    // notch window (`statusBar + 8`) so the shell chrome remains authoritative.
-    static let overlay = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
-}
-
 struct ActiveAppUseIndicatorOrderingState {
     private var orderedWindowId: CGWindowID?
     private var orderedLayer: Int?
@@ -222,7 +215,7 @@ public enum ActiveAppUseIndicatorOverlay {
             backing: .buffered,
             defer: false
         )
-        panel.level = ActiveAppUseIndicatorWindowLevel.overlay
+        panel.level = .normal
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = false
@@ -314,7 +307,7 @@ public enum ActiveAppUseIndicatorOverlay {
         }
 
         let frame = ActiveAppUseIndicatorCapsuleGeometry.panelFrame(in: windowFrame)
-        panel.level = ActiveAppUseIndicatorWindowLevel.overlay
+        panel.level = NSWindow.Level(rawValue: info.layer)
         if panel.frame != frame {
             panel.setFrame(frame, display: false)
             overlayView.frame = CGRect(origin: .zero, size: frame.size)

@@ -11,7 +11,7 @@
 | 实现语言 | Swift 6.2+ | macOS 原生 API 仅此可用 |
 | 打包形态 | SwiftPM package | 无需 Xcode 工程，与 AOS shell 架构一致 |
 | 屏幕捕获 | ScreenCaptureKit (`SCStream`) | 抓非前台窗口，按 pid + windowId 定位 |
-| 鼠标 / 键盘投递 | SkyLight `SLEventPostToPid`（auth-signed）→ `CGEvent.postToPid` → HID tap（仅 frontmost） | 三层路径覆盖 Chromium、AppKit、OpenGL viewport |
+| 鼠标 / 键盘投递 | SkyLight `SLEventPostToPid`（auth-signed）→ `CGEvent.postToPid` | per-pid 投递覆盖后台 Chromium / AppKit 操作，不移动用户真实光标 |
 | 焦点抑制 | AXEnablementAssertion + SyntheticAppFocusEnforcer + SystemFocusStealPreventer | 三层叠加保证 frontmost app 全程不变 |
 | 元素定位 | Accessibility API (AX) 为主 | 语义化、稳定；无 AX 时才回退坐标 |
 | 状态键 | `(pid, windowId)` | 同 pid 多窗口的 elementIndex 不互相污染 |
@@ -94,8 +94,6 @@ Kit 单一职责：接收参数 → 操作 macOS → 返回结构化结果。不
 每个事件附窗口本地坐标（`CGEventSetWindowLocation` 私有 SPI）和 SkyLight raw-field（f0 / f3 / f7 / f51 / f58 / f91 / f92），通过 `SLEventPostToPid` 不附 auth message 投递（鼠标走 IOHIDPostEvent 路径，附 auth message 会 fork 到 direct-mach 路径绕过 Chromium 订阅的 `cgAnnotatedSessionEventTap`）。
 
 修饰键点击 / 三击 / 拖拽 / 中键 / 右键走标准 NSEvent-bridge 双路径并发投递，跳过 primer。
-
-**鼠标 → frontmost 目标**：`CGEventPost(tap: .cghidEventTap)` 配前置 `mouseMoved`。OpenGL / GHOST viewport（Blender、Unity、游戏引擎）在 event-source 层过滤所有 per-pid 路径，HID tap 是唯一可达的路径。目标已在前台时 HID tap 不构成抢焦点。
 
 **键盘**：始终走 per-pid 路径。`SLEventPostToPid` 附 `SLSEventAuthenticationMessage` 包装（Chromium 在 macOS 14+ 拒收未签名键盘事件），SPI 缺失则降级 `CGEvent.postToPid`。`typeText` 用 `CGEventKeyboardSetUnicodeString` 逐字符投递 Unicode keyDown / keyUp，30ms 间隔（IME / autocomplete 兼容）。
 
@@ -270,7 +268,7 @@ Bun 侧 tool registry 按 LLM provider 格式生成 tool schema，描述中明�
 ## 不做的事
 
 - 不做 Space 迁移（`CGSMoveWindowsToManagedSpace` 等 SPI 在 macOS 14+ 对非 WindowServer 客户端是 silent no-op）
-- 不向非 frontmost 进程使用全局 HID tap（会 warp 用户真实光标）
+- 不使用全局 raw HID 鼠标事件（会 warp 用户真实光标，且不能 address 后台 pid）
 - 不读 TCC.db
 - 不做 element detection / OCR
 - 不做跨平台抽象层
