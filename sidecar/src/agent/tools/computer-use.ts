@@ -59,6 +59,25 @@ const COMPUTER_USE_TIMEOUTS_MS: Record<string, number> = {
   [RPCMethod.computerUseScroll]: 5_000,
 };
 
+const TYPE_TEXT_DELAY_MS_PER_CHARACTER = 30;
+const TYPE_TEXT_TIMEOUT_BUFFER_MS = 1_000;
+const TYPE_TEXT_MIN_TIMEOUT_MS = COMPUTER_USE_TIMEOUTS_MS[RPCMethod.computerUseTypeText];
+
+export function computerUseTimeoutMs(method: string, params: object): number {
+  if (method !== RPCMethod.computerUseTypeText) {
+    return COMPUTER_USE_TIMEOUTS_MS[method];
+  }
+  if (!("text" in params) || typeof params.text !== "string") {
+    throw new Error("computerUse.typeText timeout requires string text param");
+  }
+  const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  const characterCount = Array.from(segmenter.segment(params.text)).length;
+  return Math.max(
+    TYPE_TEXT_MIN_TIMEOUT_MS,
+    characterCount * TYPE_TEXT_DELAY_MS_PER_CHARACTER + TYPE_TEXT_TIMEOUT_BUFFER_MS,
+  );
+}
+
 /// Codes the model can act on next round. The `-32100..-32199` segment is
 /// the entire `computerUse.*` recoverable family per `docs/designs/rpc-protocol.md`
 /// "错误模型" (stateStale / operationFailed / windowMismatch / windowOffSpace).
@@ -89,7 +108,7 @@ async function callCU<R>(
   try {
     return await dispatcher.request<R>(method, params, {
       signal: ctx.signal,
-      timeoutMs: COMPUTER_USE_TIMEOUTS_MS[method],
+      timeoutMs: computerUseTimeoutMs(method, params),
     });
   } catch (err) {
     if (err instanceof RPCMethodError && isRecoverableComputerUseError(err.code)) {

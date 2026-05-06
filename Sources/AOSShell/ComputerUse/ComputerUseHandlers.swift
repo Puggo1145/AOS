@@ -69,17 +69,12 @@ public final class ComputerUseHandlers {
         ) { [service] params in
             do {
                 let mode = try Self.parseCaptureMode(params.captureMode)
-                let bundle = try await Self.withActiveAppUseIndicator(
+                let bundle = try await service.getAppState(
                     pid: pid_t(params.pid),
-                    windowId: CGWindowID(params.windowId)
-                ) {
-                    try await service.getAppState(
-                        pid: pid_t(params.pid),
-                        windowId: CGWindowID(params.windowId),
-                        captureMode: mode,
-                        maxImageDimension: params.maxImageDimension ?? 0
-                    )
-                }
+                    windowId: CGWindowID(params.windowId),
+                    captureMode: mode,
+                    maxImageDimension: params.maxImageDimension ?? 0
+                )
                 return ComputerUseGetAppStateResult(
                     stateId: bundle.stateId?.raw,
                     bundleId: bundle.bundleId,
@@ -104,18 +99,13 @@ public final class ComputerUseHandlers {
             resultType: ComputerUseClickResult.self
         ) { [service] params in
             do {
-                let result = try await Self.withActiveAppUseIndicator(
+                let result = try await service.clickByElement(
                     pid: pid_t(params.pid),
-                    windowId: CGWindowID(params.windowId)
-                ) {
-                    try await service.clickByElement(
-                        pid: pid_t(params.pid),
-                        windowId: CGWindowID(params.windowId),
-                        stateId: StateID(params.stateId),
-                        elementIndex: params.elementIndex,
-                        action: params.action ?? "AXPress"
-                    )
-                }
+                    windowId: CGWindowID(params.windowId),
+                    stateId: StateID(params.stateId),
+                    elementIndex: params.elementIndex,
+                    action: params.action ?? "AXPress"
+                )
                 return ComputerUseClickResult(success: result.success, method: result.method)
             } catch let err as ComputerUseError {
                 throw RPCErrorThrowable(Self.mapError(err))
@@ -131,18 +121,13 @@ public final class ComputerUseHandlers {
             resultType: ComputerUseClickResult.self
         ) { [service] params in
             do {
-                let result = try await Self.withActiveAppUseIndicator(
+                let result = try await service.clickByCoords(
                     pid: pid_t(params.pid),
-                    windowId: CGWindowID(params.windowId)
-                ) {
-                    try await service.clickByCoords(
-                        pid: pid_t(params.pid),
-                        windowId: CGWindowID(params.windowId),
-                        x: params.x, y: params.y,
-                        count: params.count ?? 1,
-                        modifiers: params.modifiers ?? []
-                    )
-                }
+                    windowId: CGWindowID(params.windowId),
+                    x: params.x, y: params.y,
+                    count: params.count ?? 1,
+                    modifiers: params.modifiers ?? []
+                )
                 return ComputerUseClickResult(success: result.success, method: result.method)
             } catch let err as ComputerUseError {
                 throw RPCErrorThrowable(Self.mapError(err))
@@ -155,17 +140,12 @@ public final class ComputerUseHandlers {
             resultType: ComputerUseDragResult.self
         ) { [service] params in
             do {
-                let success = try await Self.withActiveAppUseIndicator(
+                let success = try await service.drag(
                     pid: pid_t(params.pid),
-                    windowId: CGWindowID(params.windowId)
-                ) {
-                    try await service.drag(
-                        pid: pid_t(params.pid),
-                        windowId: CGWindowID(params.windowId),
-                        from: CGPoint(x: params.from.x, y: params.from.y),
-                        to: CGPoint(x: params.to.x, y: params.to.y)
-                    )
-                }
+                    windowId: CGWindowID(params.windowId),
+                    from: CGPoint(x: params.from.x, y: params.from.y),
+                    to: CGPoint(x: params.to.x, y: params.to.y)
+                )
                 return ComputerUseDragResult(success: success)
             } catch let err as ComputerUseError {
                 throw RPCErrorThrowable(Self.mapError(err))
@@ -178,16 +158,11 @@ public final class ComputerUseHandlers {
             resultType: ComputerUseTypeTextResult.self
         ) { [service] params in
             do {
-                let success = try await Self.withActiveAppUseIndicator(
+                let success = try await service.typeText(
                     pid: pid_t(params.pid),
-                    windowId: CGWindowID(params.windowId)
-                ) {
-                    try await service.typeText(
-                        pid: pid_t(params.pid),
-                        windowId: CGWindowID(params.windowId),
-                        text: params.text
-                    )
-                }
+                    windowId: CGWindowID(params.windowId),
+                    text: params.text
+                )
                 return ComputerUseTypeTextResult(success: success)
             } catch let err as ComputerUseError {
                 throw RPCErrorThrowable(Self.mapError(err))
@@ -200,17 +175,12 @@ public final class ComputerUseHandlers {
             resultType: ComputerUsePressKeyResult.self
         ) { [service] params in
             do {
-                let success = try await Self.withActiveAppUseIndicator(
+                let success = try await service.pressKey(
                     pid: pid_t(params.pid),
-                    windowId: CGWindowID(params.windowId)
-                ) {
-                    try await service.pressKey(
-                        pid: pid_t(params.pid),
-                        windowId: CGWindowID(params.windowId),
-                        key: params.key,
-                        modifiers: params.modifiers ?? []
-                    )
-                }
+                    windowId: CGWindowID(params.windowId),
+                    key: params.key,
+                    modifiers: params.modifiers ?? []
+                )
                 return ComputerUsePressKeyResult(success: success)
             } catch let err as ComputerUseError {
                 throw RPCErrorThrowable(Self.mapError(err))
@@ -223,17 +193,12 @@ public final class ComputerUseHandlers {
             resultType: ComputerUseScrollResult.self
         ) { [service] params in
             do {
-                let success = try await Self.withActiveAppUseIndicator(
+                let success = try await service.scroll(
                     pid: pid_t(params.pid),
-                    windowId: CGWindowID(params.windowId)
-                ) {
-                    try await service.scroll(
-                        pid: pid_t(params.pid),
-                        windowId: CGWindowID(params.windowId),
-                        x: params.x, y: params.y,
-                        dx: params.dx, dy: params.dy
-                    )
-                }
+                    windowId: CGWindowID(params.windowId),
+                    x: params.x, y: params.y,
+                    dx: params.dx, dy: params.dy
+                )
                 return ComputerUseScrollResult(success: success)
             } catch let err as ComputerUseError {
                 throw RPCErrorThrowable(Self.mapError(err))
@@ -271,24 +236,6 @@ public final class ComputerUseHandlers {
     // the request handler closures (which run on the RPCClient's
     // detached Task, off the MainActor). The class is MainActor only
     // because it needs to read `permissionsService.state` synchronously.
-
-    nonisolated private static func withActiveAppUseIndicator<Result>(
-        pid: pid_t,
-        windowId: CGWindowID,
-        operation: () async throws -> Result
-    ) async throws -> Result {
-        let token = await ActiveAppUseIndicatorOverlay.activate(
-            ActiveAppUseTarget(pid: pid, windowId: windowId)
-        )
-        do {
-            let result = try await operation()
-            await ActiveAppUseIndicatorOverlay.extend(token)
-            return result
-        } catch {
-            await ActiveAppUseIndicatorOverlay.extend(token)
-            throw error
-        }
-    }
 
     nonisolated private static func projectAppInfo(_ info: AppInfo) -> ComputerUseAppInfo {
         ComputerUseAppInfo(

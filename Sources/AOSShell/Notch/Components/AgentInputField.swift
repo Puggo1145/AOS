@@ -86,14 +86,6 @@ struct ComposerCard: View {
             inputRow
             functionRow
         }
-        .onChange(of: senseStore.context.app?.bundleId) { _, _ in
-            // App switch invalidates the in-flight prompt — both typed
-            // text and chips were assembled with the previous app in
-            // mind. Reset the field so a turn aimed at the new app can't
-            // accidentally inherit the previous app's pastes.
-            inputModel.clear()
-            palette.deactivate()
-        }
         .onChange(of: inputModel.displayText) { _, _ in
             viewModel.refreshCommandPalette()
         }

@@ -184,51 +184,53 @@ public actor ComputerUseService {
         captureMode: CaptureMode = .som,
         maxImageDimension: Int = 0
     ) async throws -> AppStateBundle {
-        try validateOwnership(pid: pid, windowId: windowId)
-        try validateOnSpace(windowId: windowId)
+        try await withActiveAppUseIndicator(pid: pid, windowId: windowId) {
+            try validateOwnership(pid: pid, windowId: windowId)
+            try validateOnSpace(windowId: windowId)
 
-        let app = NSRunningApplication(processIdentifier: pid)
-        let bundleId = app?.bundleIdentifier
-        let appName = app?.localizedName
+            let app = NSRunningApplication(processIdentifier: pid)
+            let bundleId = app?.bundleIdentifier
+            let appName = app?.localizedName
 
-        var stateId: StateID? = nil
-        var markdown: String? = nil
-        var elementCount: Int? = nil
-        if captureMode != .vision {
-            let result = try await snapshot.walk(pid: pid, windowId: windowId)
-            let id = await cache.store(pid: pid, windowId: windowId, elements: result.elements)
-            stateId = id
-            markdown = result.treeMarkdown
-            elementCount = result.elements.count
-        }
+            var stateId: StateID? = nil
+            var markdown: String? = nil
+            var elementCount: Int? = nil
+            if captureMode != .vision {
+                let result = try await snapshot.walk(pid: pid, windowId: windowId)
+                let id = await cache.store(pid: pid, windowId: windowId, elements: result.elements)
+                stateId = id
+                markdown = result.treeMarkdown
+                elementCount = result.elements.count
+            }
 
-        var shot: Screenshot? = nil
-        if captureMode != .ax {
-            shot = try await captureWithPayloadCap(
-                windowId: windowId,
-                initialMaxImageDimension: maxImageDimension
+            var shot: Screenshot? = nil
+            if captureMode != .ax {
+                shot = try await captureWithPayloadCap(
+                    windowId: windowId,
+                    initialMaxImageDimension: maxImageDimension
+                )
+            }
+
+            // Record the screenshot coordinate space so subsequent coord-mode
+            // clicks (which only carry x/y, no stateId) use the same
+            // ScreenCaptureKit frame and pixel dimensions the model saw.
+            if let shot {
+                await cache.recordScreenshot(
+                    pid: pid,
+                    windowId: windowId,
+                    coordinateSpace: shot.coordinateSpace
+                )
+            }
+
+            return AppStateBundle(
+                stateId: stateId,
+                treeMarkdown: markdown,
+                elementCount: elementCount,
+                screenshot: shot,
+                bundleId: bundleId,
+                appName: appName
             )
         }
-
-        // Record the screenshot coordinate space so subsequent coord-mode
-        // clicks (which only carry x/y, no stateId) use the same
-        // ScreenCaptureKit frame and pixel dimensions the model saw.
-        if let shot {
-            await cache.recordScreenshot(
-                pid: pid,
-                windowId: windowId,
-                coordinateSpace: shot.coordinateSpace
-            )
-        }
-
-        return AppStateBundle(
-            stateId: stateId,
-            treeMarkdown: markdown,
-            elementCount: elementCount,
-            screenshot: shot,
-            bundleId: bundleId,
-            appName: appName
-        )
     }
 
     // MARK: - Click (semantic)
@@ -250,79 +252,81 @@ public actor ComputerUseService {
         elementIndex: Int,
         action: String = "AXPress"
     ) async throws -> (success: Bool, method: String) {
-        try validateOwnership(pid: pid, windowId: windowId)
-        try validateOnSpace(windowId: windowId)
+        try await withActiveAppUseIndicator(pid: pid, windowId: windowId) {
+            try validateOwnership(pid: pid, windowId: windowId)
+            try validateOnSpace(windowId: windowId)
 
-        let element: AXUIElement
-        do {
-            element = try await cache.lookup(
-                pid: pid, windowId: windowId, stateId: stateId, elementIndex: elementIndex
-            )
-        } catch let err as StateCacheLookupError {
-            throw mapCacheError(err, requestPid: pid, requestWindowId: windowId)
-        }
-
-        var layerErrors: [(name: String, status: String)] = []
-
-        // Layer 1 — AX action.
-        let advertised = AXInput.advertisedActionNames(of: element)
-        if advertised.contains(action) {
+            let element: AXUIElement
             do {
-                try await focusGuard.withFocusSuppressed(pid: pid, element: element) {
-                    try AXInput.performAction(action, on: element)
-                }
-                return (true, "axAction")
-            } catch let err as AXInputError {
-                layerErrors.append(("axAction", err.description))
-            } catch {
-                layerErrors.append(("axAction", "\(error)"))
+                element = try await cache.lookup(
+                    pid: pid, windowId: windowId, stateId: stateId, elementIndex: elementIndex
+                )
+            } catch let err as StateCacheLookupError {
+                throw mapCacheError(err, requestPid: pid, requestWindowId: windowId)
             }
-        } else {
-            layerErrors.append(("axAction", "action \(action) not advertised"))
-        }
 
-        // Layer 2 — AX attribute (best-effort variants by action name).
-        let attributeFallback: (attribute: String, value: CFTypeRef)? = {
-            switch action {
-            case "AXPress":   return ("AXFocused", kCFBooleanTrue)
-            case "AXConfirm": return ("AXMain", kCFBooleanTrue)
-            case "AXPick":    return ("AXSelected", kCFBooleanTrue)
-            default: return nil
-            }
-        }()
-        if let (attribute, value) = attributeFallback {
-            do {
-                try await focusGuard.withFocusSuppressed(pid: pid, element: element) {
-                    try AXInput.setAttribute(attribute, on: element, value: value)
-                }
-                return (true, "axAttribute")
-            } catch let err as AXInputError {
-                layerErrors.append(("axAttribute", err.description))
-            } catch {
-                layerErrors.append(("axAttribute", "\(error)"))
-            }
-        }
+            var layerErrors: [(name: String, status: String)] = []
 
-        // Layer 3 — coordinate fallback. Resolve the element's screen
-        // center (with hit-test self-calibration), translate to a
-        // screen-point, dispatch via MouseInput.
-        if let center = AXInput.screenCenter(of: element) {
-            do {
-                try await focusGuard.withFocusSuppressed(pid: pid, element: element) {
-                    try MouseInput.click(
-                        at: center, toPid: pid, windowId: windowId,
-                        button: .left, count: 1
-                    )
+            // Layer 1 — AX action.
+            let advertised = AXInput.advertisedActionNames(of: element)
+            if advertised.contains(action) {
+                do {
+                    try await focusGuard.withFocusSuppressed(pid: pid, element: element) {
+                        try AXInput.performAction(action, on: element)
+                    }
+                    return (true, "axAction")
+                } catch let err as AXInputError {
+                    layerErrors.append(("axAction", err.description))
+                } catch {
+                    layerErrors.append(("axAction", "\(error)"))
                 }
-                return (true, "eventPost")
-            } catch {
-                layerErrors.append(("eventPost", "\(error)"))
+            } else {
+                layerErrors.append(("axAction", "action \(action) not advertised"))
             }
-        } else {
-            layerErrors.append(("eventPost", "element has no resolvable screen center"))
-        }
 
-        throw ComputerUseError.operationFailed(layers: layerErrors)
+            // Layer 2 — AX attribute (best-effort variants by action name).
+            let attributeFallback: (attribute: String, value: CFTypeRef)? = {
+                switch action {
+                case "AXPress":   return ("AXFocused", kCFBooleanTrue)
+                case "AXConfirm": return ("AXMain", kCFBooleanTrue)
+                case "AXPick":    return ("AXSelected", kCFBooleanTrue)
+                default: return nil
+                }
+            }()
+            if let (attribute, value) = attributeFallback {
+                do {
+                    try await focusGuard.withFocusSuppressed(pid: pid, element: element) {
+                        try AXInput.setAttribute(attribute, on: element, value: value)
+                    }
+                    return (true, "axAttribute")
+                } catch let err as AXInputError {
+                    layerErrors.append(("axAttribute", err.description))
+                } catch {
+                    layerErrors.append(("axAttribute", "\(error)"))
+                }
+            }
+
+            // Layer 3 — coordinate fallback. Resolve the element's screen
+            // center (with hit-test self-calibration), translate to a
+            // screen-point, dispatch via MouseInput.
+            if let center = AXInput.screenCenter(of: element) {
+                do {
+                    try await focusGuard.withFocusSuppressed(pid: pid, element: element) {
+                        try MouseInput.click(
+                            at: center, toPid: pid, windowId: windowId,
+                            button: .left, count: 1
+                        )
+                    }
+                    return (true, "eventPost")
+                } catch {
+                    layerErrors.append(("eventPost", "\(error)"))
+                }
+            } else {
+                layerErrors.append(("eventPost", "element has no resolvable screen center"))
+            }
+
+            throw ComputerUseError.operationFailed(layers: layerErrors)
+        }
     }
 
     // MARK: - Click (coordinates)
@@ -335,32 +339,34 @@ public actor ComputerUseService {
         count: Int,
         modifiers: [String]
     ) async throws -> (success: Bool, method: String) {
-        let currentWindow = try validateOwnership(pid: pid, windowId: windowId)
-        try validateOnSpace(windowId: windowId)
-        let reference = try await requireReferenceCoordinateSpace(pid: pid, windowId: windowId)
-        try validateImagePoint(
-            CGPoint(x: x, y: y), label: "click point", against: reference.pixelSize
-        )
-        let referenceFrame = try currentReferenceFrame(
-            reference,
-            currentWindowBounds: currentWindow.bounds,
-            pid: pid,
-            windowId: windowId
-        )
-        let screenPoint = try WindowCoordinateSpace.screenPoint(
-            fromImagePixel: CGPoint(x: x, y: y),
-            forPid: pid, windowId: windowId,
-            referenceFrame: referenceFrame,
-            referenceImagePixelSize: reference.pixelSize
-        )
-        try await focusGuard.withFocusSuppressed(pid: pid, element: nil) {
-            try MouseInput.click(
-                at: screenPoint, toPid: pid, windowId: windowId,
-                button: .left, count: count, modifiers: modifiers,
-                windowFrame: referenceFrame
+        try await withActiveAppUseIndicator(pid: pid, windowId: windowId) {
+            let currentWindow = try validateOwnership(pid: pid, windowId: windowId)
+            try validateOnSpace(windowId: windowId)
+            let reference = try await requireReferenceCoordinateSpace(pid: pid, windowId: windowId)
+            try validateImagePoint(
+                CGPoint(x: x, y: y), label: "click point", against: reference.pixelSize
             )
+            let referenceFrame = try currentReferenceFrame(
+                reference,
+                currentWindowBounds: currentWindow.bounds,
+                pid: pid,
+                windowId: windowId
+            )
+            let screenPoint = try WindowCoordinateSpace.screenPoint(
+                fromImagePixel: CGPoint(x: x, y: y),
+                forPid: pid, windowId: windowId,
+                referenceFrame: referenceFrame,
+                referenceImagePixelSize: reference.pixelSize
+            )
+            try await focusGuard.withFocusSuppressed(pid: pid, element: nil) {
+                try MouseInput.click(
+                    at: screenPoint, toPid: pid, windowId: windowId,
+                    button: .left, count: count, modifiers: modifiers,
+                    windowFrame: referenceFrame
+                )
+            }
+            return (true, "eventPost")
         }
-        return (true, "eventPost")
     }
 
     // MARK: - Drag / scroll
@@ -371,33 +377,35 @@ public actor ComputerUseService {
         from: CGPoint,
         to: CGPoint
     ) async throws -> Bool {
-        let currentWindow = try validateOwnership(pid: pid, windowId: windowId)
-        try validateOnSpace(windowId: windowId)
-        let reference = try await requireReferenceCoordinateSpace(pid: pid, windowId: windowId)
-        try validateImagePoint(from, label: "drag.from", against: reference.pixelSize)
-        try validateImagePoint(to, label: "drag.to", against: reference.pixelSize)
-        let referenceFrame = try currentReferenceFrame(
-            reference,
-            currentWindowBounds: currentWindow.bounds,
-            pid: pid,
-            windowId: windowId
-        )
-        let fromScreen = try WindowCoordinateSpace.screenPoint(
-            fromImagePixel: from, forPid: pid, windowId: windowId,
-            referenceFrame: referenceFrame,
-            referenceImagePixelSize: reference.pixelSize
-        )
-        let toScreen = try WindowCoordinateSpace.screenPoint(
-            fromImagePixel: to, forPid: pid, windowId: windowId,
-            referenceFrame: referenceFrame,
-            referenceImagePixelSize: reference.pixelSize
-        )
-        try await focusGuard.withFocusSuppressed(pid: pid, element: nil) {
-            try MouseInput.drag(
-                from: fromScreen, to: toScreen, toPid: pid, windowId: windowId
+        try await withActiveAppUseIndicator(pid: pid, windowId: windowId) {
+            let currentWindow = try validateOwnership(pid: pid, windowId: windowId)
+            try validateOnSpace(windowId: windowId)
+            let reference = try await requireReferenceCoordinateSpace(pid: pid, windowId: windowId)
+            try validateImagePoint(from, label: "drag.from", against: reference.pixelSize)
+            try validateImagePoint(to, label: "drag.to", against: reference.pixelSize)
+            let referenceFrame = try currentReferenceFrame(
+                reference,
+                currentWindowBounds: currentWindow.bounds,
+                pid: pid,
+                windowId: windowId
             )
+            let fromScreen = try WindowCoordinateSpace.screenPoint(
+                fromImagePixel: from, forPid: pid, windowId: windowId,
+                referenceFrame: referenceFrame,
+                referenceImagePixelSize: reference.pixelSize
+            )
+            let toScreen = try WindowCoordinateSpace.screenPoint(
+                fromImagePixel: to, forPid: pid, windowId: windowId,
+                referenceFrame: referenceFrame,
+                referenceImagePixelSize: reference.pixelSize
+            )
+            try await focusGuard.withFocusSuppressed(pid: pid, element: nil) {
+                try MouseInput.drag(
+                    from: fromScreen, to: toScreen, toPid: pid, windowId: windowId
+                )
+            }
+            return true
         }
-        return true
     }
 
     public func scroll(
@@ -408,42 +416,46 @@ public actor ComputerUseService {
         dx: Int32,
         dy: Int32
     ) async throws -> Bool {
-        let currentWindow = try validateOwnership(pid: pid, windowId: windowId)
-        try validateOnSpace(windowId: windowId)
-        let reference = try await requireReferenceCoordinateSpace(pid: pid, windowId: windowId)
-        try validateImagePoint(
-            CGPoint(x: x, y: y), label: "scroll point", against: reference.pixelSize
-        )
-        let referenceFrame = try currentReferenceFrame(
-            reference,
-            currentWindowBounds: currentWindow.bounds,
-            pid: pid,
-            windowId: windowId
-        )
-        let screenPoint = try WindowCoordinateSpace.screenPoint(
-            fromImagePixel: CGPoint(x: x, y: y),
-            forPid: pid, windowId: windowId,
-            referenceFrame: referenceFrame,
-            referenceImagePixelSize: reference.pixelSize
-        )
-        try await focusGuard.withFocusSuppressed(pid: pid, element: nil) {
-            try MouseInput.scroll(
-                at: screenPoint, dx: dx, dy: dy,
-                toPid: pid, windowId: windowId
+        try await withActiveAppUseIndicator(pid: pid, windowId: windowId) {
+            let currentWindow = try validateOwnership(pid: pid, windowId: windowId)
+            try validateOnSpace(windowId: windowId)
+            let reference = try await requireReferenceCoordinateSpace(pid: pid, windowId: windowId)
+            try validateImagePoint(
+                CGPoint(x: x, y: y), label: "scroll point", against: reference.pixelSize
             )
+            let referenceFrame = try currentReferenceFrame(
+                reference,
+                currentWindowBounds: currentWindow.bounds,
+                pid: pid,
+                windowId: windowId
+            )
+            let screenPoint = try WindowCoordinateSpace.screenPoint(
+                fromImagePixel: CGPoint(x: x, y: y),
+                forPid: pid, windowId: windowId,
+                referenceFrame: referenceFrame,
+                referenceImagePixelSize: reference.pixelSize
+            )
+            try await focusGuard.withFocusSuppressed(pid: pid, element: nil) {
+                try MouseInput.scroll(
+                    at: screenPoint, dx: dx, dy: dy,
+                    toPid: pid, windowId: windowId
+                )
+            }
+            return true
         }
-        return true
     }
 
     // MARK: - Keyboard
 
     public func typeText(pid: pid_t, windowId: CGWindowID, text: String) async throws -> Bool {
-        try validateOwnership(pid: pid, windowId: windowId)
-        try validateOnSpace(windowId: windowId)
-        try await focusGuard.withFocusSuppressed(pid: pid, element: nil) {
-            try KeyboardInput.typeText(text, toPid: pid)
+        try await withActiveAppUseIndicator(pid: pid, windowId: windowId) {
+            try validateOwnership(pid: pid, windowId: windowId)
+            try validateOnSpace(windowId: windowId)
+            try await focusGuard.withFocusSuppressed(pid: pid, element: nil) {
+                try KeyboardInput.typeText(text, toPid: pid)
+            }
+            return true
         }
-        return true
     }
 
     public func pressKey(
@@ -452,12 +464,14 @@ public actor ComputerUseService {
         key: String,
         modifiers: [String]
     ) async throws -> Bool {
-        try validateOwnership(pid: pid, windowId: windowId)
-        try validateOnSpace(windowId: windowId)
-        try await focusGuard.withFocusSuppressed(pid: pid, element: nil) {
-            try KeyboardInput.press(key, modifiers: modifiers, toPid: pid)
+        try await withActiveAppUseIndicator(pid: pid, windowId: windowId) {
+            try validateOwnership(pid: pid, windowId: windowId)
+            try validateOnSpace(windowId: windowId)
+            try await focusGuard.withFocusSuppressed(pid: pid, element: nil) {
+                try KeyboardInput.press(key, modifiers: modifiers, toPid: pid)
+            }
+            return true
         }
-        return true
     }
 
     // MARK: - Doctor
@@ -467,6 +481,35 @@ public actor ComputerUseService {
     }
 
     // MARK: - Internals
+
+    private func withActiveAppUseIndicator<Result>(
+        pid: pid_t,
+        windowId: CGWindowID,
+        operation: () async throws -> Result
+    ) async throws -> Result {
+        let token = await ActiveAppUseIndicatorOverlay.activate(
+            ActiveAppUseTarget(pid: pid, windowId: windowId)
+        )
+        let keepAliveTask = Task.detached {
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(2))
+                } catch {
+                    break
+                }
+                await ActiveAppUseIndicatorOverlay.extend(token)
+            }
+        }
+        defer { keepAliveTask.cancel() }
+        do {
+            let result = try await operation()
+            await ActiveAppUseIndicatorOverlay.extend(token)
+            return result
+        } catch {
+            await ActiveAppUseIndicatorOverlay.extend(token)
+            throw error
+        }
+    }
 
     /// Hard contract: `windowId` must belong to `pid`. Cheap CGWindowList
     /// lookup; throws `windowMismatch` so the wire layer maps it onto
