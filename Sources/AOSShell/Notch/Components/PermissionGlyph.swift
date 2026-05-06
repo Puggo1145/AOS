@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import AOSOSSenseKit
 
 // MARK: - PermissionGlyph
@@ -20,15 +21,32 @@ import AOSOSSenseKit
 //     real Settings appearance automatically
 
 struct PermissionGlyph: View {
+    enum AutomationIcon {
+        case gear
+        case finder
+    }
+
     let permission: Permission
     let size: CGFloat
+    var automationIcon: AutomationIcon = .gear
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
-                .fill(permission.badgeColor)
-            permission.glyph(size: size)
-                .foregroundStyle(.white)
+        Group {
+            if permission == .automation && automationIcon == .finder {
+                Image(nsImage: NSWorkspace.shared.icon(
+                    forFile: "/System/Library/CoreServices/Finder.app"
+                ))
+                .resizable()
+                .scaledToFit()
+                .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+            } else {
+                ZStack {
+                    RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
+                        .fill(permission.badgeColor)
+                    permission.glyph(size: size)
+                        .foregroundStyle(.white)
+                }
+            }
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)

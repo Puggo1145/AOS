@@ -430,18 +430,12 @@ struct SettingsPanelView: View {
     //
     // The settings main page surfaces a one-line permissions summary that
     // doubles as the entry point to the dedicated permissions sub-page.
-    // A red dot lights up when any required permission is missing, so the
-    // user has a clear at-a-glance signal even without opening the page.
+    // A red dot lights up when a probeable permission is missing. Automation
+    // has no safe status API here; its row is a direct jump to System
+    // Settings.
 
     private var missingPermissions: [Permission] {
-        Permission.settingsDisplayOrder.filter { permission in
-            switch permission {
-            case .screenRecording, .accessibility:
-                return permissionsService.state.denied.contains(permission)
-            case .automation:
-                return !permissionsService.automationOnboardingAcknowledged
-            }
-        }
+        Permission.settingsDisplayOrder.filter { permissionsService.state.denied.contains($0) }
     }
 
     private var permissionsRow: some View {
@@ -498,9 +492,6 @@ struct SettingsPanelView: View {
                         status: permissionStatus(for: p),
                         onOpenSettings: {
                             permissionsService.openSystemSettings(for: p)
-                            if p == .automation {
-                                permissionsService.acknowledgeAutomationOnboarding()
-                            }
                         }
                     )
                 }
@@ -513,7 +504,7 @@ struct SettingsPanelView: View {
         case .screenRecording, .accessibility:
             return permissionsService.state.denied.contains(permission) ? .disabled : .granted
         case .automation:
-            return permissionsService.automationOnboardingAcknowledged ? .reviewed : .needsReview
+            return .opensSettings
         }
     }
 
@@ -729,8 +720,7 @@ private struct PermissionStatusRow: View {
     enum Status {
         case granted
         case disabled
-        case reviewed
-        case needsReview
+        case opensSettings
     }
 
     let permission: Permission
@@ -760,9 +750,7 @@ private struct PermissionStatusRow: View {
                     .padding(.vertical, 5)
                     .background(
                         Capsule()
-                            .fill(status == .granted || status == .reviewed
-                                  ? Color.white.opacity(0.10)
-                                  : Color.accentColor.opacity(0.85))
+                            .fill(status.buttonFill)
                     )
             }
             .buttonStyle(.plain)
@@ -781,24 +769,34 @@ private extension PermissionStatusRow.Status {
         switch self {
         case .granted: return "Granted"
         case .disabled: return "Disabled"
-        case .reviewed: return "Reviewed"
-        case .needsReview: return "Review required"
+        case .opensSettings: return "System Settings"
         }
     }
 
     var buttonTitle: String {
         switch self {
-        case .granted, .reviewed: return "Manage"
-        case .disabled, .needsReview: return "Open Settings"
+        case .granted: return "Manage"
+        case .disabled, .opensSettings: return "Open Settings"
         }
     }
 
     var tint: Color {
         switch self {
-        case .granted, .reviewed:
+        case .granted:
             return Color.green.opacity(0.85)
-        case .disabled, .needsReview:
+        case .disabled:
             return Color.red.opacity(0.85)
+        case .opensSettings:
+            return Color.white.opacity(0.58)
+        }
+    }
+
+    var buttonFill: Color {
+        switch self {
+        case .granted, .opensSettings:
+            return Color.white.opacity(0.10)
+        case .disabled:
+            return Color.accentColor.opacity(0.85)
         }
     }
 }

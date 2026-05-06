@@ -6,8 +6,8 @@ import AOSOSSenseKit
 // First leg of the onboard flow: gate the user through the runtime
 // permissions OS Sense + Computer Use need before the provider sign-in
 // step. Screen Recording / Accessibility are live probes; Automation has
-// no safe preflight API, so its step is an explicit user acknowledgement
-// that opens the matching Privacy pane.
+// no safe preflight API, so its step runs a Finder AppleScript probe that
+// asks macOS to create the AOS -> Finder Automation consent row.
 //
 // One permission card at a time. Tapping "Grant Access" triggers the
 // system prompt + opens the matching Privacy pane in System Settings
@@ -54,9 +54,6 @@ struct PermissionOnboardPanelView: View {
                     totalSteps: Permission.onboardingDisplayOrder.count,
                     onGrant: {
                         permissionsService.request(current)
-                        if current == .automation {
-                            permissionsService.acknowledgeAutomationOnboarding()
-                        }
                     }
                 )
                 .id(current)
@@ -119,13 +116,13 @@ private struct PermissionCard: View {
     }
 
     private var iconBadge: some View {
-        PermissionGlyph(permission: permission, size: 64)
+        PermissionGlyph(permission: permission, size: 64, automationIcon: .finder)
             .shadow(color: .black.opacity(0.25), radius: 8, y: 3)
     }
 
     private var grantButton: some View {
         Button(action: onGrant) {
-            Text(permission == .automation ? "Open Settings" : "Grant Access")
+            Text("Grant Access")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 14)
@@ -187,7 +184,7 @@ private extension Permission {
         case .screenRecording:
             return "Lets AOS see what's on your screen so the agent stays grounded in your current task."
         case .automation:
-            return "Lets AOS ask Finder and other apps for precise context, such as selected file URLs."
+            return "Lets AOS use Finder AppleScript to read selected file URLs for precise OS Sense context."
         }
     }
 }

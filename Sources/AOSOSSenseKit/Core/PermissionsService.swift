@@ -23,9 +23,9 @@ import ScreenCaptureKit
 //                       TCC fresh on every call; that's why Apple's
 //                       own "Quit & Reopen" prompt exists *for apps
 //                       that don't query the live API*.
-//   - Automation:       Not proactively probed. Live Apple Event callers
-//                       trigger the TCC prompt by performing the read; this
-//                       service can still open the Automation settings pane.
+//   - Automation:       No safe preflight API. Onboarding performs a small
+//                       Finder AppleScript read to trigger the TCC prompt,
+//                       then opens the Automation settings pane.
 //
 // Request APIs (used by the onboard permission panel):
 //   - Accessibility:    `AXIsProcessTrustedWithOptions(prompt: true)`
@@ -119,7 +119,8 @@ public final class PermissionsService {
 
     /// True iff probeable permissions are granted and the user has passed
     /// the explicit Automation onboarding step. Automation TCC has no safe
-    /// preflight API, so this is an acknowledgement latch, not a grant probe.
+    /// preflight API, so this records that the consent probe has been
+    /// presented, not that the grant exists.
     public var onboardingPermissionsComplete: Bool {
         allGranted && automationOnboardingAcknowledged
     }
@@ -149,9 +150,37 @@ public final class PermissionsService {
             _ = CGRequestScreenCaptureAccess()
             screenRecordingProbeIsSafe = true
         case .automation:
-            break
+            triggerAutomationConsentProbe()
+            acknowledgeAutomationOnboarding()
         }
         openSystemSettings(for: permission)
+    }
+
+    /// Sends a tiny Finder Apple Event so macOS creates the Automation TCC
+    /// row and shows the consent prompt for AOS -> Finder. The returned
+    /// selection is intentionally ignored; the adapter that owns Finder
+    /// context performs the real read later.
+    private func triggerAutomationConsentProbe() {
+        // Apple Events can block while Finder or TCC is responding. Keep
+        // the synchronous NSAppleScript call off MainActor so onboarding UI
+        // stays responsive while macOS shows the Automation prompt.
+        Task.detached(priority: .userInitiated) {
+            Self.executeAutomationConsentProbeScript()
+        }
+    }
+
+    private nonisolated static func executeAutomationConsentProbeScript() {
+        guard let script = NSAppleScript(source: Self.automationConsentProbeScript) else {
+            preconditionFailure("invalid Automation consent probe AppleScript")
+        }
+
+        var errorInfo: NSDictionary?
+        _ = script.executeAndReturnError(&errorInfo)
+        if let errorInfo {
+            FileHandle.standardError.write(
+                Data("[permissions] Automation consent probe failed: \(errorInfo)\n".utf8)
+            )
+        }
     }
 
     public func openSystemSettings(for permission: Permission) {
@@ -179,4 +208,10 @@ public final class PermissionsService {
         if !screenRecordingGranted { denied.insert(.screenRecording) }
         return denied
     }
+
+    private nonisolated static let automationConsentProbeScript = """
+    tell application "Finder"
+        get selection
+    end tell
+    """
 }

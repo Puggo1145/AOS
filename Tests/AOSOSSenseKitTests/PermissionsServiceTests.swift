@@ -81,4 +81,28 @@ struct PermissionsServiceTests {
         let restored = PermissionsService(userDefaults: defaults)
         #expect(restored.automationOnboardingAcknowledged)
     }
+
+    @Test("Automation request executes Finder AppleScript probe")
+    func automationRequestExecutesFinderAppleScriptProbe() throws {
+        let source = try String(
+            contentsOfFile: "Sources/AOSOSSenseKit/Core/PermissionsService.swift",
+            encoding: .utf8
+        )
+
+        #expect(source.contains("triggerAutomationConsentProbe"))
+        #expect(source.contains("tell application \"Finder\""))
+        #expect(source.contains("executeAndReturnError"))
+    }
+
+    @Test("Automation consent probe is scheduled off the MainActor")
+    func automationConsentProbeIsScheduledOffMainActor() throws {
+        let source = try String(
+            contentsOfFile: "Sources/AOSOSSenseKit/Core/PermissionsService.swift",
+            encoding: .utf8
+        )
+
+        #expect(source.contains("Task.detached"))
+        #expect(source.contains("executeAutomationConsentProbeScript"))
+        #expect(!source.contains("case .automation:\n            executeAutomationConsentProbeScript()"))
+    }
 }
