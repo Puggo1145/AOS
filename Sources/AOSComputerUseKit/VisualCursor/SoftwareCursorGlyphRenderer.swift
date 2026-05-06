@@ -11,9 +11,9 @@ import Foundation
 // into a panel origin.
 //
 // The renderer ignores the legacy fog parameters carried in
-// `SoftwareCursorGlyphRenderState` (kept on the struct so the dynamics
-// machinery doesn't need to know the artwork shrank). Click feedback is
-// a subtle scale pulse plus an expanding ring centered on the tip.
+// `SoftwareCursorGlyphRenderState` (kept on the struct for the overlay's
+// placement contract). Click feedback is a subtle scale pulse plus an
+// expanding ring centered on the tip.
 
 struct SoftwareCursorGlyphRenderState {
     let rotation: CGFloat
@@ -21,6 +21,7 @@ struct SoftwareCursorGlyphRenderState {
     let fogOffset: CGVector
     let fogOpacity: CGFloat
     let fogScale: CGFloat
+    let appearanceScale: CGFloat
     let clickProgress: CGFloat
 
     init(
@@ -29,6 +30,7 @@ struct SoftwareCursorGlyphRenderState {
         fogOffset: CGVector,
         fogOpacity: CGFloat,
         fogScale: CGFloat,
+        appearanceScale: CGFloat,
         clickProgress: CGFloat
     ) {
         self.rotation = rotation
@@ -36,6 +38,7 @@ struct SoftwareCursorGlyphRenderState {
         self.fogOffset = fogOffset
         self.fogOpacity = fogOpacity
         self.fogScale = fogScale
+        self.appearanceScale = appearanceScale
         self.clickProgress = clickProgress
     }
 }
@@ -54,9 +57,8 @@ enum SoftwareCursorGlyphMetrics {
     static let pointerSize = CGSize(width: 16, height: 16)
     static let pointerOffset: CGPoint = .zero
 
-    /// Visual neutral heading of the arrow tip — up-left, in CursorMotion's
-    /// y-down screen-state convention. Matches the procedural contour
-    /// orientation, so no extra rotation is applied during draw.
+    /// Visual neutral heading of the arrow tip. Matches the procedural
+    /// contour orientation, so no extra rotation is applied during draw.
     static let targetNeutralHeading: CGFloat = -(3 * CGFloat.pi / 4)
     static let proceduralContourNeutralHeading: CGFloat = -(3 * CGFloat.pi / 4)
     static let pointerArtworkRotation: CGFloat = 0
@@ -81,17 +83,15 @@ enum SoftwareCursorGlyphRenderer {
     ) {
         let drawingState = state.appKitDrawingState
         let tipAnchor = SoftwareCursorGlyphMetrics.tipAnchor
-        let pulseScale = 1 + drawingState.clickProgress * 0.08
+        let pulseScale = drawingState.appearanceScale * (1 + drawingState.clickProgress * 0.08)
 
         context.saveGState()
         context.setShouldAntialias(true)
         context.interpolationQuality = .high
 
         // Rotation + scale pivoted on the tip so the arrow doesn't drift
-        // off the click target during dynamics rotation or click pulse.
+        // off the click target during appearance or click pulse.
         context.translateBy(x: tipAnchor.x, y: tipAnchor.y)
-        // Damp the dynamics rotation — full rotation makes a small cursor
-        // look spinny on short flicks.
         context.rotate(by: drawingState.rotation * 0.35)
         context.scaleBy(x: pulseScale, y: pulseScale)
         context.translateBy(x: -tipAnchor.x, y: -tipAnchor.y)
@@ -189,10 +189,9 @@ enum SoftwareCursorGlyphRenderer {
 }
 
 private extension SoftwareCursorGlyphRenderState {
-    /// CursorMotion's dynamics state is interpreted in y-down screen
-    /// space; AppKit draws in y-up. The overlay flips Y on the rotation
-    /// and any vector that participates in drawing so motion that
-    /// reads as "downward" in CursorMotion becomes downward on screen.
+    /// AppKit draws in y-up. The overlay flips Y on the rotation and any
+    /// vector that participates in drawing so screen-space offsets render
+    /// in the expected direction.
     var appKitDrawingState: SoftwareCursorGlyphRenderState {
         SoftwareCursorGlyphRenderState(
             rotation: -rotation,
@@ -200,6 +199,7 @@ private extension SoftwareCursorGlyphRenderState {
             fogOffset: CGVector(dx: fogOffset.dx, dy: -fogOffset.dy),
             fogOpacity: fogOpacity,
             fogScale: fogScale,
+            appearanceScale: appearanceScale,
             clickProgress: clickProgress
         )
     }

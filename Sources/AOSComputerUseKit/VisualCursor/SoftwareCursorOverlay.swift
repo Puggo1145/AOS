@@ -33,42 +33,6 @@ func visualCursorEnabled(environment: [String: String]) -> Bool {
     return !["0", "false", "no", "off"].contains(rawValue)
 }
 
-func defaultVisualCursorInitialTipPosition(
-    windowOrigin: CGPoint = .zero,
-    tipAnchor: CGPoint = SoftwareCursorGlyphMetrics.tipAnchor
-) -> CGPoint {
-    return CGPoint(
-        x: windowOrigin.x + tipAnchor.x,
-        y: windowOrigin.y + tipAnchor.y
-    )
-}
-
-func visualCursorRenderBaseHeading(
-    artworkNeutralHeading: CGFloat = SoftwareCursorGlyphMetrics.targetNeutralHeading
-) -> CGFloat {
-    artworkNeutralHeading
-}
-
-func visualCursorAppKitForwardHeading(
-    renderRotation: CGFloat,
-    artworkNeutralHeading: CGFloat = SoftwareCursorGlyphMetrics.targetNeutralHeading
-) -> CGFloat {
-    -artworkNeutralHeading - renderRotation
-}
-
-func visualCursorRuntimeRenderYAxisMultiplier() -> CGFloat {
-    // Window placement uses AppKit global coordinates, but glyph render state is
-    // still interpreted as CursorMotion's y-down screen state before drawing.
-    -1
-}
-
-func visualCursorScreenStateVelocity(
-    fromRuntimeVelocity velocity: CGVector,
-    yAxisMultiplier: CGFloat
-) -> CGVector {
-    CGVector(dx: velocity.dx, dy: velocity.dy * yAxisMultiplier)
-}
-
 func visualCursorPostInteractionIdleTimeout() -> TimeInterval {
     1
 }
@@ -111,6 +75,36 @@ func visualCursorClampedTipPosition(
     return CGPoint(
         x: tipPosition.x.clamped(to: minX...maxX),
         y: tipPosition.y.clamped(to: minY...maxY)
+    )
+}
+
+struct CursorVisualRenderState: Equatable {
+    let tipPosition: CGPoint
+    let rotation: CGFloat
+    let cursorBodyOffset: CGVector
+    let fogOffset: CGVector
+    let fogOpacity: CGFloat
+    let fogScale: CGFloat
+    let appearanceScale: CGFloat
+}
+
+func visualCursorConstrainedRenderState(
+    _ renderState: CursorVisualRenderState,
+    visibleFrame: CGRect,
+    geometry: CursorWindowGeometry
+) -> CursorVisualRenderState {
+    CursorVisualRenderState(
+        tipPosition: visualCursorClampedTipPosition(
+            renderState.tipPosition,
+            visibleFrame: visibleFrame,
+            geometry: geometry
+        ),
+        rotation: renderState.rotation,
+        cursorBodyOffset: renderState.cursorBodyOffset,
+        fogOffset: renderState.fogOffset,
+        fogOpacity: renderState.fogOpacity,
+        fogScale: renderState.fogScale,
+        appearanceScale: renderState.appearanceScale
     )
 }
 
@@ -159,14 +153,14 @@ private struct CursorArtwork {
 @MainActor
 enum SoftwareCursorOverlay {
     private static let artwork = CursorArtwork.active
-    private static let renderBaseHeading = visualCursorRenderBaseHeading()
-    private static let renderYAxisMultiplier = visualCursorRuntimeRenderYAxisMultiplier()
+    private static let travelDuration: TimeInterval = 0.3
+    private static let appearanceDuration: TimeInterval = 0.3
+    private static let disappearanceDuration: TimeInterval = 0.3
     private static var panel: CursorPanel?
     private static var cursorView: SoftwareCursorView?
     private static var restingTipPosition: CGPoint?
     private static var displayedTipPosition: CGPoint?
     private static var activeTargetWindow: CursorTargetWindow?
-    private static var visualDynamicsState: CursorVisualDynamicsState?
     private static var idleTimer: Timer?
     private static var hideTimer: Timer?
     private static var idlePhase: CGFloat = 0
@@ -182,24 +176,15 @@ enum SoftwareCursorOverlay {
         configureOrdering(relativeTo: targetWindow)
 
         let constrainedTarget = clampTipPosition(targetPoint)
-        let isFreshStart = displayedTipPosition == nil
-        let startPoint = displayedTipPosition ?? defaultInitialTipPosition()
-        let now = CACurrentMediaTime()
 
         panel?.alphaValue = 1
-        if isFreshStart {
-            visualDynamicsState = CursorVisualDynamicsAnimator.state(at: startPoint, time: CGFloat(now))
-            placeCursor(using: initialRenderState(at: startPoint), clickProgress: 0)
-        } else {
-            seedVisualDynamicsIfNeeded(at: startPoint, time: now)
-            placeCursor(
-                using: advanceVisualDynamics(
-                    toward: startPoint,
-                    at: now
-                ),
-                clickProgress: 0
-            )
+
+        guard let startPoint = displayedTipPosition else {
+            animateAppear(at: constrainedTarget)
+            return
         }
+
+        placeCursor(using: renderState(at: startPoint), clickProgress: 0)
 
         if distanceBetween(startPoint, constrainedTarget) > 2 {
             animateMove(from: startPoint, to: constrainedTarget, relativeTo: targetWindow)
@@ -213,8 +198,6 @@ enum SoftwareCursorOverlay {
 
         configureOrdering(relativeTo: targetWindow)
         let constrainedTarget = clampTipPosition(targetPoint)
-        let now = CACurrentMediaTime()
-        seedVisualDynamicsIfNeeded(at: constrainedTarget, time: now)
         restingTipPosition = constrainedTarget
         animateClickPulse(at: constrainedTarget, clickCount: max(clickCount, 1), mouseButton: mouseButton)
         startIdleAnimation()
@@ -229,13 +212,7 @@ enum SoftwareCursorOverlay {
         configureOrdering(relativeTo: targetWindow)
         let constrainedTarget = clampTipPosition(targetPoint)
         restingTipPosition = constrainedTarget
-        placeCursor(
-            using: advanceVisualDynamics(
-                toward: constrainedTarget,
-                at: CACurrentMediaTime()
-            ),
-            clickProgress: 0
-        )
+        placeCursor(using: renderState(at: constrainedTarget), clickProgress: 0)
         startIdleAnimation()
         scheduleHide(after: visualCursorPostInteractionIdleTimeout())
     }
@@ -246,7 +223,6 @@ enum SoftwareCursorOverlay {
         displayedTipPosition = nil
         restingTipPosition = nil
         activeTargetWindow = nil
-        visualDynamicsState = nil
         panel?.orderOut(nil)
     }
 
@@ -319,179 +295,47 @@ enum SoftwareCursorOverlay {
     }
 
     private static func animateMove(from start: CGPoint, to end: CGPoint, relativeTo targetWindow: CursorTargetWindow?) {
-        let candidate = bestMotionCandidate(from: start, to: end, relativeTo: targetWindow)
-        let path = candidate.path
-        // Use the recovered official progress spring timing instead of the older
-        // distance-compressed local duration, otherwise medium and long moves feel
-        // noticeably faster than the bundled app.
-        let duration = OfficialCursorMotionModel.calibratedTravelDuration(
-            distance: distanceBetween(start, end),
-            measurement: candidate.measurement
-        )
-        let springTargetDuration = OfficialCursorMotionModel.closeEnoughTime
         let startTime = CACurrentMediaTime()
-        var progress: CGFloat = 0
-        var springState = CursorMotionSpringState()
 
         while true {
             refreshActiveOrderingIfNeeded()
 
             let elapsed = CGFloat(CACurrentMediaTime() - startTime)
-            let normalizedElapsed = (elapsed / max(duration, 0.001)).clamped(to: 0...1)
-            let springTime = normalizedElapsed * springTargetDuration
-            (progress, springState) = CursorMotionProgressAnimator.advance(
-                current: progress,
-                state: springState,
-                to: springTime
-            )
+            let linearProgress = (elapsed / max(CGFloat(travelDuration), 0.001)).clamped(to: 0...1)
+            let easedProgress = easeInOutCubic(linearProgress)
+            placeCursor(using: renderState(at: interpolate(from: start, to: end, progress: easedProgress)), clickProgress: 0)
 
-            let sample = path.sample(at: progress)
-            placeCursor(
-                using: advanceVisualDynamics(
-                    toward: sample.point,
-                    at: CACurrentMediaTime()
-                ),
-                clickProgress: 0
-            )
-
-            if normalizedElapsed >= 1 || CursorMotionProgressAnimator.isCloseEnough(progress: progress) {
+            if linearProgress >= 1 {
                 break
             }
 
             pumpFrame()
         }
 
-        placeCursor(
-            using: advanceVisualDynamics(
-                toward: end,
-                at: CACurrentMediaTime()
-            ),
-            clickProgress: 0
-        )
+        placeCursor(using: renderState(at: end), clickProgress: 0)
     }
 
-    private static func bestMotionCandidate(from start: CGPoint, to end: CGPoint, relativeTo targetWindow: CursorTargetWindow?) -> CursorMotionCandidate {
-        let bounds = motionBounds(from: start, to: end)
-        let candidates = HeadingDrivenCursorMotionModel.makeCandidates(
-            start: start,
-            end: end,
-            bounds: bounds,
-            startForward: currentForwardVector(),
-            endForward: restingForwardVector()
-        )
-        let defaultCandidate = HeadingDrivenCursorMotionModel.chooseBestCandidate(from: candidates)
-            ?? CursorMotionCandidate(
-                identifier: "legacy-fallback",
-                kind: .base,
-                side: 0,
-                tableAScale: nil,
-                tableBScale: nil,
-                path: CursorMotionPath(start: start, end: end),
-                measurement: CursorMotionPath(start: start, end: end).measure(bounds: bounds),
-                score: 0
+    private static func animateAppear(at point: CGPoint) {
+        let startTime = CACurrentMediaTime()
+
+        while true {
+            refreshActiveOrderingIfNeeded()
+
+            let elapsed = CGFloat(CACurrentMediaTime() - startTime)
+            let linearProgress = (elapsed / max(CGFloat(appearanceDuration), 0.001)).clamped(to: 0...1)
+            placeCursor(
+                using: renderState(at: point, appearanceScale: linearProgress),
+                clickProgress: 0
             )
 
-        guard let targetWindow else {
-            return defaultCandidate
-        }
-
-        let excludingWindowNumber = max(panel?.windowNumber ?? 0, 0)
-        let evaluations = candidates.map { candidate in
-            (
-                candidate: candidate,
-                hitCount: windowConstraintHitCount(
-                    for: candidate.path,
-                    relativeTo: targetWindow,
-                    excludingWindowNumber: excludingWindowNumber
-                )
-            )
-        }
-
-        let totalSampleCount = candidates.first?.path.sampledConstraintPoints().count ?? 0
-        let bestHitCount = evaluations.map(\.hitCount).max() ?? 0
-
-        if bestHitCount == totalSampleCount, bestHitCount > 0 {
-            return evaluations
-                .filter { $0.hitCount == bestHitCount }
-                .map(\.candidate)
-                .sorted(by: candidatePreference)
-                .first ?? defaultCandidate
-        }
-
-        if bestHitCount > 0 {
-            return evaluations
-                .filter { $0.hitCount == bestHitCount }
-                .map(\.candidate)
-                .sorted(by: candidatePreference)
-                .first ?? defaultCandidate
-        }
-
-        return defaultCandidate
-    }
-
-    private static func currentForwardVector() -> CGVector {
-        let renderRotation = cursorView?.rotation ?? 0
-        return forwardVector(renderRotation: renderRotation)
-    }
-
-    private static func restingForwardVector() -> CGVector {
-        forwardVector(renderRotation: 0)
-    }
-
-    private static func forwardVector(renderRotation: CGFloat) -> CGVector {
-        let angle = visualCursorAppKitForwardHeading(renderRotation: renderRotation)
-        return CGVector(dx: cos(angle), dy: sin(angle))
-    }
-
-    private static func windowConstraintHitCount(
-        for path: CursorMotionPath,
-        relativeTo targetWindow: CursorTargetWindow,
-        excludingWindowNumber: Int
-    ) -> Int {
-        path.sampledConstraintPoints().reduce(into: 0) { result, point in
-            if windowID(at: point, excludingWindowNumber: excludingWindowNumber) == targetWindow.windowID {
-                result += 1
+            if linearProgress >= 1 {
+                break
             }
-        }
-    }
 
-    private static func motionBounds(from start: CGPoint, to end: CGPoint) -> CGRect? {
-        let startScreen = screen(containing: start) ?? NSScreen.main ?? NSScreen.screens.first
-        let endScreen = screen(containing: end) ?? startScreen
-
-        switch (startScreen, endScreen) {
-        case let (startScreen?, endScreen?) where startScreen === endScreen:
-            return startScreen.visibleFrame
-        case let (startScreen?, endScreen?):
-            return startScreen.visibleFrame.union(endScreen.visibleFrame)
-        case let (screen?, nil), let (nil, screen?):
-            return screen.visibleFrame
-        default:
-            return nil
-        }
-    }
-
-    private static func candidatePreference(_ lhs: CursorMotionCandidate, _ rhs: CursorMotionCandidate) -> Bool {
-        if lhs.measurement.staysInBounds != rhs.measurement.staysInBounds {
-            return lhs.measurement.staysInBounds && !rhs.measurement.staysInBounds
-        }
-        if lhs.score != rhs.score {
-            return lhs.score < rhs.score
-        }
-        return lhs.identifier < rhs.identifier
-    }
-
-    private static func windowID(at point: CGPoint, excludingWindowNumber: Int) -> CGWindowID? {
-        let windowNumber = NSWindow.windowNumber(
-            at: NSPoint(x: point.x, y: point.y),
-            belowWindowWithWindowNumber: excludingWindowNumber
-        )
-
-        guard windowNumber > 0 else {
-            return nil
+            pumpFrame()
         }
 
-        return CGWindowID(windowNumber)
+        placeCursor(using: renderState(at: point), clickProgress: 0)
     }
 
     private static func isWindowPresent(_ windowID: CGWindowID) -> Bool {
@@ -530,10 +374,7 @@ enum SoftwareCursorOverlay {
                 let clickProgress = sin(rawProgress * .pi) * pulseBias
 
                 placeCursor(
-                    using: advanceVisualDynamics(
-                        toward: point,
-                        at: CACurrentMediaTime()
-                    ),
+                    using: renderState(at: point),
                     clickProgress: clickProgress
                 )
 
@@ -549,13 +390,7 @@ enum SoftwareCursorOverlay {
             }
         }
 
-        placeCursor(
-            using: advanceVisualDynamics(
-                toward: point,
-                at: CACurrentMediaTime()
-            ),
-            clickProgress: 0
-        )
+        placeCursor(using: renderState(at: point), clickProgress: 0)
     }
 
     private static func startIdleAnimation() {
@@ -579,11 +414,7 @@ enum SoftwareCursorOverlay {
                 )
 
                 placeCursor(
-                    using: advanceVisualDynamics(
-                        toward: idlePose.tipPosition,
-                        idleAngleOffset: idlePose.angleOffset,
-                        at: CACurrentMediaTime()
-                    ),
+                    using: renderState(at: idlePose.tipPosition, rotation: idlePose.angleOffset),
                     clickProgress: 0
                 )
             }
@@ -592,13 +423,7 @@ enum SoftwareCursorOverlay {
         RunLoop.main.add(timer, forMode: .common)
         idleTimer = timer
 
-        placeCursor(
-            using: advanceVisualDynamics(
-                toward: restingTipPosition,
-                at: CACurrentMediaTime()
-            ),
-            clickProgress: 0
-        )
+        placeCursor(using: renderState(at: restingTipPosition), clickProgress: 0)
     }
 
     private static func stopIdleAnimation() {
@@ -623,76 +448,67 @@ enum SoftwareCursorOverlay {
     }
 
     private static func hideOverlay() {
-        guard let panel else {
+        guard panel != nil else {
             return
         }
 
         stopIdleAnimation()
         cancelPendingHide()
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.12
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            panel.animator().alphaValue = 0
-        } completionHandler: {
-            MainActor.assumeIsolated {
-                panel.orderOut(nil)
-                panel.alphaValue = 1
-                displayedTipPosition = nil
-                restingTipPosition = nil
-                activeTargetWindow = nil
-                visualDynamicsState = nil
-            }
-        }
-    }
-
-    private static func defaultInitialTipPosition() -> CGPoint {
-        defaultVisualCursorInitialTipPosition(
-            windowOrigin: .zero,
-            tipAnchor: artwork.geometry.tipAnchor
-        )
-    }
-
-    private static func initialRenderState(at tipPosition: CGPoint) -> CursorVisualRenderState {
-        CursorVisualRenderState(
-            tipPosition: tipPosition,
-            rotation: 0,
-            cursorBodyOffset: CGVector(dx: 0, dy: 0),
-            fogOffset: CGVector(dx: 0, dy: 0),
-            fogOpacity: CursorVisualDynamicsConfiguration.officialInspired.fogOpacityBase,
-            fogScale: 1
-        )
-    }
-
-    private static func seedVisualDynamicsIfNeeded(at tipPosition: CGPoint, time: CFTimeInterval) {
-        guard visualDynamicsState == nil else {
+        if let tipPosition = displayedTipPosition ?? restingTipPosition {
+            animateDisappear(at: tipPosition)
             return
         }
 
-        visualDynamicsState = CursorVisualDynamicsAnimator.state(
-            at: tipPosition,
-            time: CGFloat(time)
-        )
+        finishHidingPanel()
     }
 
-    private static func advanceVisualDynamics(
-        toward targetTipPosition: CGPoint,
-        idleAngleOffset: CGFloat = 0,
-        at time: CFTimeInterval
-    ) -> CursorVisualRenderState {
-        let clampedTarget = clampTipPosition(targetTipPosition)
-        seedVisualDynamicsIfNeeded(at: clampedTarget, time: time)
+    private static func animateDisappear(at point: CGPoint) {
+        let startTime = CACurrentMediaTime()
 
-        let result = CursorVisualDynamicsAnimator.advance(
-            state: visualDynamicsState ?? CursorVisualDynamicsAnimator.state(at: clampedTarget, time: CGFloat(time)),
-            targetTipPosition: clampedTarget,
-            targetTime: CGFloat(time),
-            idleAngleOffset: idleAngleOffset,
-            baseHeading: renderBaseHeading,
-            renderYAxisMultiplier: renderYAxisMultiplier
+        while true {
+            refreshActiveOrderingIfNeeded()
+
+            let elapsed = CGFloat(CACurrentMediaTime() - startTime)
+            let linearProgress = (elapsed / max(CGFloat(disappearanceDuration), 0.001)).clamped(to: 0...1)
+            placeCursor(
+                using: renderState(at: point, appearanceScale: 1 - linearProgress),
+                clickProgress: 0
+            )
+
+            if linearProgress >= 1 {
+                break
+            }
+
+            pumpFrame()
+        }
+
+        finishHidingPanel()
+    }
+
+    private static func finishHidingPanel() {
+        panel?.orderOut(nil)
+        panel?.alphaValue = 1
+        cursorView?.appearanceScale = 1
+        displayedTipPosition = nil
+        restingTipPosition = nil
+        activeTargetWindow = nil
+    }
+
+    private static func renderState(
+        at tipPosition: CGPoint,
+        rotation: CGFloat = 0,
+        appearanceScale: CGFloat = 1
+    ) -> CursorVisualRenderState {
+        CursorVisualRenderState(
+            tipPosition: tipPosition,
+            rotation: rotation,
+            cursorBodyOffset: CGVector(dx: 0, dy: 0),
+            fogOffset: CGVector(dx: 0, dy: 0),
+            fogOpacity: 0.12,
+            fogScale: 1,
+            appearanceScale: appearanceScale.clamped(to: 0...1)
         )
-        visualDynamicsState = result.state
-        return result.renderState
     }
 
     private static func placeCursor(using renderState: CursorVisualRenderState, clickProgress: CGFloat) {
@@ -700,15 +516,30 @@ enum SoftwareCursorOverlay {
             return
         }
 
-        panel.setFrameOrigin(artwork.geometry.origin(forTipPosition: renderState.tipPosition))
-        cursorView.rotation = renderState.rotation
-        cursorView.cursorBodyOffset = renderState.cursorBodyOffset
-        cursorView.fogOffset = renderState.fogOffset
-        cursorView.fogOpacity = renderState.fogOpacity
-        cursorView.fogScale = renderState.fogScale
+        let constrainedRenderState = constrainedRenderStateForPlacement(renderState)
+        panel.setFrameOrigin(artwork.geometry.origin(forTipPosition: constrainedRenderState.tipPosition))
+        cursorView.rotation = constrainedRenderState.rotation
+        cursorView.cursorBodyOffset = constrainedRenderState.cursorBodyOffset
+        cursorView.fogOffset = constrainedRenderState.fogOffset
+        cursorView.fogOpacity = constrainedRenderState.fogOpacity
+        cursorView.fogScale = constrainedRenderState.fogScale
+        cursorView.appearanceScale = constrainedRenderState.appearanceScale
         cursorView.clickProgress = clickProgress
         cursorView.needsDisplay = true
-        displayedTipPosition = renderState.tipPosition
+        cursorView.displayIfNeeded()
+        displayedTipPosition = constrainedRenderState.tipPosition
+    }
+
+    private static func constrainedRenderStateForPlacement(_ renderState: CursorVisualRenderState) -> CursorVisualRenderState {
+        guard let screen = screen(containing: renderState.tipPosition) ?? NSScreen.main ?? NSScreen.screens.first else {
+            return renderState
+        }
+
+        return visualCursorConstrainedRenderState(
+            renderState,
+            visibleFrame: screen.visibleFrame,
+            geometry: artwork.geometry
+        )
     }
 
     private static func clampTipPosition(_ tipPosition: CGPoint) -> CGPoint {
@@ -742,6 +573,28 @@ enum SoftwareCursorOverlay {
     private static func distanceBetween(_ lhs: CGPoint, _ rhs: CGPoint) -> CGFloat {
         hypot(rhs.x - lhs.x, rhs.y - lhs.y)
     }
+
+    private static func interpolate(from start: CGPoint, to end: CGPoint, progress: CGFloat) -> CGPoint {
+        CGPoint(
+            x: start.x + ((end.x - start.x) * progress),
+            y: start.y + ((end.y - start.y) * progress)
+        )
+    }
+
+    private static func easeInOutCubic(_ progress: CGFloat) -> CGFloat {
+        let t = progress.clamped(to: 0...1)
+        if t < 0.5 {
+            return 4 * t * t * t
+        }
+        return 1 - pow(-2 * t + 2, 3) / 2
+    }
+
+}
+
+extension CGFloat {
+    func clamped(to range: ClosedRange<CGFloat>) -> CGFloat {
+        Swift.min(Swift.max(self, range.lowerBound), range.upperBound)
+    }
 }
 
 func shouldReorderCursorPanel(
@@ -764,6 +617,7 @@ private final class SoftwareCursorView: NSView {
     var fogOffset: CGVector = CGVector(dx: 0, dy: 0)
     var fogOpacity: CGFloat = 0.12
     var fogScale: CGFloat = 1
+    var appearanceScale: CGFloat = 1
     var clickProgress: CGFloat = 0
 
     override init(frame frameRect: NSRect) {
@@ -799,6 +653,7 @@ private final class SoftwareCursorView: NSView {
                 fogOffset: fogOffset,
                 fogOpacity: fogOpacity,
                 fogScale: fogScale,
+                appearanceScale: appearanceScale,
                 clickProgress: clickProgress
             )
         )

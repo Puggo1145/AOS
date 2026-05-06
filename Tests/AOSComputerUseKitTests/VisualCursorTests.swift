@@ -40,4 +40,5 @@ struct VisualCursorTests {
         #expect(visibleFrame.contains(lowerLeftPanelFrame))
         #expect(visibleFrame.contains(upperRightPanelFrame))
     }
+
 }
