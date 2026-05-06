@@ -6,6 +6,18 @@ import Foundation
 private let windowTitle = "AOS Coordinate Reliability Target"
 private let clearNotificationName = Notification.Name("com.aos.coordinateTarget.clear")
 
+private enum CoordinateTargetLayout {
+    static let dragRegionHeight: CGFloat = 34
+
+    static func isDragRegion(_ point: CGPoint) -> Bool {
+        point.y >= 0 && point.y < dragRegionHeight
+    }
+
+    static func shouldRecordCoordinateEvent(point: CGPoint, isWindowDragSequence: Bool) -> Bool {
+        !isWindowDragSequence && !isDragRegion(point)
+    }
+}
+
 private struct EventRecord: Codable {
     let kind: String
     let x: Double
@@ -93,6 +105,7 @@ private final class CoordinateCanvasView: NSView {
     private let eventLogURL: URL
     private var events: [EventRecord] = []
     private var clearObserver: NSObjectProtocol?
+    private var isDraggingWindow = false
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -129,19 +142,45 @@ private final class CoordinateCanvasView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if CoordinateTargetLayout.isDragRegion(point) {
+            isDraggingWindow = true
+            window?.performDrag(with: event)
+            return
+        }
+        isDraggingWindow = false
         record(kind: "mouseDown", event: event)
     }
 
     override func mouseDragged(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard CoordinateTargetLayout.shouldRecordCoordinateEvent(
+            point: point,
+            isWindowDragSequence: isDraggingWindow
+        ) else { return }
         record(kind: "mouseDragged", event: event)
     }
 
     override func mouseUp(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard CoordinateTargetLayout.shouldRecordCoordinateEvent(
+            point: point,
+            isWindowDragSequence: isDraggingWindow
+        ) else {
+            isDraggingWindow = false
+            return
+        }
         record(kind: "mouseUp", event: event)
     }
 
     override func scrollWheel(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        guard CoordinateTargetLayout.shouldRecordCoordinateEvent(
+            point: point,
+            isWindowDragSequence: isDraggingWindow
+        ) else {
+            return
+        }
         append(
             EventRecord(
                 kind: "scroll",
@@ -205,21 +244,37 @@ private final class CoordinateCanvasView: NSView {
     private func drawBackground() {
         NSColor.windowBackgroundColor.setFill()
         bounds.fill()
+
+        let headerRect = NSRect(
+            x: bounds.minX,
+            y: bounds.minY,
+            width: bounds.width,
+            height: min(CoordinateTargetLayout.dragRegionHeight, bounds.height)
+        )
+        NSColor.controlBackgroundColor.setFill()
+        headerRect.fill()
+        NSColor.separatorColor.withAlphaComponent(0.45).setStroke()
+        NSBezierPath.strokeLine(
+            from: CGPoint(x: bounds.minX, y: headerRect.maxY),
+            to: CGPoint(x: bounds.maxX, y: headerRect.maxY)
+        )
+        drawHeaderTitle(in: headerRect)
     }
 
     private func drawGrid() {
         let minor: CGFloat = 10
         let major: CGFloat = 50
+        let gridMinY = min(CoordinateTargetLayout.dragRegionHeight, bounds.height)
 
         let path = NSBezierPath()
         path.lineWidth = 1
         var x: CGFloat = 0
         while x <= bounds.width {
-            path.move(to: CGPoint(x: x, y: 0))
+            path.move(to: CGPoint(x: x, y: gridMinY))
             path.line(to: CGPoint(x: x, y: bounds.height))
             x += minor
         }
-        var y: CGFloat = 0
+        var y = ceil(gridMinY / minor) * minor
         while y <= bounds.height {
             path.move(to: CGPoint(x: 0, y: y))
             path.line(to: CGPoint(x: bounds.width, y: y))
@@ -232,12 +287,12 @@ private final class CoordinateCanvasView: NSView {
         majorPath.lineWidth = 1.5
         x = 0
         while x <= bounds.width {
-            majorPath.move(to: CGPoint(x: x, y: 0))
+            majorPath.move(to: CGPoint(x: x, y: gridMinY))
             majorPath.line(to: CGPoint(x: x, y: bounds.height))
-            drawLabel("\(Int(x))", at: CGPoint(x: x + 3, y: 3))
+            drawLabel("\(Int(x))", at: CGPoint(x: x + 3, y: gridMinY + 3))
             x += major
         }
-        y = 0
+        y = ceil(gridMinY / major) * major
         while y <= bounds.height {
             majorPath.move(to: CGPoint(x: 0, y: y))
             majorPath.line(to: CGPoint(x: bounds.width, y: y))
@@ -246,6 +301,21 @@ private final class CoordinateCanvasView: NSView {
         }
         NSColor.controlAccentColor.withAlphaComponent(0.45).setStroke()
         majorPath.stroke()
+    }
+
+    private func drawHeaderTitle(in rect: NSRect) {
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ]
+        let size = windowTitle.size(withAttributes: attrs)
+        windowTitle.draw(
+            at: CGPoint(
+                x: max(rect.midX - size.width / 2, rect.minX + 72),
+                y: rect.midY - size.height / 2
+            ),
+            withAttributes: attrs
+        )
     }
 
     private func drawEvents() {

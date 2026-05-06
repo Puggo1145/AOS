@@ -85,4 +85,22 @@ struct DevCoordinateReliabilityTests {
 
         #expect(point == CGPoint(x: 160, y: 160))
     }
+
+    @Test("target reserves the top strip for window dragging")
+    func targetReservesTopStripForWindowDragging() {
+        #expect(DevCoordinateReliabilityLayout.isDragRegion(CGPoint(x: 80, y: 12)))
+        #expect(!DevCoordinateReliabilityLayout.isDragRegion(CGPoint(x: 80, y: 48)))
+    }
+
+    @Test("target does not record drag sequences that start in the drag strip")
+    func targetDoesNotRecordDragSequencesThatStartInDragStrip() {
+        #expect(!DevCoordinateReliabilityLayout.shouldRecordCoordinateEvent(
+            point: CGPoint(x: 80, y: 48),
+            isWindowDragSequence: true
+        ))
+        #expect(DevCoordinateReliabilityLayout.shouldRecordCoordinateEvent(
+            point: CGPoint(x: 80, y: 48),
+            isWindowDragSequence: false
+        ))
+    }
 }

@@ -98,6 +98,22 @@ func visualCursorIdlePose(restingTipPosition: CGPoint, phase: CGFloat) -> Visual
     )
 }
 
+func visualCursorClampedTipPosition(
+    _ tipPosition: CGPoint,
+    visibleFrame: CGRect,
+    geometry: CursorWindowGeometry
+) -> CGPoint {
+    let minX = visibleFrame.minX + geometry.tipAnchor.x
+    let maxX = visibleFrame.maxX - (geometry.windowSize.width - geometry.tipAnchor.x)
+    let minY = visibleFrame.minY + geometry.tipAnchor.y
+    let maxY = visibleFrame.maxY - (geometry.windowSize.height - geometry.tipAnchor.y)
+
+    return CGPoint(
+        x: tipPosition.x.clamped(to: minX...maxX),
+        y: tipPosition.y.clamped(to: minY...maxY)
+    )
+}
+
 /// Public entry point to clear the overlay (e.g. when an agent turn ends and
 /// no further events are expected). Safe to call from any thread.
 public func resetAOSVisualCursor() {
@@ -701,14 +717,10 @@ enum SoftwareCursorOverlay {
         }
 
         let visibleFrame = screen.visibleFrame
-        let minX = visibleFrame.minX + artwork.geometry.tipAnchor.x
-        let maxX = visibleFrame.maxX - (artwork.geometry.windowSize.width - artwork.geometry.tipAnchor.x)
-        let minY = visibleFrame.minY + artwork.geometry.tipAnchor.y
-        let maxY = visibleFrame.maxY - (artwork.geometry.windowSize.height - artwork.geometry.tipAnchor.y)
-
-        return CGPoint(
-            x: tipPosition.x.clamped(to: minX...maxX),
-            y: tipPosition.y.clamped(to: minY...maxY)
+        return visualCursorClampedTipPosition(
+            tipPosition,
+            visibleFrame: visibleFrame,
+            geometry: artwork.geometry
         )
     }
 
