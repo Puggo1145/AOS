@@ -8,12 +8,12 @@ import PackageDescription
 //   - library `AOSRPCSchema`     (wire protocol — see docs/plans/rpc-protocol.md)
 //   - library `AOSOSSenseKit`    (OS Sense — see docs/designs/os-sense.md)
 //   - library `AOSComputerUseKit` (Computer Use — see docs/designs/computer-use.md)
-//   - library `AOSAXSupport`     (shared AX SPI bridge — see docs/designs/os-sense.md
-//                                 §"共享 AX SPI 底层模块". Holds the
-//                                 `@_silgen_name("_AXUIElementGetWindow")`
-//                                 bridge so OS Sense and AOSComputerUseKit
-//                                 both depend on it without read-side ↔
-//                                 write-side coupling.)
+//   - library `AOSAXSupport`     (shared AX SPI bridge + Chromium AX activation —
+//                                 see docs/designs/os-sense.md §"共享 AX SPI 底层模块".
+//                                 Holds `_AXUIElementGetWindow` and
+//                                 `AXWebAccessibilityActivator` so OS Sense
+//                                 and AOSComputerUseKit both depend on it
+//                                 without read-side ↔ write-side coupling.)
 let package = Package(
     name: "AOS",
     platforms: [
@@ -62,9 +62,9 @@ let package = Package(
             dependencies: ["AOSRPCSchema"],
             path: "Tests/AOSRPCSchemaTests"
         ),
-        // Shared AX SPI bridge. Owns the `@_silgen_name` declaration for
-        // `_AXUIElementGetWindow` so OS Sense and a future AOSComputerUseKit
-        // both depend on this package, never on each other.
+        // Shared AX primitives. Owns the `_AXUIElementGetWindow` SPI bridge
+        // and Chromium / Electron web AX activation so OS Sense and
+        // AOSComputerUseKit both depend on this package, never on each other.
         .target(
             name: "AOSAXSupport",
             path: "Sources/AOSAXSupport"

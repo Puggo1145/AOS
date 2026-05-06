@@ -112,23 +112,32 @@ producer 内部可保留强类型 struct，最后一步映射为 envelope。
 
 | kind | payload schema | 采集源 | 识别条件 |
 |---|---|---|---|
-| `general.textSelection` | `{ context: String, selectedText: String, range: { location: number, length: number, unit: "utf16" }, annotatedContext: String, source: "axRange" }` | `AXSelectedTextRange(s)` + `AXValue` / `AXStringForRange` + `AXSelectedText` | 单一 selection range 存在、range 在 context 内、range 对应 substring 与 `AXSelectedText` 一致 |
+| `general.textSelection` | `{ context: String, selectedText: String, range: { location: number, length: number, unit: "utf16" }, annotatedContext: String, source: "axRange" }` | `AXSelectedTextRange(s)` + bounded `AXStringForRange` / bounded small `AXValue` + `AXSelectedText` | 单一 selection range 存在、range 在 bounded context 内、range 对应 substring 与 `AXSelectedText` 一致 |
 | `general.selectedText` | `{ content: String }` | `AXSelectedText` | degraded path：属性存在且非空，但无法形成 exact `general.textSelection` |
 | `general.selectedItems` | `{ items: SelectedItem[] }` | `AXSelectedChildren` / `AXSelectedRows` | 数组非空 |
-| `general.currentInput` | `{ value: String, target: AXElementLocator }` | `AXFocusedUIElement` 的 `AXValue` + focused element 局部 AX locator | 元素可编辑且 value 非空 |
+| `general.currentInput` | `{ value?: String, target: AXElementLocator }` | focused element 局部 AX locator；无 exact textSelection 时附带 `AXValue` | focused 元素可编辑 |
 
 **文本 selection 输出优先级**：`general.textSelection` 是 preferred exact path，
 表达"总 context + 其中被选中的文本"。`annotatedContext` 必须把 selection 包在
 `[[SELECTED_START]]` / `[[SELECTED_END]]` marker 内，供 LLM 直接消费。若只拿到
 `AXSelectedText`，但拿不到单一 range、拿不到 context，或 range 对应 substring 与
 `AXSelectedText` 不一致，则不伪造上下文，退回 `general.selectedText`。context 获取顺序：
-先读 `AXValue`；若 app 不暴露完整 value，则使用 `AXVisibleCharacterRange` 或
-`AXNumberOfCharacters` 搭配 `AXStringForRange` 读取包含 selection 的文本上下文。
+优先使用 `AXVisibleCharacterRange` 或 `AXNumberOfCharacters` 搭配 `AXStringForRange`
+读取 selection 周围的 bounded context；若 app 不支持 range 参数，且 `AXNumberOfCharacters`
+证明 focused value 不大，再读 `AXValue` 并在构造 payload 前裁成同样的 bounded context。
+已知大文本不读整段 `AXValue`，直接降级。当前 bounded context 上限为
+16,384 个 UTF-16 code unit，避免 Notch 打开时因为大编辑器 value / terminal buffer
+在主线程构造完整 `annotatedContext` 而卡顿。
 浏览器 / WebView / Electron 可能只暴露 text marker 或 DOM selection；这类不能依赖
 GeneralProbe 的 CFRange 通道，需要 app-specific adapter。
 
-**去重**：`general.textSelection`、`general.selectedText` 与 `general.currentInput`
-来自同一元素时只保留最高优先级的 selection signal。
+**并列输出**：`general.textSelection` / `general.selectedText` 与
+`general.currentInput` 表达不同维度。前者是“用户选中了什么文本”，后者是“当前可编辑目标
+和 locator 是什么”。同一 focused element 同时暴露 selection 和 editable value 时，两者
+都输出；当 `general.textSelection` 已经携带 exact selected content 时，
+`currentInput.value` 可省略，只保留 `target`，避免 Notch 打开路径重复同步读取整段大
+`AXValue`。只在 `general.textSelection` 与 degraded `general.selectedText` 之间保留优先级，
+避免同一 selection 被重复表达。
 
 **`currentInput.target` 定位契约**：`target.locatorId` 由 `AOSAXSupport.AXElementLocator`
 生成，输入包括 stable app/window identity、从 window 到 focused element 的 ancestor path、
@@ -139,7 +148,7 @@ metadata 输出，不参与 `locatorId`，避免标题变化或窗口移动后 c
 `locator=axloc_...`，因此 agent 可以把
 `currentInput.payload.target.locatorId` 与 app state 中的具体 `[elementIndex]` 对齐。
 GeneralProbe 只在 focused element 切换时计算 locator；`AXValueChanged` 只更新 `value`，
-不做全窗口遍历。
+但 exact textSelection 存在时可跳过 `value` 读取，不做全窗口遍历。
 
 **Notch 抢焦保留规则**：用户先聚焦外部 app 输入框，再打开 Notch 并聚焦 AOS 输入框时，
 部分 app 会把自己的 `AXFocusedUIElement` 暴露为 missing。这个事件不代表用户在源 app
@@ -154,7 +163,13 @@ selection 真相。OS Sense 不模拟 Cmd+C、不读取 pasteboard 来推断 liv
 **不做视觉高亮复原**：`general.textSelection` 面向 LLM 的需求是文本上下文与
 selection marker，不包含屏幕 rect、颜色、OCR 或视觉高亮形状。
 
-**逐字捕获，1 MiB 兜底**：所有文本（`textSelection.context`、`textSelection.selectedText`、`textSelection.annotatedContext`、`selectedText`、`currentInput`、剪贴板）都按"用户的显式信号必须完整给模型"原则**逐字**进入 payload，没有内容感知的截断（不按 token、句子、段落裁）。`PayloadSizeGuard.clamp` 在单个字符串超过 1 MiB UTF-8 字节时做 defense-in-depth 兜底裁剪并附 `…[truncated, original N bytes]` 标记，避免一次失控捕获把 NDJSON 帧撑破——但这条 cap 在任何现实人类内容下都不会触发，业务语义上仍然按"不截断"对待。
+**逐字捕获与 bounded context**：`textSelection.selectedText`、`selectedText`、`currentInput.value`
+和剪贴板按"用户的显式信号必须完整给模型"原则逐字进入 payload；`currentInput.value`
+在 exact textSelection 存在时可省略。字符串再由
+`PayloadSizeGuard.clamp` 在单个字符串超过 1 MiB UTF-8 字节时做 defense-in-depth
+兜底裁剪并附 `…[truncated, original N bytes]` 标记。`textSelection.context` /
+`textSelection.annotatedContext` 是 surrounding context，不是用户选区本体；它们在
+selection 周围先裁成 bounded context，再进入 payload。
 
 chip 表面只显示固定 label（`Selected text` / `Current input`），不暴露内容前缀——signal 是
 "用户选了/输入了什么类型的东西"，内容由 LLM 读 payload。
@@ -170,6 +185,7 @@ chip 表面只显示固定 label（`Selected text` / `Current input`），不暴
 │                                                                  │
 │   ├── WindowMirror      ← NSWorkspace + AXObserverHub            │
 │   ├── GeneralProbe      ← AXObserverHub                         │
+│   │                       + AXWebAccessibilityActivator          │
 │   ├── ScreenMirror      ← SCScreenshotManager (submit-time)      │
 │   └── AdapterRegistry   ← 已注册的 SenseAdapter 实例             │
 │           ├── FinderAdapter                                       │
@@ -182,6 +198,8 @@ chip 表面只显示固定 label（`Selected text` / `Current input`），不暴
 ```
 
 `SenseStore` 是唯一持有 `SenseContext` 的对象，所有写入经它的串行化入口，确保单源真相。
+
+`AXWebAccessibilityActivator` 属于 `AOSAXSupport`，由 OS Sense 和 Computer Use 共同复用。它只负责 Chromium / Electron web AX tree 的激活信号：写 `AXManualAccessibility` / `AXEnhancedUserInterface`、保留 no-op `AXObserver`、等待 `AXWebArea` 出现。OS Sense 仍然只在 `GeneralProbe` 中读取 focused element 与直接 selection / value / selected items，不做 Computer Use 的深层 tree walk。
 
 ## 事件源与字段映射
 
@@ -354,7 +372,7 @@ context 候选呈现。
 - 类型优先级：`public.file-url` > `public.utf8-plain-text` > `public.image`
 - 图片只返 metadata，绝不返像素
 - 文本逐字捕获，业务语义"不截断"：手动粘贴是用户的显式意图，必须完整传给模型
-  （GeneralProbe 的 selectedText / currentInput 同样不截断，理由相同）。
+  （GeneralProbe 的 selectedText / currentInput.value 同样不截断，理由相同；exact textSelection 已携带内容时 currentInput.value 可省略）。
   `PayloadSizeGuard.clamp` 的 1 MiB 兜底是 defense-in-depth，仅在单条字符串异常巨大时触发并附标记，正常人类内容下永不命中
 
 ## 模块结构
@@ -460,7 +478,7 @@ Core UI 只读 `Behavior.displaySummary` 渲染默认 chip。每个 adapter 可�
 
 | 风险 | 缓解 |
 |---|---|
-| Electron / Figma 等 app AX 通知不稳 | GeneralProbe 通道失败即缺省；视觉兜底自动接管 |
+| Electron / Figma 等 app web AX tree 懒加载、通知不稳 | `GeneralProbe` attach / refresh 时先通过共享 `AXWebAccessibilityActivator` 激活 Chromium AX，再做轻量 focused element 重读；仍不保证通知完整，缺省时由视觉兜底接管 |
 | `AXObserver` 跨进程消息阻塞主线程 | `AXObserverHub` 把每个 pid 的 observer source 挂到 main runloop，所有 AX 调用与回调都收敛到 `@MainActor` 单一隔离边界；app deactivate 时立即 detach |
 | `AXValueChangedNotification` 在 IDE / 终端逐字符触发 | 250ms debounce |
 | Finder Apple Event 首次需用户授权 | 仅在用户**点击 chip** 时触发 Apple Event |

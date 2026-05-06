@@ -674,15 +674,13 @@ public final class NotchViewModel {
     public func notchOpen(_ reason: OpenReason) {
         openReason = reason
         status = .opened
-        // Force a fresh AX read of the prior frontmost app so the user sees
-        // their just-made selection / typed-input chip immediately. Live AX
-        // notifications are unreliable in terminals (Ghostty), Electron, and
-        // other custom-rendered apps — they only fire after subsequent focus
-        // shifts, which is why the chip used to "appear after clicking the
-        // input". Refresh-on-open removes that dependency without freezing
-        // the target app for the rest of the notch session.
-        senseStore.refreshGeneralProbe()
         broadcastStatus()
+        // Force a fresh AX read of the prior frontmost app so the user sees
+        // their just-made selection / typed-input chip promptly. Schedule it
+        // after the opened-state broadcast because AX reads for large text
+        // areas can block the main actor; the first opened frame is more
+        // important than having the chip row fully refreshed before paint.
+        senseStore.refreshGeneralProbeDeferred()
     }
 
     public func notchClose() {

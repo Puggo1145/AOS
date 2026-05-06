@@ -323,9 +323,11 @@ export interface BehaviorEnvelope {
   /// Opaque per-producer JSON; sidecar usually passes through unchanged.
   /// `general.textSelection` is rendered specially in the LLM prompt so
   /// the model sees a marked text context instead of a raw JSON blob.
-  /// For `general.currentInput`, Shell includes `{ value, target }`, where
+  /// For `general.currentInput`, Shell includes `{ value?, target }`, where
   /// `target.locatorId` can be matched against locator markers emitted by
-  /// `computer_use_get_app_state` AX tree lines.
+  /// `computer_use_get_app_state` AX tree lines. `value` may be omitted when
+  /// `general.textSelection` already carries exact selected content for the
+  /// same editable control, avoiding a duplicate full AXValue read.
   payload: JSONValue;
 }
 

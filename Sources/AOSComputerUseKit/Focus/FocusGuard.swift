@@ -9,7 +9,7 @@ import Foundation
 // the three layers; every operation that could trigger AppKit / Chromium
 // focus reflexes is wrapped in `withFocusSuppressed(pid:element:)`:
 //
-//   1. AXEnablementAssertion        — cache-aware Chromium AX activation
+//   1. AXWebAccessibilityActivator  — cache-aware Chromium AX activation
 //   2. SyntheticAppFocusEnforcer    — write/restore AXFocused / AXMain
 //   3. SystemFocusStealPreventer    — observer-driven reverse-snatch
 //
@@ -19,16 +19,16 @@ import Foundation
 // doesn't get synthetic-focus reinforcement.
 
 public actor FocusGuard {
-    private let enablement: AXEnablementAssertion
+    private let webAccessibilityActivator: AXWebAccessibilityActivator
     private let enforcer: SyntheticAppFocusEnforcer
     private let systemPreventer: SystemFocusStealPreventer?
 
     public init(
-        enablement: AXEnablementAssertion,
+        webAccessibilityActivator: AXWebAccessibilityActivator,
         enforcer: SyntheticAppFocusEnforcer,
         systemPreventer: SystemFocusStealPreventer? = nil
     ) {
-        self.enablement = enablement
+        self.webAccessibilityActivator = webAccessibilityActivator
         self.enforcer = enforcer
         self.systemPreventer = systemPreventer
     }
@@ -46,7 +46,7 @@ public actor FocusGuard {
     ) async throws -> T {
         // Layer 1 — enablement (cached no-op for native Cocoa apps).
         let root = AXUIElementCreateApplication(pid)
-        _ = await enablement.assert(pid: pid, root: root)
+        _ = await webAccessibilityActivator.activate(pid: pid, root: root)
 
         // Layer 2 — synthetic focus. Walk up to the enclosing window via
         // AXWindow so we can flip its AXFocused / AXMain alongside the

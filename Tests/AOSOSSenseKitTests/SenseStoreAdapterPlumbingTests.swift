@@ -395,4 +395,25 @@ struct SenseStoreAdapterPlumbingTests {
         let refreshes = await mock.refreshCount
         #expect(refreshes == 1)
     }
+
+    @Test("Deferred OS Sense refresh does not run during the current main-actor turn")
+    func deferredRefreshYieldsBeforeForwardingToAdapters() async {
+        let mock = MockAdapter()
+        let store = await makeStore(adapters: [mock])
+
+        store._applyPermissionsForTesting(PermissionState(denied: []))
+        store._applyFrontmostForTesting(
+            app: AppIdentity(bundleId: "com.test.app", name: "Test", pid: 801, icon: nil),
+            window: WindowIdentity(title: "Test", windowId: nil)
+        )
+        await store._awaitPendingAdapterSwapForTesting()
+
+        store.refreshGeneralProbeDeferred()
+        let immediateRefreshes = await mock.refreshCount
+        #expect(immediateRefreshes == 0)
+
+        try? await Task.sleep(for: .milliseconds(50))
+        let refreshes = await mock.refreshCount
+        #expect(refreshes == 1)
+    }
 }

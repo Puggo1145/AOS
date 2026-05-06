@@ -1,4 +1,5 @@
 import AppKit
+import AOSAXSupport
 import ApplicationServices
 import CoreGraphics
 import Foundation
@@ -130,7 +131,7 @@ public enum ComputerUseError: Error, CustomStringConvertible, Sendable {
 }
 
 public actor ComputerUseService {
-    private let enablement: AXEnablementAssertion
+    private let webAccessibilityActivator: AXWebAccessibilityActivator
     private let enforcer: SyntheticAppFocusEnforcer
     private let preventer: SystemFocusStealPreventer
     private let focusGuard: FocusGuard
@@ -139,18 +140,18 @@ public actor ComputerUseService {
     private let capture: WindowCapture
 
     public init() {
-        let enablement = AXEnablementAssertion()
+        let webAccessibilityActivator = AXWebAccessibilityActivator()
         let enforcer = SyntheticAppFocusEnforcer()
         let preventer = SystemFocusStealPreventer()
-        self.enablement = enablement
+        self.webAccessibilityActivator = webAccessibilityActivator
         self.enforcer = enforcer
         self.preventer = preventer
         self.focusGuard = FocusGuard(
-            enablement: enablement,
+            webAccessibilityActivator: webAccessibilityActivator,
             enforcer: enforcer,
             systemPreventer: preventer
         )
-        self.snapshot = AccessibilitySnapshot(enablement: enablement)
+        self.snapshot = AccessibilitySnapshot(webAccessibilityActivator: webAccessibilityActivator)
         self.cache = StateCache(ttlSeconds: 30)
         self.capture = WindowCapture()
     }

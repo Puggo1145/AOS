@@ -1,10 +1,35 @@
 import Testing
 import Foundation
+import AppKit
 import AOSAXSupport
 @testable import AOSOSSenseKit
 
 @Suite("GeneralProbe — pure helpers")
 struct GeneralProbeTests {
+    @Test("attach activates shared Chromium AX support without deep traversal")
+    @MainActor
+    func attachActivatesSharedWebAccessibilitySupport() async {
+        _ = NSApplication.shared
+        let pid = getpid()
+        let activator = AXWebAccessibilityActivator(
+            writeAttribute: { _, _, _ in .success },
+            observerRegistrar: .disabledForTesting,
+            webContentProbe: { _ in true }
+        )
+        let probe = GeneralProbe(
+            hub: AXObserverHub(),
+            webAccessibilityActivator: activator,
+            onChange: { _ in }
+        )
+
+        probe.attach(pid: pid)
+        for _ in 0..<20 where !(await activator.isActivated(pid: pid)) {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(await activator.isActivated(pid: pid))
+
+        probe.detach()
+    }
 
     @Test("selectedText envelope has stable per-pid citationKey")
     func selectedTextStableKey() {
@@ -242,6 +267,40 @@ struct GeneralProbeTests {
         #expect(annotated == "beta [[SELECTED_START]]selected[[SELECTED_END]] gamma")
     }
 
+    @Test("textSelection snapshot bounds large editable value context around the selected range")
+    func textSelectionSnapshotBoundsLargeEditableContext() {
+        let prefix = String(repeating: "a", count: 60_000)
+        let suffix = String(repeating: "b", count: 60_000)
+        let context = prefix + "selected" + suffix
+        let selectedRange = CFRange(location: (prefix as NSString).length, length: ("selected" as NSString).length)
+
+        let snapshot = GeneralProbe.makeTextSelectionSnapshot(
+            context: context,
+            selectedText: "selected",
+            selectedRange: selectedRange,
+            contextRange: CFRange(location: 0, length: (context as NSString).length)
+        )
+
+        guard let snapshot else {
+            Issue.record("expected bounded textSelection snapshot")
+            return
+        }
+        #expect((snapshot.context as NSString).length <= GeneralProbe.maxTextSelectionContextUTF16Length)
+        #expect(snapshot.context.contains("selected"))
+        #expect(snapshot.range.location < (snapshot.context as NSString).length)
+    }
+
+    @Test("textSelection AXValue fallback is disabled when the focused value is known large")
+    func textSelectionFullValueFallbackSkipsKnownLargeValues() {
+        #expect(GeneralProbe.shouldReadFullValueForTextSelectionContext(characterCount: nil))
+        #expect(GeneralProbe.shouldReadFullValueForTextSelectionContext(
+            characterCount: GeneralProbe.maxTextSelectionContextUTF16Length
+        ))
+        #expect(!GeneralProbe.shouldReadFullValueForTextSelectionContext(
+            characterCount: GeneralProbe.maxTextSelectionContextUTF16Length + 1
+        ))
+    }
+
     @Test("selectedText / currentInput chips show fixed labels, not content")
     func fixedDisplaySummary() {
         let sel = GeneralProbe.makeSelectedTextEnvelope(text: "anything goes here", pid: 1)
@@ -252,8 +311,45 @@ struct GeneralProbeTests {
 
     @Test("focused editable empty field still emits currentInput")
     func emptyEditableFieldEmitsCurrentInput() {
-        #expect(GeneralProbe.shouldEmitCurrentInput(selectedText: nil, value: "", editable: true))
-        #expect(GeneralProbe.shouldEmitCurrentInput(selectedText: nil, value: nil, editable: true))
+        #expect(GeneralProbe.shouldEmitCurrentInput(value: "", editable: true))
+        #expect(GeneralProbe.shouldEmitCurrentInput(value: nil, editable: true))
+    }
+
+    @Test("focused editable field with selected text still emits currentInput")
+    func editableFieldWithSelectionStillEmitsCurrentInput() {
+        #expect(GeneralProbe.shouldEmitCurrentInput(value: "before selected after", editable: true))
+    }
+
+    @Test("currentInput skips value read when exact text selection already carries the content")
+    func currentInputSkipsValueReadWhenExactSelectionExists() {
+        #expect(!GeneralProbe.shouldReadCurrentInputValue(editable: true, hasExactTextSelection: true))
+        #expect(GeneralProbe.shouldReadCurrentInputValue(editable: true, hasExactTextSelection: false))
+        #expect(!GeneralProbe.shouldReadCurrentInputValue(editable: false, hasExactTextSelection: false))
+    }
+
+    @Test("currentInput can carry only target when value read is intentionally skipped")
+    func currentInputCanOmitValue() {
+        let locator = AXElementLocator(
+            pid: 5,
+            bundleId: "com.example.Editor",
+            windowId: 9,
+            windowTitle: "Draft",
+            pathFromWindow: [
+                AXElementLocator.PathComponent(role: "AXTextArea", identifier: "body", siblingOrdinal: 0),
+            ],
+            frame: nil
+        )
+        let env = GeneralProbe.makeCurrentInputEnvelope(value: nil, pid: 5, target: locator)
+
+        guard case let .object(payload) = env.payload,
+              case let .object(target)? = payload["target"],
+              case let .string(locatorId)? = target["locatorId"] else {
+            Issue.record("expected currentInput target-only payload")
+            return
+        }
+
+        #expect(payload["value"] == nil)
+        #expect(locatorId == locator.locatorId)
     }
 
     @Test("currentInput payload carries locator target when provided")

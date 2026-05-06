@@ -10,7 +10,7 @@
 
 ### Stage 1：通用通道
 - `GeneralProbe` + 三个 built-in kind 输出 + `ClipboardWatcher`
-- 单测：识别规则、去重、截断、剪贴板优先级
+- 单测：识别规则、selection/input 并列输出、截断、剪贴板优先级
 
 ### Stage 2：Adapter 协议与内置实现
 - `AdapterRegistry`、失败隔离、权限缺失路径
@@ -36,7 +36,7 @@
 **Stage 1**：
 - TextEdit 选一段文字 → 不打开 notch → 打开 notch 时 chip 已在场，与当前 selection 一致
 - 选中后再取消 → chip 同步消失，无残留
-- `general.selectedText` 与 `general.currentInput` 同时成立时只保留前者
+- `general.textSelection` / `general.selectedText` 与 `general.currentInput` 同时成立时并列输出；selection chip 表示选中内容，input chip 表示当前可编辑目标；exact textSelection 已携带内容时 currentInput 可只带 target
 
 **Stage 2**：
 - Finder 选文件 → `general.selectedItems` 与 `finder.selection` 两个 envelope 同时出现（`finder.selection.payload.fileURLs` 初始为空）；点击 `finder.selection` chip 时（首次）触发 Automation 权限 prompt；授权后 `fileURLs` 填充

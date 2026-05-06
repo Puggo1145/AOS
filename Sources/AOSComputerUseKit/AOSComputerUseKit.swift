@@ -10,7 +10,7 @@ import Foundation
 //
 // Module layout (mirrors §"模块结构" in the design):
 //
-//   Focus/         AXEnablementAssertion · SyntheticAppFocusEnforcer ·
+//   Focus/         AXWebAccessibilityActivator · SyntheticAppFocusEnforcer ·
 //                  SystemFocusStealPreventer · FocusGuard
 //   Input/         SkyLightEventPost · FocusWithoutRaise ·
 //                  MouseInput · KeyboardInput · AXInput

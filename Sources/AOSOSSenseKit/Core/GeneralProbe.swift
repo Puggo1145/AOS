@@ -12,11 +12,13 @@ import Foundation
 //   - general.textSelection ← AXSelectedTextRange + AXValue, 50ms debounce
 //   - general.selectedText  ← AXSelectedText only, 50ms debounce
 //   - general.selectedItems ← AXSelectedChildren / AXSelectedRows, 50ms debounce
-//   - general.currentInput  ← focused element AXValue (editable only),
-//                             250ms debounce
+//   - general.currentInput  ← focused editable element target, plus AXValue
+//                             when no exact text selection already carries
+//                             the selected content, 250ms debounce
 //
-// Dedup rule (§"Built-in kinds"): when both selectedText and currentInput
-// are derivable from the same focused element, only emit selectedText.
+// Text selection and current input are independent dimensions: selection says
+// what range the user highlighted; currentInput says which editable target is
+// active and what value/locator it exposes. Emit both when both are available.
 //
 // Lifecycle:
 //   1. `attach(pid:)` — subscribe `kAXFocusedUIElementChangedNotification`
@@ -31,6 +33,7 @@ import Foundation
 @MainActor
 public final class GeneralProbe {
     private let hub: AXObserverHub
+    private let webAccessibilityActivator: AXWebAccessibilityActivator
     private let onChange: @MainActor ([BehaviorEnvelope]) -> Void
 
     private var pid: pid_t?
@@ -48,12 +51,15 @@ public final class GeneralProbe {
     private var selectedTextDebounce: Task<Void, Never>?
     private var selectedItemsDebounce: Task<Void, Never>?
     private var currentInputDebounce: Task<Void, Never>?
+    private var webAccessibilityActivationTask: Task<Void, Never>?
 
     public init(
         hub: AXObserverHub,
+        webAccessibilityActivator: AXWebAccessibilityActivator = AXWebAccessibilityActivator(),
         onChange: @escaping @MainActor ([BehaviorEnvelope]) -> Void
     ) {
         self.hub = hub
+        self.webAccessibilityActivator = webAccessibilityActivator
         self.onChange = onChange
     }
 
@@ -72,6 +78,7 @@ public final class GeneralProbe {
         // Read initial focus immediately so the chip row populates without
         // waiting for the first focus change.
         refocus()
+        scheduleWebAccessibilityActivation(pid: pid)
     }
 
     /// Force an immediate re-read of the focused element. Use this when an
@@ -82,9 +89,14 @@ public final class GeneralProbe {
     /// it only after focus shifts, so passive subscription is unreliable.
     public func refresh() {
         recompute()
+        if let pid {
+            scheduleWebAccessibilityActivation(pid: pid)
+        }
     }
 
     public func detach() {
+        webAccessibilityActivationTask?.cancel()
+        webAccessibilityActivationTask = nil
         cancelDebounces()
         for token in elementTokens { hub.unsubscribe(token) }
         elementTokens.removeAll()
@@ -96,6 +108,17 @@ public final class GeneralProbe {
         focusedLocator = nil
         // Notify the store the probe contributes nothing for this app.
         onChange([])
+    }
+
+    private func scheduleWebAccessibilityActivation(pid: pid_t) {
+        webAccessibilityActivationTask?.cancel()
+        let activator = webAccessibilityActivator
+        webAccessibilityActivationTask = Task { [weak self] in
+            let root = AXUIElementCreateApplication(pid)
+            _ = await activator.activate(pid: pid, root: root)
+            if Task.isCancelled { return }
+            self?.refocus()
+        }
     }
 
     // MARK: - Focus tracking
@@ -241,16 +264,16 @@ public final class GeneralProbe {
 
         let selectedText = readString(element, attribute: kAXSelectedTextAttribute as CFString)
         let textSelection = readTextSelectionSnapshot(element, selectedText: selectedText)
-        let value = readString(element, attribute: kAXValueAttribute as CFString)
         let editable = isAttributeSettable(element, attribute: kAXValueAttribute as CFString)
+        let value = Self.shouldReadCurrentInputValue(
+            editable: editable,
+            hasExactTextSelection: textSelection != nil
+        )
+            ? readString(element, attribute: kAXValueAttribute as CFString)
+            : nil
 
         let hasSelectedText = !(selectedText ?? "").isEmpty
-        // Dedup: skip currentInput when selectedText already covers this element.
-        let currentInputApplies = Self.shouldEmitCurrentInput(
-            selectedText: selectedText,
-            value: value,
-            editable: editable
-        )
+        let currentInputApplies = Self.shouldEmitCurrentInput(value: value, editable: editable)
 
         if let textSelectionEnvelope = textSelection.flatMap({ Self.makeTextSelectionEnvelope(snapshot: $0, pid: pid) }) {
             envelopes.append(textSelectionEnvelope)
@@ -258,7 +281,7 @@ public final class GeneralProbe {
             envelopes.append(Self.makeSelectedTextEnvelope(text: s, pid: pid))
         }
         if currentInputApplies {
-            envelopes.append(Self.makeCurrentInputEnvelope(value: value ?? "", pid: pid, target: focusedLocator))
+            envelopes.append(Self.makeCurrentInputEnvelope(value: value, pid: pid, target: focusedLocator))
         }
 
         let items = readSelectedItems(element)
@@ -288,7 +311,18 @@ public final class GeneralProbe {
         guard let selectedText = Self.nonEmpty(selectedText) else { return nil }
         guard let selectedRange = readSingleSelectedTextRange(element) else { return nil }
 
-        if let valueContext = readString(element, attribute: kAXValueAttribute as CFString),
+        if let rangedContext = readRangedTextContext(element, selectedRange: selectedRange) {
+            return Self.makeTextSelectionSnapshot(
+                context: rangedContext.context,
+                selectedText: selectedText,
+                selectedRange: selectedRange,
+                contextRange: rangedContext.range
+            )
+        }
+
+        let fullValueRange = readFullTextRange(element)
+        if Self.shouldReadFullValueForTextSelectionContext(characterCount: fullValueRange?.length),
+           let valueContext = readString(element, attribute: kAXValueAttribute as CFString),
            let snapshot = Self.makeTextSelectionSnapshot(
                 context: valueContext,
                 selectedText: selectedText,
@@ -298,15 +332,7 @@ public final class GeneralProbe {
             return snapshot
         }
 
-        guard let rangedContext = readRangedTextContext(element, selectedRange: selectedRange) else {
-            return nil
-        }
-        return Self.makeTextSelectionSnapshot(
-            context: rangedContext.context,
-            selectedText: selectedText,
-            selectedRange: selectedRange,
-            contextRange: rangedContext.range
-        )
+        return nil
     }
 
     private func readSingleSelectedTextRange(_ element: AXUIElement) -> CFRange? {
@@ -346,14 +372,22 @@ public final class GeneralProbe {
     private func readRangedTextContext(_ element: AXUIElement, selectedRange: CFRange) -> RangedTextContext? {
         if let visibleRange = readCFRange(element, attribute: kAXVisibleCharacterRangeAttribute as CFString),
            Self.contains(outer: visibleRange, inner: selectedRange),
-           let context = readStringForRange(element, range: visibleRange) {
-            return RangedTextContext(context: context, range: visibleRange)
+           let boundedRange = Self.boundedTextSelectionContextRange(
+                selectedRange: selectedRange,
+                contextRange: visibleRange
+           ),
+           let context = readStringForRange(element, range: boundedRange) {
+            return RangedTextContext(context: context, range: boundedRange)
         }
 
         if let fullRange = readFullTextRange(element),
            Self.contains(outer: fullRange, inner: selectedRange),
-           let context = readStringForRange(element, range: fullRange) {
-            return RangedTextContext(context: context, range: fullRange)
+           let boundedRange = Self.boundedTextSelectionContextRange(
+                selectedRange: selectedRange,
+                contextRange: fullRange
+           ),
+           let context = readStringForRange(element, range: boundedRange) {
+            return RangedTextContext(context: context, range: boundedRange)
         }
 
         return nil
@@ -566,6 +600,8 @@ public final class GeneralProbe {
         }
     }
 
+    internal nonisolated static let maxTextSelectionContextUTF16Length = 16_384
+
     internal nonisolated static func makeTextSelectionEnvelope(
         snapshot: TextSelectionSnapshot,
         pid: pid_t
@@ -602,15 +638,15 @@ public final class GeneralProbe {
         selectedRange: CFRange,
         contextRange: CFRange
     ) -> TextSelectionSnapshot? {
-        guard contains(outer: contextRange, inner: selectedRange) else { return nil }
-        let relativeRange = CFRange(
-            location: selectedRange.location - contextRange.location,
-            length: selectedRange.length
-        )
-        let snapshot = TextSelectionSnapshot(
+        guard let windowed = boundedTextSelectionContext(
             context: context,
+            selectedRange: selectedRange,
+            contextRange: contextRange
+        ) else { return nil }
+        let snapshot = TextSelectionSnapshot(
+            context: windowed.context,
             selectedText: selectedText,
-            range: relativeRange
+            range: windowed.selectedRange
         )
         guard annotatedContext(
             context: snapshot.context,
@@ -620,6 +656,53 @@ public final class GeneralProbe {
             return nil
         }
         return snapshot
+    }
+
+    private nonisolated static func boundedTextSelectionContext(
+        context: String,
+        selectedRange: CFRange,
+        contextRange: CFRange
+    ) -> (context: String, selectedRange: CFRange)? {
+        guard contains(outer: contextRange, inner: selectedRange) else { return nil }
+
+        let ns = context as NSString
+        guard ns.length == contextRange.length else { return nil }
+
+        guard let boundedRange = boundedTextSelectionContextRange(
+            selectedRange: selectedRange,
+            contextRange: contextRange,
+            maxLength: maxTextSelectionContextUTF16Length
+        ) else { return nil }
+
+        let contextSliceRange = NSRange(
+            location: boundedRange.location - contextRange.location,
+            length: boundedRange.length
+        )
+        let boundedContext = ns.substring(with: contextSliceRange)
+        let selectedRangeInBoundedContext = CFRange(
+            location: selectedRange.location - boundedRange.location,
+            length: selectedRange.length
+        )
+        return (boundedContext, selectedRangeInBoundedContext)
+    }
+
+    private nonisolated static func boundedTextSelectionContextRange(
+        selectedRange: CFRange,
+        contextRange: CFRange,
+        maxLength: Int = maxTextSelectionContextUTF16Length
+    ) -> CFRange? {
+        guard contains(outer: contextRange, inner: selectedRange) else { return nil }
+        guard contextRange.length > maxLength else { return contextRange }
+        guard selectedRange.length < maxLength else {
+            return selectedRange
+        }
+
+        let remaining = maxLength - selectedRange.length
+        let preferredStart = selectedRange.location - remaining / 2
+        let minStart = contextRange.location
+        let maxStart = contextRange.location + contextRange.length - maxLength
+        let start = min(max(preferredStart, minStart), maxStart)
+        return CFRange(location: start, length: maxLength)
     }
 
     private nonisolated static func annotatedContext(
@@ -660,13 +743,14 @@ public final class GeneralProbe {
     }
 
     internal nonisolated static func makeCurrentInputEnvelope(
-        value: String,
+        value: String?,
         pid: pid_t,
         target: AXElementLocator? = nil
     ) -> BehaviorEnvelope {
-        var payload: [String: JSONValue] = [
-            "value": .string(PayloadSizeGuard.clamp(value))
-        ]
+        var payload: [String: JSONValue] = [:]
+        if let value {
+            payload["value"] = .string(PayloadSizeGuard.clamp(value))
+        }
         if let target {
             payload["target"] = locatorJSON(target)
         }
@@ -727,12 +811,24 @@ public final class GeneralProbe {
     }
 
     internal nonisolated static func shouldEmitCurrentInput(
-        selectedText: String?,
         value: String?,
         editable: Bool
     ) -> Bool {
-        let hasSelectedText = !(selectedText ?? "").isEmpty
-        return !hasSelectedText && editable
+        editable
+    }
+
+    internal nonisolated static func shouldReadCurrentInputValue(
+        editable: Bool,
+        hasExactTextSelection: Bool
+    ) -> Bool {
+        editable && !hasExactTextSelection
+    }
+
+    internal nonisolated static func shouldReadFullValueForTextSelectionContext(
+        characterCount: Int?
+    ) -> Bool {
+        guard let characterCount else { return true }
+        return characterCount <= maxTextSelectionContextUTF16Length
     }
 
     internal nonisolated static func shouldRetainFocusedElementWhenFocusReadFails(

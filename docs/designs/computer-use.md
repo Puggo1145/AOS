@@ -12,7 +12,7 @@
 | 打包形态 | SwiftPM package | 无需 Xcode 工程，与 AOS shell 架构一致 |
 | 屏幕捕获 | ScreenCaptureKit (`SCStream`) | 抓非前台窗口，按 pid + windowId 定位 |
 | 鼠标 / 键盘投递 | SkyLight `SLEventPostToPid`（auth-signed）→ `CGEvent.postToPid` | per-pid 投递覆盖后台 Chromium / AppKit 操作，不移动用户真实光标 |
-| 焦点抑制 | AXEnablementAssertion + SyntheticAppFocusEnforcer + SystemFocusStealPreventer | 三层叠加保证 frontmost app 全程不变 |
+| 焦点抑制 | AXWebAccessibilityActivator + SyntheticAppFocusEnforcer + SystemFocusStealPreventer | 三层叠加保证 frontmost app 全程不变 |
 | 元素定位 | Accessibility API (AX) 为主 | 语义化、稳定；无 AX 时才回退坐标 |
 | 状态键 | `(pid, windowId)` | 同 pid 多窗口的 elementIndex 不互相污染 |
 | 对外接口 | in-process Swift API，通过 Shell RPC Dispatcher 暴露为 `computerUse.*` JSON-RPC 方法 | 与 OS Sense 共用 Shell 进程，权限与签名统一 |
@@ -28,10 +28,9 @@ packages/
     Sources/AOSComputerUseKit/
       ComputerUseService.swift           # 对外门面，编排所有操作
       Focus/
-        AXEnablementAssertion.swift      # 写 AXManualAccessibility / AXEnhancedUserInterface
         SyntheticAppFocusEnforcer.swift  # 写 AXFocused / AXMain，做完还原
         SystemFocusStealPreventer.swift  # 监听 didActivateApplication，反向夺回焦点
-        FocusGuard.swift                 # 编排上面三层
+        FocusGuard.swift                 # 编排共享 Chromium AX 激活 + 焦点抑制
       Input/
         SkyLightEventPost.swift          # SLEventPostToPid + SLSEventAuthenticationMessage SPI 桥接
         FocusWithoutRaise.swift          # yabai 式 PSN 事件记录（不重排的 AppKit 激活）
@@ -66,7 +65,7 @@ Kit 单一职责：接收参数 → 操作 macOS → 返回结构化结果。不
 
 每个会触发 AppKit / Chromium 反应的操作都包在 `FocusGuard.withFocusSuppressed(pid:element:)` 里，三层叠加：
 
-1. **AXEnablementAssertion** — 在目标 app root 写 `AXManualAccessibility = true` 和 `AXEnhancedUserInterface = true`。Chromium-family（Slack、Discord、VS Code、Cursor、Chrome、Edge、Notion、Linear、Figma desktop 等所有 Electron）默认关闭 web AX tree 当作省电优化，必须写入这两个属性才会构建完整树。每次 snapshot 重写一次，因为 Chromium 在 backgrounding / tab 切换时会重置该属性。Native AX app 写入会被静默拒绝，进入负缓存避免重复尝试。
+1. **AXWebAccessibilityActivator** — 由 `AOSAXSupport` 提供，在目标 app root 写 `AXManualAccessibility = true` 和 `AXEnhancedUserInterface = true`，并保留 no-op `AXObserver`。Chromium-family（Slack、Discord、VS Code、Cursor、Chrome、Edge、Notion、Linear、Figma desktop 等所有 Electron）默认关闭 web AX tree 当作省电优化，必须写入这两个属性才会构建完整树。每次 snapshot 重写一次，因为 Chromium 在 backgrounding / tab 切换时会重置该属性。Native AX app 写入会被拒绝，进入负缓存避免重复尝试。OS Sense 复用同一基础能力，但只做 focused element 轻量读取，不做 Computer Use 的深层 tree walk。
 
 2. **SyntheticAppFocusEnforcer** — 在 AX 动作之前向目标 window 写 `AXFocused=true` 和 `AXMain=true`，向元素写 `AXFocused=true`，让 AppKit 内部状态机相信"我有焦点"。动作完成后还原原值。最小化窗口跳过此层（写 AXFocused 会触发 Chrome 自动 deminiaturize）。
 
@@ -133,14 +132,14 @@ public func _AXUIElementGetWindow(_ element: AXUIElement, _ wid: UnsafeMutablePo
 
 ### Chromium / Electron AX 激活
 
-每个 pid 第一次 snapshot 时执行：
+每个 pid 第一次 snapshot 时通过 `AOSAXSupport.AXWebAccessibilityActivator` 执行：
 
-1. `AXEnablementAssertion.assert(pid, root)` 写入 `AXManualAccessibility` 和 `AXEnhancedUserInterface` 两个属性。
+1. 写入 `AXManualAccessibility` 和 `AXEnhancedUserInterface` 两个属性。
 2. 创建 `AXObserver`，`AXObserverAddNotification` 订阅 `kAXFocusedUIElementChangedNotification` 等若干 notification（callback 为 no-op，仅靠 observer 存在性向 Chromium 信号"有 AX client 在听"）。
 3. 把 observer 的 runloop source 挂到 **Shell 进程的 main runloop**（`CFRunLoopGetMain`）。Chromium AX pipeline 只在该 source 持续被 service 期间保持开启，挂到临时 task runloop 会在 idle 时被 Chromium 拆掉树。
-4. `CFRunLoopRunInMode(.defaultMode, 0.5, false)` 同步 pump 500ms，等 Chromium 把 web AX tree 构建完后再 walk。
+4. 最多等待 500ms（25ms 间隔）直到 root 下出现 `AXWebArea`，等 Chromium 把 web AX tree 构建完后再 walk。
 
-后续 snapshot 跳过 observer 注册和 runloop pump，但 enablement 属性每次都重写一次。Observer 引用存在 `StateCache` 的 per-pid 表里保持 retain，进程退出时随之释放。
+后续 snapshot 跳过 observer 注册，但 enablement 属性每次都重写一次。Observer 引用由共享 activator 的 per-pid 表保持 retain，进程退出时随之释放。
 
 ### Spaces 检测
 

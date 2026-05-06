@@ -103,6 +103,39 @@ test("formatCitedContext renders exact text selections as marked context", () =>
   expect(block).not.toContain('"annotatedContext"');
 });
 
+test("formatCitedContext keeps text selection and current input when both are cited", () => {
+  const block = formatCitedContext({
+    behaviors: [
+      {
+        kind: "general.textSelection",
+        citationKey: "general.textSelection:4242",
+        displaySummary: "Selected text",
+        payload: {
+          context: "before selected after",
+          selectedText: "selected",
+          range: { location: 7, length: 8, unit: "utf16" },
+          annotatedContext: "before [[SELECTED_START]]selected[[SELECTED_END]] after",
+          source: "axRange",
+        },
+      },
+      {
+        kind: "general.currentInput",
+        citationKey: "general.currentInput:4242",
+        displaySummary: "Current input",
+        payload: {
+          value: "before selected after",
+          target: { locatorId: "axloc_input", pathFromWindow: [{ role: "AXTextArea" }] },
+        },
+      },
+    ],
+  });
+
+  expect(block).toContain("general.textSelection");
+  expect(block).toContain("before [[SELECTED_START]]selected[[SELECTED_END]] after");
+  expect(block).toContain("general.currentInput");
+  expect(block).toContain("axloc_input");
+});
+
 test("formatCitedContext escapes XML-significant chars in marked text selection context", () => {
   const block = formatCitedContext({
     behaviors: [

@@ -1,3 +1,4 @@
+import AOSAXSupport
 import Foundation
 import AppKit
 import os
@@ -46,6 +47,7 @@ public final class SenseStore {
     private let permissionsService: PermissionsService
     private let registry: AdapterRegistry
     private let hub: AXObserverHub
+    private let webAccessibilityActivator: AXWebAccessibilityActivator
     private let screenMirror: ScreenMirror
 
     private var windowMirror: WindowMirror?
@@ -83,6 +85,7 @@ public final class SenseStore {
         self.permissionsService = permissionsService
         self.registry = registry
         self.hub = AXObserverHub()
+        self.webAccessibilityActivator = AXWebAccessibilityActivator()
         self.screenMirror = ScreenMirror()
     }
 
@@ -92,7 +95,10 @@ public final class SenseStore {
 
         // Producers are constructed once; their lifecycles are driven by
         // app/permission changes, not by start/stop pairs.
-        let probe = GeneralProbe(hub: hub) { [weak self] envelopes in
+        let probe = GeneralProbe(
+            hub: hub,
+            webAccessibilityActivator: webAccessibilityActivator
+        ) { [weak self] envelopes in
             self?.applyBehaviors(source: "general", envelopes: envelopes)
         }
         self.generalProbe = probe
@@ -155,6 +161,17 @@ public final class SenseStore {
             Task {
                 await adapter.refresh()
             }
+        }
+    }
+
+    /// Schedule the expensive AX refresh after the current main-actor turn.
+    /// Notch opening uses this path so the panel can render its opened state
+    /// before any app-provided AX value read has a chance to block the UI.
+    public func refreshGeneralProbeDeferred() {
+        Task { @MainActor [weak self] in
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            self?.refreshGeneralProbe()
         }
     }
 
