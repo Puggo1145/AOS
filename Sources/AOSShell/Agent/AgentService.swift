@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import AOSComputerUseKit
 import AOSRPCSchema
 
 // MARK: - AgentStatus
@@ -645,6 +646,7 @@ public final class AgentService {
     /// truth means the UI updates only when the sidecar confirms.
     public func resetSession() async {
         guard let sessionId = currentSessionId else { return }
+        ActiveAppUseIndicatorOverlay.forceClear()
         _ = try? await rpc.request(
             method: RPCMethod.agentReset,
             params: AgentResetParams(sessionId: sessionId),
@@ -654,6 +656,7 @@ public final class AgentService {
 
     public func cancel() async {
         guard let sessionId = currentSessionId, let turnId = currentTurn else { return }
+        ActiveAppUseIndicatorOverlay.forceClear()
         _ = try? await rpc.request(
             method: RPCMethod.agentCancel,
             params: AgentCancelParams(sessionId: sessionId, turnId: turnId),
@@ -696,6 +699,7 @@ public final class AgentService {
     }
 
     internal func handleConversationReset(_ p: ConversationResetParams) {
+        forceClearActiveAppUseIndicatorIfActiveSession(p.sessionId)
         sessionStore.mirrors[p.sessionId]?.applyConversationReset()
     }
 
@@ -712,10 +716,14 @@ public final class AgentService {
     }
 
     internal func handleStatus(_ p: UIStatusParams) {
+        if p.status == .done {
+            forceClearActiveAppUseIndicatorIfActiveSession(p.sessionId)
+        }
         sessionStore.mirror(for: p.sessionId).applyStatus(p)
     }
 
     internal func handleError(_ p: UIErrorParams) {
+        forceClearActiveAppUseIndicatorIfActiveSession(p.sessionId)
         sessionStore.mirror(for: p.sessionId).applyError(p)
     }
 
@@ -750,5 +758,10 @@ public final class AgentService {
                 startedAt: 0
             )
         ))
+    }
+
+    private func forceClearActiveAppUseIndicatorIfActiveSession(_ sessionId: String) {
+        guard sessionId == currentSessionId else { return }
+        ActiveAppUseIndicatorOverlay.forceClear()
     }
 }

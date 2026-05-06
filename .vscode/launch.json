@@ -119,6 +119,26 @@
             "target": "AOSShell",
             "configuration": "release",
             "preLaunchTask": "swift: Build Release AOSShell"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:aos}",
+            "name": "Debug AOSCoordinateTarget",
+            "target": "AOSCoordinateTarget",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug AOSCoordinateTarget"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:aos}",
+            "name": "Release AOSCoordinateTarget",
+            "target": "AOSCoordinateTarget",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release AOSCoordinateTarget"
         }
     ]
 }

@@ -6,6 +6,22 @@ import AOSOSSenseKit
 @MainActor
 @Suite("DevComputerUseWorkbench")
 struct DevComputerUseWorkbenchTests {
+    @Test("Computer Use dev pages expose focused sub pages including indicator testing")
+    func computerUseDevPagesExposeFocusedSubPages() {
+        #expect(DevComputerUsePage.allCases.map(\.title) == [
+            "Target Selection",
+            "State",
+            "Element Click",
+            "Coordinates",
+            "Coordinate Reliability",
+            "Keyboard",
+            "Active App Indicator",
+            "List Apps",
+            "Doctor",
+        ])
+        #expect(DevComputerUsePage.defaultSelection == nil)
+    }
+
     @Test("changing selected app clears window and captured state")
     func changingSelectedAppClearsDependentState() {
         let service = ComputerUseService()

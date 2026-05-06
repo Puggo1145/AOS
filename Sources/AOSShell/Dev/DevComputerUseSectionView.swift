@@ -12,6 +12,7 @@ import AOSComputerUseKit
 
 struct DevComputerUseSectionView: View {
     @State private var workbench: DevComputerUseWorkbench
+    @State private var selectedPage: DevComputerUsePage? = DevComputerUsePage.defaultSelection
 
     init(service: ComputerUseService, doctorService: ComputerUseDoctorService) {
         _workbench = State(
@@ -23,7 +24,7 @@ struct DevComputerUseSectionView: View {
     }
 
     var body: some View {
-        ScrollView {
+        VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 16) {
                 header
                 if let message = workbench.lastError {
@@ -31,17 +32,24 @@ struct DevComputerUseSectionView: View {
                 } else if let message = workbench.lastResult {
                     statusBanner(message, systemImage: "checkmark.circle.fill", tint: .green)
                 }
-                listAppsSection
-                targetSection
-                stateSection
-                elementClickSection
-                coordinateSection
-                coordinateReliabilitySection
-                keyboardSection
-                doctorSection
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if let selectedPage {
+                        pageHeader(selectedPage)
+                        pageContent(selectedPage)
+                    } else {
+                        sectionIndex
+                    }
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .navigationTitle("Computer Use")
         .task {
@@ -50,6 +58,88 @@ struct DevComputerUseSectionView: View {
         }
         .onChange(of: workbench.selectedAppIdentity) { _, _ in
             Task { await workbench.refreshWindows() }
+        }
+    }
+
+    @ViewBuilder
+    private func pageContent(_ page: DevComputerUsePage) -> some View {
+        switch page {
+        case .target:
+            targetSection
+        case .state:
+            stateSection
+        case .elementClick:
+            elementClickSection
+        case .coordinates:
+            coordinateSection
+        case .coordinateReliability:
+            coordinateReliabilitySection
+        case .keyboard:
+            keyboardSection
+        case .activeAppIndicator:
+            activeAppIndicatorSection
+        case .listApps:
+            listAppsSection
+        case .doctor:
+            doctorSection
+        }
+    }
+
+    private var sectionIndex: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Sections")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 220), spacing: 10)],
+                alignment: .leading,
+                spacing: 10
+            ) {
+                ForEach(DevComputerUsePage.allCases) { page in
+                    Button {
+                        selectedPage = page
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: page.systemImage)
+                                .frame(width: 18)
+                                .foregroundStyle(.secondary)
+                                .accessibilityHidden(true)
+                            Text(page.title)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Image(systemName: "chevron.right")
+                                .foregroundStyle(.tertiary)
+                                .accessibilityHidden(true)
+                        }
+                        .frame(minHeight: 44)
+                        .padding(.horizontal, 10)
+                    }
+                    .buttonStyle(.plain)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Color.secondary.opacity(0.08))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(Color.secondary.opacity(0.12))
+                    )
+                }
+            }
+        }
+    }
+
+    private func pageHeader(_ page: DevComputerUsePage) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                selectedPage = nil
+            } label: {
+                Label("Sections", systemImage: "chevron.left")
+            }
+            Divider()
+                .frame(height: 18)
+            Label(page.title, systemImage: page.systemImage)
+                .font(.headline)
         }
     }
 
@@ -361,6 +451,36 @@ struct DevComputerUseSectionView: View {
                     Label("Press Key", systemImage: "keyboard")
                 }
                 .disabled(!workbench.hasTarget || workbench.isRunning)
+            }
+        }
+    }
+
+    private var activeAppIndicatorSection: some View {
+        devGroup("Active App Indicator") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Button {
+                        Task { await workbench.showActiveAppUseIndicator() }
+                    } label: {
+                        Label("Show", systemImage: "eye")
+                    }
+                    .disabled(!workbench.hasTarget || workbench.isRunning)
+
+                    Button {
+                        Task { await workbench.closeActiveAppUseIndicator() }
+                    } label: {
+                        Label("Close", systemImage: "xmark.circle")
+                    }
+                    .disabled(workbench.isRunning)
+
+                    if let summary = workbench.activeAppUseIndicatorSummary {
+                        Text(summary)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                resultBlock(workbench.enumerationSummary)
             }
         }
     }

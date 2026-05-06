@@ -24,6 +24,52 @@ struct DevComputerUseWindowRow: Identifiable, Hashable {
     }
 }
 
+// MARK: - DevComputerUsePage
+
+enum DevComputerUsePage: String, CaseIterable, Identifiable, Hashable {
+    case target
+    case state
+    case elementClick
+    case coordinates
+    case coordinateReliability
+    case keyboard
+    case activeAppIndicator
+    case listApps
+    case doctor
+
+    static let defaultSelection: DevComputerUsePage? = nil
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .target: return "Target Selection"
+        case .state: return "State"
+        case .elementClick: return "Element Click"
+        case .coordinates: return "Coordinates"
+        case .coordinateReliability: return "Coordinate Reliability"
+        case .keyboard: return "Keyboard"
+        case .activeAppIndicator: return "Active App Indicator"
+        case .listApps: return "List Apps"
+        case .doctor: return "Doctor"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .target: return "scope"
+        case .state: return "camera.viewfinder"
+        case .elementClick: return "cursorarrow.click"
+        case .coordinates: return "point.topleft.down.curvedto.point.bottomright.up"
+        case .coordinateReliability: return "target"
+        case .keyboard: return "keyboard"
+        case .activeAppIndicator: return "rectangle.inset.filled.and.person.filled"
+        case .listApps: return "square.grid.2x2"
+        case .doctor: return "stethoscope"
+        }
+    }
+}
+
 // MARK: - DevComputerUseWorkbench
 
 @MainActor
@@ -44,6 +90,7 @@ final class DevComputerUseWorkbench {
     var selectedWindowId: CGWindowID? {
         didSet {
             guard oldValue != selectedWindowId else { return }
+            clearPinnedActiveAppUseIndicator()
             clearCapturedState()
         }
     }
@@ -89,6 +136,8 @@ final class DevComputerUseWorkbench {
     var key: String = "return"
     var keyModifiers: String = ""
 
+    var activeAppUseIndicatorSummary: String?
+
     var lastResult: String?
     var lastError: String?
     var isRunning: Bool = false
@@ -121,6 +170,7 @@ final class DevComputerUseWorkbench {
     }
 
     func clearWindowSelection() {
+        clearPinnedActiveAppUseIndicator()
         windows = []
         selectedWindowId = nil
         clearCapturedState()
@@ -133,6 +183,12 @@ final class DevComputerUseWorkbench {
         stateSummary = nil
         coordinateReliabilityResults = []
         coordinateReliabilitySummary = nil
+    }
+
+    func clearPinnedActiveAppUseIndicator() {
+        guard activeAppUseIndicatorSummary != nil else { return }
+        ActiveAppUseIndicatorOverlay.forceClear()
+        activeAppUseIndicatorSummary = nil
     }
 }
 

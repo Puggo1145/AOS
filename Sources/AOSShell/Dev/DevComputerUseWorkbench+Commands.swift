@@ -217,6 +217,26 @@ extension DevComputerUseWorkbench {
         }
     }
 
+    func showActiveAppUseIndicator() async {
+        await run("active app indicator show") {
+            let pid = try requirePid()
+            let windowId = try requireWindowId()
+            ActiveAppUseIndicatorOverlay.pin(
+                ActiveAppUseTarget(pid: pid, windowId: windowId)
+            )
+            activeAppUseIndicatorSummary = "visible pid=\(pid) windowId=\(windowId)"
+            lastResult = "active app indicator show OK"
+        }
+    }
+
+    func closeActiveAppUseIndicator() async {
+        await run("active app indicator close") {
+            ActiveAppUseIndicatorOverlay.forceClear()
+            activeAppUseIndicatorSummary = nil
+            lastResult = "active app indicator close OK"
+        }
+    }
+
     func refreshDoctor() async {
         await doctorService.refresh()
     }
