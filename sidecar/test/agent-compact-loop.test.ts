@@ -248,6 +248,61 @@ test("auto-compact runs at runTurn entry when remaining context is below thresho
   expect(session.conversation.turns[0]!.id).toBe("T_active");
 });
 
+test("queued submit during auto-compact waits for the active turn's first reply", async () => {
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const { manager, session, sessionId } = makeSessionWithHistory(3);
+  registerAgentHandlers(dispatcher, { manager });
+  session.conversation.recordTotalTokens(90_000);
+
+  let finishCompact: () => void = () => {};
+  scriptedRounds.push((model) => {
+    const s = new AssistantMessageEventStream();
+    queueMicrotask(() => {
+      finishCompact = () => {
+        const msg = fakeAssistant(model, "Intent: active. Progress: compacted.");
+        s.push({ type: "text_delta", contentIndex: 0, delta: "Intent: active. Progress: compacted.", partial: msg });
+        s.push({ type: "done", reason: "stop", message: msg });
+        s.end();
+      };
+    });
+    return s;
+  });
+  scriptedRounds.push(emitTextStream("active reply"));
+  scriptedRounds.push(emitTextStream("queued reply"));
+
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "agent.submit",
+    params: { sessionId, turnId: "T_active", prompt: "first prompt", citedContext: {} },
+  });
+  await flush(40);
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "agent.submit",
+    params: { sessionId, turnId: "T_queued", prompt: "second prompt", citedContext: {} },
+  });
+  await flush(40);
+
+  expect(captured.notifications.filter((n) => n.method === "conversation.turnStarted").map((n) => n.params.turn.id)).toEqual([
+    "T_active",
+  ]);
+  expect(providerCalls).toHaveLength(1);
+
+  finishCompact();
+  await flush(160);
+
+  expect(captured.notifications.filter((n) => n.method === "conversation.turnStarted").map((n) => n.params.turn.id)).toEqual([
+    "T_active",
+    "T_queued",
+  ]);
+  expect(session.conversation.turns.map((t) => [t.id, t.reply, t.status])).toEqual([
+    ["T_active", "active reply", "done"],
+    ["T_queued", "queued reply", "done"],
+  ]);
+});
+
 test("auto-compact does not run when remaining context is comfortably above threshold", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, sessionId } = makeSessionWithHistory(3);
@@ -503,4 +558,61 @@ test("agent.compact: rejects when a turn is in flight on the session", async () 
   expect(providerCalls).toHaveLength(1);
   // No ui.compact emitted — the handler bails before lifecycle frames.
   expect(captured.notifications.filter((n) => n.method === "ui.compact")).toEqual([]);
+});
+
+test("agent.submit during manual compact waits until compact finishes before starting the turn", async () => {
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const { manager, session, sessionId } = makeSessionWithHistory(2);
+  registerAgentHandlers(dispatcher, { manager });
+
+  let finishCompact: () => void = () => {};
+  scriptedRounds.push((model) => {
+    const s = new AssistantMessageEventStream();
+    queueMicrotask(() => {
+      finishCompact = () => {
+        const msg = fakeAssistant(model, "manual summary");
+        s.push({ type: "text_delta", contentIndex: 0, delta: "manual summary", partial: msg });
+        s.push({ type: "done", reason: "stop", message: msg });
+        s.end();
+      };
+    });
+    return s;
+  });
+  scriptedRounds.push(emitTextStream("queued reply"));
+
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "agent.compact",
+    params: { sessionId },
+  });
+  await flush(40);
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "agent.submit",
+    params: { sessionId, turnId: "T_after_compact", prompt: "continue after compact", citedContext: {} },
+  });
+  await flush(40);
+
+  expect(captured.notifications.filter((n) => n.method === "conversation.turnStarted")).toEqual([]);
+  expect(providerCalls).toHaveLength(1);
+
+  finishCompact();
+  await flush(120);
+
+  const compactPhases = captured.notifications
+    .filter((n) => n.method === "ui.compact")
+    .map((n) => n.params.phase);
+  expect(compactPhases).toEqual(["started", "done"]);
+  const started = captured.notifications.filter((n) => n.method === "conversation.turnStarted");
+  expect(started).toHaveLength(1);
+  expect(started[0].params.turn).toMatchObject({
+    id: "T_after_compact",
+    prompt: "continue after compact",
+  });
+  expect(providerCalls).toHaveLength(2);
+  expect(session.conversation.turns.map((t) => [t.id, t.status])).toEqual([
+    ["T_after_compact", "done"],
+  ]);
 });

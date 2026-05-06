@@ -8,7 +8,14 @@
 import { Conversation } from "../conversation";
 import { TurnRegistry } from "../registry";
 import { TodoManager } from "../todos/manager";
+import type { CitedContext } from "../../rpc/rpc-types";
 import type { SessionId, SessionInfo, SessionListItem } from "./types";
+
+export interface PendingSteerPrompt {
+  turnId: string;
+  prompt: string;
+  citedContext: CitedContext;
+}
 
 export class Session {
   readonly id: SessionId;
@@ -19,6 +26,8 @@ export class Session {
   /// tool mutates this; the agent loop subscribes and projects every
   /// update onto the wire as `ui.todo`.
   readonly todos: TodoManager;
+  private _pendingSteer: PendingSteerPrompt | undefined;
+  private _compacting = false;
   /// Count of consecutive tool-call rounds in the in-flight (or most
   /// recently completed) turn during which the assistant produced no
   /// visible text. The agent loop is the sole writer; ambient providers
@@ -43,6 +52,37 @@ export class Session {
 
   get silentToolRounds(): number {
     return this._silentToolRounds;
+  }
+
+  get pendingSteer(): PendingSteerPrompt | undefined {
+    return this._pendingSteer;
+  }
+
+  get isCompacting(): boolean {
+    return this._compacting;
+  }
+
+  setCompacting(compacting: boolean): void {
+    this._compacting = compacting;
+  }
+
+  queueSteer(input: PendingSteerPrompt): void {
+    if (this._pendingSteer) {
+      throw new Error(`session ${this.id} already has a queued steer prompt`);
+    }
+    this._pendingSteer = input;
+  }
+
+  consumeSteer(): PendingSteerPrompt | undefined {
+    const next = this._pendingSteer;
+    this._pendingSteer = undefined;
+    return next;
+  }
+
+  cancelSteer(turnId: string): boolean {
+    if (this._pendingSteer?.turnId !== turnId) return false;
+    this._pendingSteer = undefined;
+    return true;
   }
 
   setSilentToolRounds(n: number): void {

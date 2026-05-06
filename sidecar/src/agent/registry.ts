@@ -35,6 +35,22 @@ export class TurnRegistry {
     this.turns.delete(turnId);
   }
 
+  /// Move the sole active controller to a new turn id when an in-flight
+  /// agent loop materializes a queued steer prompt as the next visible turn.
+  /// Fails loudly on missing source or duplicate destination; those both
+  /// indicate a broken loop/registry invariant.
+  replace(oldTurnId: string, newTurnId: string): void {
+    const c = this.turns.get(oldTurnId);
+    if (!c) throw new Error(`turnId not active: ${oldTurnId}`);
+    if (this.turns.has(newTurnId)) throw new Error(`turnId already active: ${newTurnId}`);
+    this.turns.delete(oldTurnId);
+    this.turns.set(newTurnId, c);
+  }
+
+  clear(): void {
+    this.turns.clear();
+  }
+
   /// Abort every live turn. Used by `agent.reset` to ensure no stream
   /// continues writing into a conversation that's about to be wiped.
   abortAll(): void {

@@ -61,15 +61,13 @@ struct ComposerCard: View {
     /// Enter is reserved for command execution, and submitting a
     /// literal `/compact` as a prompt is never desirable.
     private var canSubmit: Bool {
-        !inputModel.isTextEmpty && !isAgentBusy && !palette.isActive
+        !inputModel.isTextEmpty && !agentService.hasQueuedPrompt && !palette.isActive
     }
 
     /// The agent is mid-turn — either streaming tokens (`working`) or
     /// waiting on a tool round (`waiting`). In this state the trailing
-    /// circular button flips to a stop affordance and clicking it cancels
-    /// the in-flight turn instead of submitting a new prompt. Send via
-    /// Enter is also gated off so a stray Return keystroke can't enqueue
-    /// behind a running turn.
+    /// circular button flips to a stop affordance unless a steer prompt is
+    /// already queued, in which case the affordance cancels the queued send.
     private var isAgentBusy: Bool {
         switch agentService.status {
         case .working, .waiting: return true
@@ -115,31 +113,57 @@ struct ComposerCard: View {
     // MARK: - Input row
 
     private var inputRow: some View {
-        ZStack(alignment: .topLeading) {
-            // Custom-overlay placeholder. Drawing it ourselves keeps the
-            // baseline pinned across focus transitions; AppKit's
-            // placeholder shifts ~1pt when the field editor swaps in,
-            // which reads as a flicker.
-            Text("What can I do for you?")
-                .font(.system(size: 15))
-                .foregroundStyle(.white.opacity(inputModel.isStorageEmpty ? 0.35 : 0))
-                .padding(.vertical, 4)
-                .allowsHitTesting(false)
-            ChipInputView(
-                model: inputModel,
-                font: NSFont.systemFont(ofSize: 15),
-                textColor: .white,
-                onSubmit: { submit() },
-                onFocusChange: { inputFocused = $0 },
-                paletteIsActive: { palette.isActive },
-                paletteNavigate: { palette.navigate($0) },
-                paletteEnter: { viewModel.executeHighlightedCommand() },
-                paletteEscape: { palette.deactivate() }
-            )
+        Group {
+            if let queued = agentService.queuedPrompt {
+                queuedPromptView(queued)
+            } else {
+                ZStack(alignment: .topLeading) {
+                    // Custom-overlay placeholder. Drawing it ourselves keeps the
+                    // baseline pinned across focus transitions; AppKit's
+                    // placeholder shifts ~1pt when the field editor swaps in,
+                    // which reads as a flicker.
+                    Text("What can I do for you?")
+                        .font(.system(size: 15))
+                        .foregroundStyle(.white.opacity(inputModel.isStorageEmpty ? 0.35 : 0))
+                        .padding(.vertical, 4)
+                        .allowsHitTesting(false)
+                    ChipInputView(
+                        model: inputModel,
+                        font: NSFont.systemFont(ofSize: 15),
+                        textColor: .white,
+                        onSubmit: { submit() },
+                        onFocusChange: { inputFocused = $0 },
+                        paletteIsActive: { palette.isActive },
+                        paletteNavigate: { palette.navigate($0) },
+                        paletteEnter: { viewModel.executeHighlightedCommand() },
+                        paletteEscape: { palette.deactivate() }
+                    )
+                }
+            }
         }
         .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
         .padding(.vertical, 2)
         .accessibilityLabel(Text("Prompt input"))
+    }
+
+    private func queuedPromptView(_ queued: QueuedPrompt) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: "clock")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.55))
+                .accessibilityHidden(true)
+            Text("Queued")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.7))
+            Text(queued.prompt)
+                .font(.system(size: 15))
+                .foregroundStyle(.white.opacity(0.9))
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: - Function row
@@ -233,7 +257,9 @@ struct ComposerCard: View {
 
     @ViewBuilder
     private var sendButton: some View {
-        if isAgentBusy {
+        if agentService.hasQueuedPrompt {
+            cancelQueuedButton
+        } else if isAgentBusy {
             stopButton
         } else {
             submitButton
@@ -275,6 +301,18 @@ struct ComposerCard: View {
         }
         .buttonStyle(.notchPressable)
         .accessibilityLabel(Text("Stop agent"))
+    }
+
+    private var cancelQueuedButton: some View {
+        Button(action: cancel) {
+            Image(systemName: "xmark")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(Color.black)
+                .frame(width: 28, height: 28)
+                .background(Circle().fill(Color.white))
+        }
+        .buttonStyle(.notchPressable)
+        .accessibilityLabel(Text("Cancel queued prompt"))
     }
 
     private func cancel() {
@@ -323,10 +361,10 @@ struct ComposerCard: View {
         // Re-check the same gate the send button uses. Return is also a
         // submit path, and `snapshot.prompt` includes `[[clipboard:N]]`
         // markers — checking it would let a chips-only field submit a
-        // bag of pastes with no question. Also block while a turn is in
-        // flight so a stray Enter keystroke can't enqueue behind the
-        // running agent (the button itself flips to stop in that state).
-        guard !inputModel.isTextEmpty, !isAgentBusy else { return }
+        // bag of pastes with no question. Once a steer prompt is queued,
+        // the composer is locked until the sidecar inserts it or the user
+        // cancels it.
+        guard !inputModel.isTextEmpty, !agentService.hasQueuedPrompt else { return }
         let snapshot = inputModel.snapshot()
 
         let selection = CitedSelection(deselectedBehaviors: deselectedBehaviorKeys)
@@ -353,6 +391,10 @@ struct ComposerCard: View {
         let snapshotCtx = senseStore.context
         let promptForTurn = snapshot.prompt
         let clipboardsForTurn = snapshot.clipboards
+        let turnId = agentService.reserveSubmitTurnId(
+            prompt: promptForTurn,
+            queueIfNeeded: isAgentBusy || agentService.hasRunningCompact
+        )
         inputModel.clear()
         // Behavior selections persist within the session (see Notch UI
         // design): we don't reset `deselectedBehaviorKeys` here.
@@ -366,7 +408,7 @@ struct ComposerCard: View {
                 visual: visual,
                 clipboards: clipboardsForTurn
             )
-            await agentService.submit(prompt: promptForTurn, citedContext: cited)
+            await agentService.submit(prompt: promptForTurn, citedContext: cited, turnId: turnId)
         }
     }
 }

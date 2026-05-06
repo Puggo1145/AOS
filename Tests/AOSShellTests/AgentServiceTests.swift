@@ -61,6 +61,24 @@ struct AgentServiceTests {
         #expect(s.status == .working)
     }
 
+    @Test("queued prompt clears when its turn is materialized")
+    func queuedPromptClearsOnTurnStarted() {
+        let s = makeService()
+        s.sessionStore.activeMirror?.setQueuedPrompt(QueuedPrompt(turnId: "T2", prompt: "steer"))
+        #expect(s.queuedPrompt?.prompt == "steer")
+        s._testTurnStarted(id: "T2", prompt: "steer")
+        #expect(s.queuedPrompt == nil)
+        #expect(s.turns.last?.prompt == "steer")
+    }
+
+    @Test("conversation.reset clears queued prompt")
+    func resetClearsQueuedPrompt() {
+        let s = makeService()
+        s.sessionStore.activeMirror?.setQueuedPrompt(QueuedPrompt(turnId: "T2", prompt: "steer"))
+        s.handleConversationReset(ConversationResetParams(sessionId: "S"))
+        #expect(s.queuedPrompt == nil)
+    }
+
     @Test("ui.status maps to AgentStatus and updates the matching turn")
     func statusMapping() async throws {
         let s = makeService()

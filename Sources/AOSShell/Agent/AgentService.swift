@@ -290,6 +290,16 @@ public struct ContextUsageSnapshot: Sendable, Equatable {
     }
 }
 
+public struct QueuedPrompt: Sendable, Equatable {
+    public let turnId: String
+    public let prompt: String
+
+    public init(turnId: String, prompt: String) {
+        self.turnId = turnId
+        self.prompt = prompt
+    }
+}
+
 /// "正在后台操作 X" indicator payload read by the Notch closed bar. Resolved
 /// from the in-flight `computer_use_*` tool call's `args.pid` via
 /// `NSRunningApplication`. We carry the icon (NSImage) and a one-word verb
@@ -481,6 +491,15 @@ public final class AgentService {
     public var compactEvents: [CompactEvent] {
         sessionStore.activeMirror?.compactEvents ?? []
     }
+    public var queuedPrompt: QueuedPrompt? {
+        sessionStore.activeMirror?.queuedPrompt
+    }
+    public var hasQueuedPrompt: Bool {
+        queuedPrompt != nil
+    }
+    public var hasRunningCompact: Bool {
+        sessionStore.activeMirror?.hasRunningCompact ?? false
+    }
 
     public var currentSessionId: String? { sessionStore.activeId }
 
@@ -517,6 +536,7 @@ public final class AgentService {
     }
 
     private let rpc: RPCClient
+    private var cancelledQueuedTurnIds: Set<String> = []
 
     public init(rpc: RPCClient, sessionStore: SessionStore) {
         self.rpc = rpc
@@ -561,7 +581,15 @@ public final class AgentService {
 
     // MARK: - Public API
 
-    public func submit(prompt: String, citedContext: CitedContext) async {
+    public func reserveSubmitTurnId(prompt: String, queueIfNeeded: Bool) -> String {
+        let turnId = UUID().uuidString
+        if queueIfNeeded {
+            sessionStore.activeMirror?.setQueuedPrompt(QueuedPrompt(turnId: turnId, prompt: prompt))
+        }
+        return turnId
+    }
+
+    public func submit(prompt: String, citedContext: CitedContext, turnId reservedTurnId: String? = nil) async {
         guard let sessionId = currentSessionId, let mirror = sessionStore.activeMirror else {
             // Fail loudly: no active session means bootstrap `session.create`
             // failed (or hasn't landed yet) and no agent loop is reachable.
@@ -578,7 +606,14 @@ public final class AgentService {
             )
             return
         }
-        let turnId = UUID().uuidString
+        let turnId = reservedTurnId ?? UUID().uuidString
+        if cancelledQueuedTurnIds.remove(turnId) != nil {
+            return
+        }
+        let shouldQueue = mirror.queuedPrompt?.turnId == turnId || mirror.hasActiveTurn || mirror.hasRunningCompact
+        if shouldQueue && mirror.queuedPrompt?.turnId != turnId {
+            mirror.setQueuedPrompt(QueuedPrompt(turnId: turnId, prompt: prompt))
+        }
         do {
             _ = try await rpc.request(
                 method: RPCMethod.agentSubmit,
@@ -594,6 +629,7 @@ public final class AgentService {
             // ack only — the turn appears in `turns` once the sidecar
             // broadcasts `conversation.turnStarted`.
         } catch let RPCClientError.outboundPayloadTooLarge(_, bytes, limit) {
+            if shouldQueue { mirror.setQueuedPrompt(nil) }
             // The composed prompt + cited context exceeded the NDJSON line
             // cap. The request was rejected before any byte hit the wire, so
             // the sidecar transport is unaffected. Surface a precise message
@@ -601,6 +637,7 @@ public final class AgentService {
             // blindly.
             mirror.setSubmitError(Self.formatPayloadTooLargeMessage(bytes: bytes, limit: limit))
         } catch {
+            if shouldQueue { mirror.setQueuedPrompt(nil) }
             // Transport / handler-level failure before the sidecar ever
             // registered the turn. Surface a visible message rather than
             // a silent banner clear — the user otherwise sees their
@@ -655,7 +692,18 @@ public final class AgentService {
     }
 
     public func cancel() async {
-        guard let sessionId = currentSessionId, let turnId = currentTurn else { return }
+        guard let sessionId = currentSessionId else { return }
+        if let queued = queuedPrompt {
+            cancelledQueuedTurnIds.insert(queued.turnId)
+            _ = try? await rpc.request(
+                method: RPCMethod.agentCancel,
+                params: AgentCancelParams(sessionId: sessionId, turnId: queued.turnId),
+                as: AgentCancelResult.self
+            )
+            sessionStore.activeMirror?.setQueuedPrompt(nil)
+            return
+        }
+        guard let turnId = currentTurn else { return }
         ActiveAppUseIndicatorOverlay.forceClear()
         _ = try? await rpc.request(
             method: RPCMethod.agentCancel,

@@ -210,50 +210,19 @@ export function registerAgentHandlers(dispatcher: Dispatcher, opts: RegisterAgen
       throw new RPCMethodError(RPCErrorCode.invalidRequest, `turnId already active: ${turnId}`);
     }
 
-    // Single-active-turn invariant. `Conversation` stores each turn's LLM
-    // history as a contiguous `[messageStart, messageEnd)` range over a
-    // shared `_messages` array; interleaving two turns on the same session
-    // would let T1's range absorb T2's user message, producing duplicated /
-    // cross-turn content on the next `llmMessages()`. The Shell currently
-    // serializes user submits per session, but the sidecar RPC boundary must
-    // hold its own invariant so any future caller (or a misbehaving Shell)
-    // cannot corrupt the conversation store.
-    if (reg.size > 0) {
+    if (session.pendingSteer) {
       throw new RPCMethodError(
         RPCErrorCode.invalidRequest,
-        `session ${session.id} already has an in-flight turn; cancel or wait before submitting another`,
+        `session ${session.id} already has a queued steer prompt`,
       );
     }
 
-    // Register the turn in the Conversation *before* the ack so any
-    // observer that subscribes after seeing the ack still finds the turn
-    // in the store. The notification is fired here too — it is part of the
-    // submit ack contract, not an out-of-band signal.
-    const turn = convo.startTurn({ id: turnId, prompt, citedContext });
-    dispatcher.notify(RPCMethod.conversationTurnStarted, {
-      sessionId: session.id,
-      turn: Conversation.toWire(turn),
-    });
-
-    // First-prompt title derivation. listChanged covers both the title flip
-    // and the lastActivityAt advance from createdAt → turn.startedAt.
-    const titleChanged = manager.maybeDeriveTitle(session.id, prompt);
-    if (titleChanged || convo.turns.length === 1) {
-      manager.notifyListChanged();
+    if (reg.size > 0 || session.isCompacting) {
+      session.queueSteer({ turnId, prompt, citedContext });
+      return { accepted: true };
     }
 
-    const controller = reg.add(turnId);
-
-    // Detached: ack must return inside agent.submit's 1s budget.
-    void runTurn(dispatcher, convo, {
-      session,
-      turnId,
-      signal: controller.signal,
-      observer,
-      onDone: () => manager.notifyListChanged(),
-    })
-      .catch((err) => logger.error("agent loop fatal", { sessionId: session.id, turnId, err: String(err) }))
-      .finally(() => reg.remove(turnId));
+    startAndLaunchTurn(session, { turnId, prompt, citedContext });
 
     return { accepted: true };
   });
@@ -264,6 +233,9 @@ export function registerAgentHandlers(dispatcher: Dispatcher, opts: RegisterAgen
       throw new RPCMethodError(RPCErrorCode.invalidParams, "agent.cancel requires { sessionId, turnId }");
     }
     const session = resolveSession(sessionId);
+    if (session.cancelSteer(turnId)) {
+      return { cancelled: true };
+    }
     const cancelled = session.turns.abort(turnId);
     if (cancelled) {
       // Flip status now so the Shell mirror can render the turn as
@@ -300,6 +272,7 @@ export function registerAgentHandlers(dispatcher: Dispatcher, opts: RegisterAgen
       );
     }
     const model = modelResolver();
+    session.setCompacting(true);
     const lifecycleTurnId = "";
     dispatcher.notify(RPCMethod.uiCompact, {
       sessionId: session.id,
@@ -317,6 +290,8 @@ export function registerAgentHandlers(dispatcher: Dispatcher, opts: RegisterAgen
           turnId: lifecycleTurnId,
           phase: "done",
         });
+        session.setCompacting(false);
+        startQueuedTurnIfIdle(session);
         return { ok: true };
       }
       dispatcher.notify(RPCMethod.uiCompact, {
@@ -325,6 +300,8 @@ export function registerAgentHandlers(dispatcher: Dispatcher, opts: RegisterAgen
         phase: "done",
         compactedTurnCount: result.compactedTurnCount,
       });
+      session.setCompacting(false);
+      startQueuedTurnIfIdle(session);
       return { ok: true, compactedTurnCount: result.compactedTurnCount };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -335,6 +312,8 @@ export function registerAgentHandlers(dispatcher: Dispatcher, opts: RegisterAgen
         phase: "failed",
         errorMessage: message,
       });
+      session.setCompacting(false);
+      startQueuedTurnIfIdle(session);
       throw new RPCMethodError(RPCErrorCode.internalError, message);
     }
   });
@@ -343,6 +322,8 @@ export function registerAgentHandlers(dispatcher: Dispatcher, opts: RegisterAgen
     const { sessionId } = (raw ?? {}) as AgentResetParams;
     const session = resolveSession(sessionId);
     session.turns.abortAll();
+    session.consumeSteer();
+    session.setCompacting(false);
     session.conversation.reset();
     // s03: a wiped conversation owns no plan — clear and broadcast the
     // empty list so the Shell's todo panel collapses in lockstep with the
@@ -358,6 +339,57 @@ export function registerAgentHandlers(dispatcher: Dispatcher, opts: RegisterAgen
     manager.notifyListChanged();
     return { ok: true };
   });
+
+  const startAndLaunchTurn = (
+    session: Session,
+    input: { turnId: string; prompt: string; citedContext: AgentSubmitParams["citedContext"] },
+  ): void => {
+    const convo = session.conversation;
+    const reg = session.turns;
+    const turn = convo.startTurn({ id: input.turnId, prompt: input.prompt, citedContext: input.citedContext });
+    dispatcher.notify(RPCMethod.conversationTurnStarted, {
+      sessionId: session.id,
+      turn: Conversation.toWire(turn),
+    });
+
+    const titleChanged = manager.maybeDeriveTitle(session.id, input.prompt);
+    if (titleChanged || convo.turns.length === 1) {
+      manager.notifyListChanged();
+    }
+
+    const controller = reg.add(input.turnId);
+    void runTurn(dispatcher, convo, {
+      session,
+      turnId: input.turnId,
+      signal: controller.signal,
+      observer,
+      onDone: () => manager.notifyListChanged(),
+      onSteerActivated: (fromTurnId, toTurnId) => {
+        reg.replace(fromTurnId, toTurnId);
+      },
+      startSteerTurn: (steer) => {
+        const next = convo.startTurn({
+          id: steer.turnId,
+          prompt: steer.prompt,
+          citedContext: steer.citedContext,
+        });
+        dispatcher.notify(RPCMethod.conversationTurnStarted, {
+          sessionId: session.id,
+          turn: Conversation.toWire(next),
+        });
+        manager.notifyListChanged();
+      },
+    })
+      .catch((err) => logger.error("agent loop fatal", { sessionId: session.id, turnId: input.turnId, err: String(err) }))
+      .finally(() => reg.clear());
+  };
+
+  const startQueuedTurnIfIdle = (session: Session): void => {
+    if (session.turns.size > 0 || session.isCompacting) return;
+    const queued = session.consumeSteer();
+    if (!queued) return;
+    startAndLaunchTurn(session, queued);
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -381,12 +413,23 @@ export async function runTurn(
     /// changed). Errored / cancelled paths do not increment turnCount, so they
     /// don't invoke this hook.
     onDone?: () => void;
+    /// Materialize a queued steer prompt into the Conversation and Shell
+    /// mirror. The loop calls this only at provider-safe boundaries.
+    startSteerTurn?: (steer: { turnId: string; prompt: string; citedContext: AgentSubmitParams["citedContext"] }) => void;
+    /// Move the abort-controller registry key when a steer prompt becomes
+    /// the active visible turn.
+    onSteerActivated?: (fromTurnId: string, toTurnId: string) => void;
   },
 ): Promise<void> {
-  const { session, turnId, signal } = params;
+  const { session, signal } = params;
+  let turnId = params.turnId;
   const sessionId = session.id;
   const observer = params.observer ?? defaultContextObserver;
   const todos = session.todos;
+
+  const dropQueuedSteer = (): void => {
+    session.consumeSteer();
+  };
 
   dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId, status: "working" });
 
@@ -403,6 +446,7 @@ export async function runTurn(
     // turn was just registered and the caller deserves a visible error.
     const message = err instanceof Error ? err.message : String(err);
     logger.error("model/config resolution failed", { turnId, err: String(err) });
+    dropQueuedSteer();
     convo.setError(turnId, RPCErrorCode.internalError, message);
     dispatcher.notify(RPCMethod.uiError, {
       sessionId,
@@ -476,6 +520,25 @@ export async function runTurn(
       systemPrompt,
       messagesJson: ContextObserver.renderMessages(messages),
     });
+  };
+
+  const activateQueuedSteer = (previousAlreadyDone = false): boolean => {
+    const steer = session.consumeSteer();
+    if (!steer) return false;
+    if (!params.startSteerTurn || !params.onSteerActivated) {
+      throw new Error("runTurn missing steer activation callbacks");
+    }
+    const previousTurnId = turnId;
+    if (!previousAlreadyDone) {
+      const ok = convo.markDone(previousTurnId);
+      dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId: previousTurnId, status: "done" });
+      if (ok) params.onDone?.();
+    }
+    params.startSteerTurn(steer);
+    params.onSteerActivated(previousTurnId, steer.turnId);
+    turnId = steer.turnId;
+    dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId, status: "working" });
+    return true;
   };
 
   // s03: subscribe to the per-session TodoManager so every successful
@@ -669,6 +732,7 @@ export async function runTurn(
               });
             }
           }
+          dropQueuedSteer();
           return;
         }
       }
@@ -687,6 +751,7 @@ export async function runTurn(
         // normally) and do NOT call `onDone` (turnCount stays put).
         closeThinkingIfOpen();
         convo.finalizeCancellation(turnId);
+        dropQueuedSteer();
         dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId, status: "done" });
         return;
       }
@@ -704,6 +769,7 @@ export async function runTurn(
             message,
           });
         }
+        dropQueuedSteer();
         return;
       }
 
@@ -720,6 +786,7 @@ export async function runTurn(
             message: "Context too long",
           });
         }
+        dropQueuedSteer();
         return;
       }
 
@@ -730,6 +797,7 @@ export async function runTurn(
       if (!convo.appendAssistant(turnId, final)) {
         // Turn was reset/cancelled mid-flight. Silently drop the message —
         // matches the appendDelta race policy.
+        dropQueuedSteer();
         return;
       }
 
@@ -777,6 +845,11 @@ export async function runTurn(
         closeThinkingIfOpen();
         dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId, status: "done" });
         if (ok) params.onDone?.();
+        if (activateQueuedSteer(true)) {
+          consecutiveSilentToolRounds = 0;
+          session.setSilentToolRounds(0);
+          continue;
+        }
         return;
       }
 
@@ -815,7 +888,10 @@ export async function runTurn(
             isError: true,
             timestamp: Date.now(),
           };
-          if (!convo.appendToolResult(turnId, stopMsg)) return;
+          if (!convo.appendToolResult(turnId, stopMsg)) {
+            dropQueuedSteer();
+            return;
+          }
           if (callOutcomes.get(tc.id)?.kind === "ready") {
             dispatcher.notify(RPCMethod.uiToolCall, {
               sessionId,
@@ -836,6 +912,7 @@ export async function runTurn(
             message: overflowMsg,
           });
         }
+        dropQueuedSteer();
         return;
       }
 
@@ -909,6 +986,7 @@ export async function runTurn(
         if (!convo.appendToolResult(turnId, toolResultMsg)) {
           // Turn went away mid-tool. Drop the result and exit; the cancel
           // path already published its terminal events.
+          dropQueuedSteer();
           return;
         }
         if (outcome.kind === "ready") {
@@ -934,8 +1012,15 @@ export async function runTurn(
         // terminal status, otherwise the next round's request would carry
         // un-paired `tool_use` and the provider would reject it.
         convo.finalizeCancellation(turnId);
+        dropQueuedSteer();
         dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId, status: "done" });
         return;
+      }
+
+      if (activateQueuedSteer()) {
+        consecutiveSilentToolRounds = 0;
+        session.setSilentToolRounds(0);
+        continue;
       }
 
       // Loop back: the next round's `streamSimple` will see the appended
@@ -958,6 +1043,7 @@ export async function runTurn(
         message,
       });
     }
+    dropQueuedSteer();
   } finally {
     unsubTodo();
   }

@@ -689,28 +689,37 @@ test("multi-session: notifications carry the correct sessionId; reset of A does 
   expect(resetEvents.find((n) => n.params.sessionId === b.id)).toBeUndefined();
 });
 
-test("agent.submit rejects a second concurrent turn on the same session", async () => {
-  // The Conversation store relies on contiguous [messageStart, messageEnd)
-  // ranges; interleaving two turns on the same session would let one absorb
-  // the other's user message. Sidecar enforces "one active turn per session"
-  // independently of the Shell's serialization.
+test("agent.submit queues a steer prompt during an in-flight turn and inserts it after the current reply", async () => {
+  // The second submit must not start a concurrent stream. It is accepted as
+  // a steer prompt, then materialized as the next turn before the loop exits.
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
-  const { manager, sessionId } = setupSession();
+  const { manager, convo, sessionId } = setupSession();
   registerAgentHandlers(dispatcher, { manager });
 
-  // A long-hanging stream so T1 is still active when T2 lands.
-  let resolveStream: () => void = () => {};
+  let resolveFirst: () => void = () => {};
+  let streamCount = 0;
   nextStream = (model) => {
     const s = new AssistantMessageEventStream();
-    queueMicrotask(() => {
-      // Hold open until the test resolves it.
-      resolveStream = () => {
+    streamCount++;
+    if (streamCount === 1) {
+      queueMicrotask(() => {
+        resolveFirst = () => {
+          const partial = fakeAssistantMessage(model);
+          partial.content = [{ type: "text", text: "first done" }];
+          s.push({ type: "text_delta", contentIndex: 0, delta: "first done", partial });
+          s.push({ type: "done", reason: "stop", message: partial });
+          s.end();
+        };
+      });
+    } else {
+      queueMicrotask(() => {
         const partial = fakeAssistantMessage(model);
-        s.push({ type: "text_delta", contentIndex: 0, delta: "ok", partial });
+        partial.content = [{ type: "text", text: "second done" }];
+        s.push({ type: "text_delta", contentIndex: 0, delta: "second done", partial });
         s.push({ type: "done", reason: "stop", message: partial });
         s.end();
-      };
-    });
+      });
+    }
     return s;
   };
 
@@ -723,12 +732,117 @@ test("agent.submit rejects a second concurrent turn on the same session", async 
   const r1 = captured.responses.find((r) => r.id === 1);
   expect(r1?.result).toEqual({ accepted: true });
   const r2 = captured.responses.find((r) => r.id === 2);
-  expect(r2?.error?.code).toBe(RPCErrorCode.invalidRequest);
-  expect(r2?.error?.message).toMatch(/in-flight turn/);
+  expect(r2?.result).toEqual({ accepted: true });
+  expect(captured.notifications.filter((n) => n.method === "conversation.turnStarted")).toHaveLength(1);
 
-  // Let T1 finish so the test cleanly winds down.
-  resolveStream();
+  resolveFirst();
+  await flush(100);
+
+  const started = captured.notifications
+    .filter((n) => n.method === "conversation.turnStarted")
+    .map((n) => n.params.turn.id);
+  expect(started).toEqual(["T1", "T2"]);
+  expect(convo.turns.map((t) => [t.id, t.status])).toEqual([
+    ["T1", "done"],
+    ["T2", "done"],
+  ]);
+  expect(convo.llmMessages().filter((m) => m.role === "user").map((m) => m.content)).toEqual([
+    "first",
+    "second",
+  ]);
+});
+
+test("agent.cancel removes a queued steer prompt before it is inserted", async () => {
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const { manager, convo, sessionId } = setupSession();
+  registerAgentHandlers(dispatcher, { manager });
+
+  let resolveFirst: () => void = () => {};
+  nextStream = (model) => {
+    const s = new AssistantMessageEventStream();
+    queueMicrotask(() => {
+      resolveFirst = () => {
+        const partial = fakeAssistantMessage(model);
+        partial.content = [{ type: "text", text: "first done" }];
+        s.push({ type: "text_delta", contentIndex: 0, delta: "first done", partial });
+        s.push({ type: "done", reason: "stop", message: partial });
+        s.end();
+      };
+    });
+    return s;
+  };
+
+  pushInbound({ jsonrpc: "2.0", id: 1, method: "agent.submit", params: { sessionId, turnId: "T1", prompt: "first", citedContext: {} } });
   await flush(40);
+  pushInbound({ jsonrpc: "2.0", id: 2, method: "agent.submit", params: { sessionId, turnId: "T2", prompt: "second", citedContext: {} } });
+  await flush(40);
+  pushInbound({ jsonrpc: "2.0", id: 3, method: "agent.cancel", params: { sessionId, turnId: "T2" } });
+  await flush(40);
+
+  expect(captured.responses.find((r) => r.id === 2)?.result).toEqual({ accepted: true });
+  expect(captured.responses.find((r) => r.id === 3)?.result).toEqual({ cancelled: true });
+
+  resolveFirst();
+  await flush(80);
+
+  const started = captured.notifications
+    .filter((n) => n.method === "conversation.turnStarted")
+    .map((n) => n.params.turn.id);
+  expect(started).toEqual(["T1"]);
+  expect(convo.turns.map((t) => t.id)).toEqual(["T1"]);
+});
+
+test("provider error clears a queued steer prompt so the session can accept a new submit", async () => {
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const { manager, convo, sessionId } = setupSession();
+  registerAgentHandlers(dispatcher, { manager });
+
+  let failFirst: () => void = () => {};
+  let streamCount = 0;
+  nextStream = (model) => {
+    const s = new AssistantMessageEventStream();
+    streamCount++;
+    if (streamCount === 1) {
+      queueMicrotask(() => {
+        failFirst = () => {
+          const errMsg = fakeAssistantMessage(model, { errorMessage: "provider down" });
+          s.push({ type: "error", reason: "error", error: errMsg });
+          s.end();
+        };
+      });
+    } else {
+      queueMicrotask(() => {
+        const partial = fakeAssistantMessage(model);
+        partial.content = [{ type: "text", text: "third done" }];
+        s.push({ type: "text_delta", contentIndex: 0, delta: "third done", partial });
+        s.push({ type: "done", reason: "stop", message: partial });
+        s.end();
+      });
+    }
+    return s;
+  };
+
+  pushInbound({ jsonrpc: "2.0", id: 1, method: "agent.submit", params: { sessionId, turnId: "T1", prompt: "first", citedContext: {} } });
+  await flush(40);
+  pushInbound({ jsonrpc: "2.0", id: 2, method: "agent.submit", params: { sessionId, turnId: "T2", prompt: "second", citedContext: {} } });
+  await flush(40);
+
+  failFirst();
+  await flush(80);
+
+  pushInbound({ jsonrpc: "2.0", id: 3, method: "agent.submit", params: { sessionId, turnId: "T3", prompt: "third", citedContext: {} } });
+  await flush(100);
+
+  expect(captured.responses.find((r) => r.id === 2)?.result).toEqual({ accepted: true });
+  expect(captured.responses.find((r) => r.id === 3)?.result).toEqual({ accepted: true });
+  expect(captured.notifications.filter((n) => n.method === "conversation.turnStarted").map((n) => n.params.turn.id)).toEqual([
+    "T1",
+    "T3",
+  ]);
+  expect(convo.turns.map((t) => [t.id, t.status])).toEqual([
+    ["T1", "error"],
+    ["T3", "done"],
+  ]);
 });
 
 test("agent.submit / cancel / reset return unknownSession for an unknown sessionId", async () => {

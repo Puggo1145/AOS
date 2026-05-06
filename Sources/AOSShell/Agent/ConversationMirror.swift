@@ -36,6 +36,11 @@ public final class ConversationMirror {
     /// Cleared on `conversation.reset` and on the explicit empty-list frame
     /// the sidecar sends after `agent.reset`.
     public var todos: [TodoItemWire] = []
+    /// A prompt accepted locally while the sidecar is still busy with an
+    /// in-flight turn or compact pass. It stays visible until the sidecar
+    /// materializes the queued prompt as `conversation.turnStarted`, or the
+    /// user cancels it before insertion.
+    public var queuedPrompt: QueuedPrompt?
 
     /// Mirror of `ui.compact` lifecycle frames. Each event describes one
     /// compact pass — the auto path (anchored to a brand-new turn the user
@@ -81,6 +86,9 @@ public final class ConversationMirror {
             turns.append(local)
         }
         currentTurn = p.turn.id
+        if queuedPrompt?.turnId == p.turn.id {
+            queuedPrompt = nil
+        }
         status = .working
         cancelReverts()
         cancelWaitingDebounce()
@@ -94,6 +102,7 @@ public final class ConversationMirror {
         latestUsage = nil
         todos = []
         compactEvents = []
+        queuedPrompt = nil
         cancelReverts()
         cancelWaitingDebounce()
     }
@@ -163,6 +172,18 @@ public final class ConversationMirror {
                 compactEvents.remove(at: idx)
             }
         }
+    }
+
+    public var hasRunningCompact: Bool {
+        compactEvents.contains { $0.status == .running }
+    }
+
+    public var hasActiveTurn: Bool {
+        turns.contains { $0.status == .working || $0.status == .waiting }
+    }
+
+    public func setQueuedPrompt(_ queued: QueuedPrompt?) {
+        queuedPrompt = queued
     }
 
     /// Match the most recent running event whose stored id contains the
