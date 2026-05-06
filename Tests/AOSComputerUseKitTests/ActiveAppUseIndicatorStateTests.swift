@@ -145,4 +145,28 @@ struct ActiveAppUseIndicatorStateTests {
         #expect(ActiveAppUseIndicatorGlowStyle.cornerRadius(for: tinyWindow) == 5)
     }
 
+    @Test("window polling is slower than render cadence")
+    func windowPollingIsSlowerThanRenderCadence() {
+        #expect(ActiveAppUseIndicatorRefreshPolicy.windowPollInterval >= 0.25)
+    }
+
+    @Test("same target refresh does not ask WindowServer to reorder again")
+    func sameTargetRefreshDoesNotReorderAgain() {
+        var state = ActiveAppUseIndicatorOrderingState()
+
+        let initialOrder = state.shouldOrderAbove(windowId: 202, layer: 0, panelIsVisible: false)
+        let sameTargetOrder = state.shouldOrderAbove(windowId: 202, layer: 0, panelIsVisible: true)
+        let changedLayerOrder = state.shouldOrderAbove(windowId: 202, layer: 3, panelIsVisible: true)
+        let changedTargetOrder = state.shouldOrderAbove(windowId: 303, layer: 3, panelIsVisible: true)
+
+        #expect(initialOrder)
+        #expect(!sameTargetOrder)
+        #expect(changedLayerOrder)
+        #expect(changedTargetOrder)
+
+        state.reset()
+        let afterResetOrder = state.shouldOrderAbove(windowId: 303, layer: 3, panelIsVisible: true)
+        #expect(afterResetOrder)
+    }
+
 }

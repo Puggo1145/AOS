@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import QuartzCore
 
 // MARK: - ActiveAppUseIndicatorState
 //
@@ -99,6 +100,7 @@ enum ActiveAppUseIndicatorGlowStyle {
     static let standardWindowCornerRadius: CGFloat = 10
     static let innerEdgeInset: CGFloat = 1
     static let innerGlowDepth: Int = 54
+    static let staticIntensity: CGFloat = 0.72
 
     static func cornerRadius(for bounds: CGRect) -> CGFloat {
         min(standardWindowCornerRadius, max(min(bounds.width, bounds.height) / 2 - innerEdgeInset, 0))
@@ -113,11 +115,45 @@ enum ActiveAppUseIndicatorGlowStyle {
     }
 }
 
+enum ActiveAppUseIndicatorRefreshPolicy {
+    // WindowServer queries and relative ordering are expensive enough to
+    // affect the notch UI when performed at display cadence. The drag monitor
+    // still performs immediate refreshes while a window is being moved.
+    static let windowPollInterval: TimeInterval = 0.25
+    static let breathHalfCycleDuration: TimeInterval = 1
+}
+
+struct ActiveAppUseIndicatorOrderingState {
+    private var orderedWindowId: CGWindowID?
+    private var orderedLayer: Int?
+
+    mutating func shouldOrderAbove(
+        windowId: CGWindowID,
+        layer: Int,
+        panelIsVisible: Bool
+    ) -> Bool {
+        guard panelIsVisible,
+              orderedWindowId == windowId,
+              orderedLayer == layer
+        else {
+            orderedWindowId = windowId
+            orderedLayer = layer
+            return true
+        }
+        return false
+    }
+
+    mutating func reset() {
+        orderedWindowId = nil
+        orderedLayer = nil
+    }
+}
+
 @MainActor
 public enum ActiveAppUseIndicatorOverlay {
     private static let leaseDuration: TimeInterval = 6
-    private static let followInterval: TimeInterval = 1 / 60
     private static var state = ActiveAppUseIndicatorState()
+    private static var orderingState = ActiveAppUseIndicatorOrderingState()
     private static var panel: ActiveAppUseIndicatorPanel?
     private static var overlayView: ActiveAppUseIndicatorView?
     private static var followTimer: Timer?
@@ -202,8 +238,10 @@ public enum ActiveAppUseIndicatorOverlay {
     }
 
     private static func startFollowing() {
+        overlayView?.updateBreathingAnimation()
+
         if followTimer == nil {
-            let timer = Timer(timeInterval: followInterval, repeats: true) { _ in
+            let timer = Timer(timeInterval: ActiveAppUseIndicatorRefreshPolicy.windowPollInterval, repeats: true) { _ in
                 MainActor.assumeIsolated {
                     updateActivePanelOrHide()
                 }
@@ -223,6 +261,7 @@ public enum ActiveAppUseIndicatorOverlay {
     private static func stopFollowing() {
         followTimer?.invalidate()
         followTimer = nil
+        overlayView?.stopBreathingAnimation()
         if let dragMonitor {
             NSEvent.removeMonitor(dragMonitor)
             self.dragMonitor = nil
@@ -231,6 +270,7 @@ public enum ActiveAppUseIndicatorOverlay {
 
     private static func hidePanel() {
         stopFollowing()
+        orderingState.reset()
         panel?.orderOut(nil)
     }
 
@@ -271,11 +311,19 @@ public enum ActiveAppUseIndicatorOverlay {
             panel.level = NSWindow.Level(rawValue: info.layer)
         }
         if panel.frame != frame {
-            panel.setFrame(frame, display: true)
+            panel.setFrame(frame, display: false)
             overlayView.frame = CGRect(origin: .zero, size: frame.size)
+            overlayView.needsDisplay = true
         }
-        overlayView.animationPhase = CGFloat(currentTime() * 2.0 * .pi / 2.0)
-        panel.order(.above, relativeTo: Int(target.windowId))
+        overlayView.updateBreathingAnimation()
+
+        if orderingState.shouldOrderAbove(
+            windowId: target.windowId,
+            layer: info.layer,
+            panelIsVisible: panel.isVisible
+        ) {
+            panel.order(.above, relativeTo: Int(target.windowId))
+        }
     }
 
     /// CGWindowList uses top-left, y-down display coordinates. NSPanel frames
@@ -308,15 +356,21 @@ private final class ActiveAppUseIndicatorPanel: NSPanel {
 }
 
 private final class ActiveAppUseIndicatorView: NSView {
+    private static let animationKey = "ActiveAppUseIndicatorOpacityBreath"
+
     private let label = "agent is using this app"
-    var animationPhase: CGFloat = 0 {
-        didSet {
-            needsDisplay = true
-        }
-    }
+    private let labelFont = NSFont.systemFont(ofSize: 12, weight: .medium)
+    private lazy var attributedLabel = NSAttributedString(
+        string: label,
+        attributes: [
+            .font: labelFont,
+            .foregroundColor: NSColor.white,
+        ]
+    )
+    private lazy var measuredLabelSize = attributedLabel.size()
 
     var labelWidth: CGFloat {
-        labelSize().width
+        measuredLabelSize.width
     }
 
     override init(frame frameRect: NSRect) {
@@ -332,6 +386,32 @@ private final class ActiveAppUseIndicatorView: NSView {
 
     override var isOpaque: Bool { false }
 
+    func updateBreathingAnimation() {
+        guard let layer else { return }
+
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            stopBreathingAnimation()
+            layer.opacity = 1
+            return
+        }
+
+        guard layer.animation(forKey: Self.animationKey) == nil else { return }
+
+        let animation = CABasicAnimation(keyPath: "opacity")
+        animation.fromValue = 0.82
+        animation.toValue = 1
+        animation.duration = ActiveAppUseIndicatorRefreshPolicy.breathHalfCycleDuration
+        animation.autoreverses = true
+        animation.repeatCount = .infinity
+        animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer.add(animation, forKey: Self.animationKey)
+    }
+
+    func stopBreathingAnimation() {
+        layer?.removeAnimation(forKey: Self.animationKey)
+        layer?.opacity = 1
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
 
@@ -345,10 +425,6 @@ private final class ActiveAppUseIndicatorView: NSView {
     private func drawWindowArcGlow() {
         guard bounds.width > 48, bounds.height > 48 else { return }
 
-        let intensity = ActiveAppUseIndicatorGlowStyle.breathIntensity(
-            phase: animationPhase,
-            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        )
         let shapeBounds = bounds.insetBy(
             dx: ActiveAppUseIndicatorGlowStyle.innerEdgeInset,
             dy: ActiveAppUseIndicatorGlowStyle.innerEdgeInset
@@ -366,7 +442,7 @@ private final class ActiveAppUseIndicatorView: NSView {
         drawInnerGlow(
             path: windowShapePath,
             color: NSColor(calibratedRed: 0.03, green: 0.48, blue: 1.0, alpha: 1),
-            intensity: intensity
+            intensity: ActiveAppUseIndicatorGlowStyle.staticIntensity
         )
         NSGraphicsContext.restoreGraphicsState()
     }
@@ -387,25 +463,13 @@ private final class ActiveAppUseIndicatorView: NSView {
         path.lineWidth = 1
         path.stroke()
 
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 12, weight: .medium),
-            .foregroundColor: NSColor.white,
-        ]
-        let attributed = NSAttributedString(string: label, attributes: attributes)
-        let textSize = attributed.size()
-        attributed.draw(in: CGRect(
+        let textSize = measuredLabelSize
+        attributedLabel.draw(in: CGRect(
             x: capsuleFrame.midX - textSize.width / 2,
             y: capsuleFrame.midY - textSize.height / 2,
             width: textSize.width,
             height: textSize.height
         ))
-    }
-
-    private func labelSize() -> CGSize {
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 12, weight: .medium),
-        ]
-        return NSAttributedString(string: label, attributes: attributes).size()
     }
 
     private func drawInnerGlow(
