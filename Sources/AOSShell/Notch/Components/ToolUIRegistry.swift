@@ -17,6 +17,19 @@ import AOSRPCSchema
 // generic "tool name + opaque output" view — they still render correctly, just
 // without the per-tool affordance (e.g. bash's "show the command verbatim").
 
+/// Summary grammar for a family of tool calls collapsed into one row.
+public struct ToolUISummaryUnit: Sendable {
+    /// Stable grouping key. Related tools can share a key so the collapsed row
+    /// says "clicked 3 times" across both element and coordinate click tools.
+    public let key: String
+    public let label: @Sendable (_ count: Int) -> String
+
+    public init(key: String, label: @escaping @Sendable (_ count: Int) -> String) {
+        self.key = key
+        self.label = label
+    }
+}
+
 /// Rendering rules for one tool's inline row + expanded panel.
 public struct ToolUIPresenter: Sendable {
     /// Full row-header text for one call. Receives the call's `args` plus
@@ -46,16 +59,22 @@ public struct ToolUIPresenter: Sendable {
     /// `doc.text` for file reads, etc.
     public let icon: String
 
+    /// Grammar for collapsed multi-tool summaries. Kept on the presenter so
+    /// adding a tool-specific UI also adds its collapsed transcript wording.
+    public let summaryUnit: ToolUISummaryUnit
+
     public init(
         label: @escaping @Sendable (_ args: JSONValue, _ isCalling: Bool) -> String,
         callingBody: @escaping @Sendable (JSONValue) -> String?,
         resultBody: @escaping @Sendable (_ args: JSONValue, _ outputText: String, _ isError: Bool) -> String,
-        icon: String
+        icon: String,
+        summaryUnit: ToolUISummaryUnit
     ) {
         self.label = label
         self.callingBody = callingBody
         self.resultBody = resultBody
         self.icon = icon
+        self.summaryUnit = summaryUnit
     }
 }
 
@@ -156,7 +175,10 @@ public enum ToolUIRegistry {
                 else { return output }
                 return "> \(command)\n\n\(output)"
             },
-            icon: "terminal"
+            icon: "terminal",
+            summaryUnit: ToolUISummaryUnit(key: "bash") { count in
+                count == 1 ? "used bash" : "used \(count) bash"
+            }
         )
     }
 
@@ -181,7 +203,10 @@ public enum ToolUIRegistry {
                 guard let path = fileToolPath(args) else { return output }
                 return "\(path)\n\n\(output)"
             },
-            icon: "doc.text"
+            icon: "doc.text",
+            summaryUnit: ToolUISummaryUnit(key: "read") { count in
+                count == 1 ? "read 1 file" : "read \(count) files"
+            }
         )
     }
 
@@ -197,7 +222,10 @@ public enum ToolUIRegistry {
             // Result already says "Created/Overwrote <path> (N bytes)" so we
             // surface it as-is — adding a path header would be redundant.
             resultBody: { _, output, _ in output },
-            icon: "square.and.pencil"
+            icon: "square.and.pencil",
+            summaryUnit: ToolUISummaryUnit(key: "write") { count in
+                count == 1 ? "wrote 1 file" : "wrote \(count) files"
+            }
         )
     }
 
@@ -223,7 +251,10 @@ public enum ToolUIRegistry {
             // message — which mentions the file too. Either way, show
             // verbatim.
             resultBody: { _, output, _ in output },
-            icon: "pencil.and.outline"
+            icon: "pencil.and.outline",
+            summaryUnit: ToolUISummaryUnit(key: "update") { count in
+                count == 1 ? "updated 1 file" : "updated \(count) files"
+            }
         )
     }
 
@@ -245,7 +276,10 @@ public enum ToolUIRegistry {
             // (the `[ ] / [>] / [x] #id: text` listing). Show as-is — it
             // matches what the user sees in the live panel.
             resultBody: { _, output, _ in output },
-            icon: "checklist"
+            icon: "checklist",
+            summaryUnit: ToolUISummaryUnit(key: "todo_write") { count in
+                count == 1 ? "updated todos" : "updated todos \(count) times"
+            }
         )
     }
 
@@ -259,7 +293,10 @@ public enum ToolUIRegistry {
             // until the result arrives.
             callingBody: { _ in nil },
             resultBody: { _, output, _ in output },
-            icon: "wrench.and.screwdriver"
+            icon: "wrench.and.screwdriver",
+            summaryUnit: ToolUISummaryUnit(key: toolName) { count in
+                count == 1 ? "used \(toolName)" : "used \(count) \(toolName)"
+            }
         )
     }
 }
@@ -388,7 +425,10 @@ private func cuListAppsPresenter() -> ToolUIPresenter {
         label: { _, isCalling in isCalling ? "listing apps" : "listed apps" },
         callingBody: { _ in nil },
         resultBody: { _, output, _ in output },
-        icon: "app.dashed"
+        icon: "app.dashed",
+        summaryUnit: ToolUISummaryUnit(key: "computer_use_list_apps") { count in
+            count == 1 ? "listed apps" : "listed apps \(count) times"
+        }
     )
 }
 
@@ -399,7 +439,10 @@ private func cuListWindowsPresenter() -> ToolUIPresenter {
         },
         callingBody: { args in cuArgsBody(args) },
         resultBody: { _, output, _ in output },
-        icon: "macwindow.on.rectangle"
+        icon: "macwindow.on.rectangle",
+        summaryUnit: ToolUISummaryUnit(key: "computer_use_list_windows") { count in
+            count == 1 ? "listed windows" : "listed windows \(count) times"
+        }
     )
 }
 
@@ -410,7 +453,10 @@ private func cuGetAppStatePresenter() -> ToolUIPresenter {
         },
         callingBody: { args in cuArgsBody(args) },
         resultBody: { _, output, _ in output },
-        icon: "eye"
+        icon: "eye",
+        summaryUnit: ToolUISummaryUnit(key: "computer_use_get_app_state") { count in
+            count == 1 ? "read app state" : "read app state \(count) times"
+        }
     )
 }
 
@@ -427,7 +473,10 @@ private func cuClickPresenter() -> ToolUIPresenter {
             let body = cuArgsBody(args)
             return body.isEmpty ? output : "\(body)\n\n\(output)"
         },
-        icon: "cursorarrow.click"
+        icon: "cursorarrow.click",
+        summaryUnit: ToolUISummaryUnit(key: "computer_use_click") { count in
+            count == 1 ? "clicked once" : "clicked \(count) times"
+        }
     )
 }
 
@@ -441,7 +490,10 @@ private func cuDragPresenter() -> ToolUIPresenter {
             let body = cuArgsBody(args)
             return body.isEmpty ? output : "\(body)\n\n\(output)"
         },
-        icon: "hand.draw"
+        icon: "hand.draw",
+        summaryUnit: ToolUISummaryUnit(key: "computer_use_drag") { count in
+            count == 1 ? "dragged once" : "dragged \(count) times"
+        }
     )
 }
 
@@ -466,7 +518,10 @@ private func cuTypeTextPresenter() -> ToolUIPresenter {
             let preview = text.count > 4_096 ? String(text.prefix(4_096)) + "…" : text
             return "\"\(preview)\"\n\n\(output)"
         },
-        icon: "keyboard"
+        icon: "keyboard",
+        summaryUnit: ToolUISummaryUnit(key: "computer_use_type_text") { count in
+            count == 1 ? "typed once" : "typed \(count) times"
+        }
     )
 }
 
@@ -485,7 +540,10 @@ private func cuPressKeyPresenter() -> ToolUIPresenter {
             let body = cuArgsBody(args)
             return body.isEmpty ? output : "\(body)\n\n\(output)"
         },
-        icon: "command"
+        icon: "command",
+        summaryUnit: ToolUISummaryUnit(key: "computer_use_press_key") { count in
+            count == 1 ? "pressed 1 key" : "pressed \(count) keys"
+        }
     )
 }
 
@@ -509,7 +567,10 @@ private func cuScrollPresenter() -> ToolUIPresenter {
             let body = cuArgsBody(args)
             return body.isEmpty ? output : "\(body)\n\n\(output)"
         },
-        icon: "scroll"
+        icon: "scroll",
+        summaryUnit: ToolUISummaryUnit(key: "computer_use_scroll") { count in
+            count == 1 ? "scrolled once" : "scrolled \(count) times"
+        }
     )
 }
 
@@ -518,6 +579,9 @@ private func cuDoctorPresenter() -> ToolUIPresenter {
         label: { _, isCalling in isCalling ? "checking computer-use" : "checked computer-use" },
         callingBody: { _ in nil },
         resultBody: { _, output, _ in output },
-        icon: "stethoscope"
+        icon: "stethoscope",
+        summaryUnit: ToolUISummaryUnit(key: "computer_use_doctor") { count in
+            count == 1 ? "checked computer-use" : "checked computer-use \(count) times"
+        }
     )
 }

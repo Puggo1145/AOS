@@ -389,6 +389,10 @@ struct AgentConversationView: View {
         let toolCallById: [String: ToolCallRecord] = Dictionary(
             uniqueKeysWithValues: turn.toolCalls.map { ($0.id, $0) }
         )
+        let displaySegments = TurnDisplayPlanner.plan(
+            segments: turn.segments,
+            toolCallsById: toolCallById
+        )
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 if let icon = turn.context.appIcon {
@@ -416,8 +420,8 @@ struct AgentConversationView: View {
                     // calls / reply chunks interleave as the model produced
                     // them. IDs are stable so SwiftUI preserves per-row
                     // state across redraws.
-                    ForEach(turn.segments) { segment in
-                        segmentView(segment, toolCallById: toolCallById)
+                    ForEach(displaySegments) { segment in
+                        displaySegmentView(segment, toolCallById: toolCallById)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -435,6 +439,19 @@ struct AgentConversationView: View {
                             .fill(Color.red.opacity(0.12))
                     )
             }
+        }
+    }
+
+    @ViewBuilder
+    private func displaySegmentView(
+        _ segment: TurnDisplaySegment,
+        toolCallById: [String: ToolCallRecord]
+    ) -> some View {
+        switch segment {
+        case .segment(let segment):
+            segmentView(segment, toolCallById: toolCallById)
+        case .toolRun(let run):
+            ToolCallRunSummaryView(run: run, toolCallById: toolCallById)
         }
     }
 
@@ -490,6 +507,76 @@ struct AgentConversationView: View {
 
 private let historyBottomAnchor = "history.bottom"
 private let historyViewportSpace = "history.viewport"
+
+private struct ToolCallRunSummaryView: View {
+    let run: ToolCallRunSegment
+    let toolCallById: [String: ToolCallRecord]
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var expanded = false
+
+    private var records: [ToolCallRecord] {
+        run.toolCallIds.compactMap { toolCallById[$0] }
+    }
+
+    private var summary: String {
+        ToolCallRunSummary.text(for: records)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                if reduceMotion {
+                    expanded.toggle()
+                } else {
+                    withAnimation(.notchHeight) {
+                        expanded.toggle()
+                    }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "wrench.and.screwdriver")
+                        .font(.system(size: 11, weight: .medium))
+                        .notchForeground(.secondary)
+                    Text(summary)
+                        .font(.system(size: 12, weight: .regular, design: .monospaced))
+                        .notchForeground(.secondary)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .notchForeground(.secondary)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                        .animation(reduceMotion ? nil : .notchHeight, value: expanded)
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text(summary))
+            .accessibilityHint(Text(expanded ? "Hides tool call details" : "Shows tool call details"))
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(run.segments) { segment in
+                        switch segment {
+                        case .thinking(let thinking):
+                            ThinkingView(
+                                thinking: thinking.text,
+                                startedAt: thinking.startedAt,
+                                endedAt: thinking.endedAt,
+                                isCurrent: thinking.isOpenForAppend
+                            )
+                        case .toolCall(let id):
+                            if let record = toolCallById[id] {
+                                ToolCallView(record: record)
+                            }
+                        case .reply:
+                            EmptyView()
+                        }
+                    }
+                }
+                .padding(.leading, 17)
+            }
+        }
+    }
+}
 
 private struct HistoryHeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
