@@ -21,6 +21,11 @@ import AOSOSSenseKit
 struct PermissionOnboardPanelView: View {
     let permissionsService: PermissionsService
     let topSafeInset: CGFloat
+    @State private var requestError: String?
+
+    static func automationIcon(for permission: Permission) -> PermissionGlyph.AutomationIcon {
+        permission == .automation ? .finder : PermissionGlyph.defaultAutomationIcon
+    }
 
     private var current: Permission? {
         Permission.onboardingDisplayOrder.first(where: needsOnboarding)
@@ -53,8 +58,16 @@ struct PermissionOnboardPanelView: View {
                     stepIndex: stepIndex ?? 0,
                     totalSteps: Permission.onboardingDisplayOrder.count,
                     onGrant: {
-                        permissionsService.request(current)
-                    }
+                        Task {
+                            do {
+                                requestError = nil
+                                try await permissionsService.request(current)
+                            } catch {
+                                requestError = "Permission request failed: \(error)"
+                            }
+                        }
+                    },
+                    errorMessage: requestError
                 )
                 .id(current)
                 .transition(.blurReplace)
@@ -87,6 +100,7 @@ private struct PermissionCard: View {
     let stepIndex: Int
     let totalSteps: Int
     let onGrant: () -> Void
+    let errorMessage: String?
 
     @State private var hovering: Bool = false
     @State private var pressed: Bool = false
@@ -111,12 +125,22 @@ private struct PermissionCard: View {
                 Spacer(minLength: 6)
 
                 grantButton
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.red.opacity(0.9))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }
 
     private var iconBadge: some View {
-        PermissionGlyph(permission: permission, size: 64, automationIcon: .finder)
+        PermissionGlyph(
+            permission: permission,
+            size: 64,
+            automationIcon: PermissionOnboardPanelView.automationIcon(for: permission)
+        )
             .shadow(color: .black.opacity(0.25), radius: 8, y: 3)
     }
 

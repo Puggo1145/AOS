@@ -44,6 +44,9 @@ public final class PermissionsService {
     public private(set) var state: PermissionState = PermissionState(denied: [])
     public private(set) var automationOnboardingAcknowledged: Bool
 
+    private let automationConsentProbe: @Sendable () async throws -> Void
+    private let openSystemSettingsHandler: @MainActor (Permission) -> Void
+
     /// Whether `SCShareableContent.current` is safe to call as a
     /// non-prompting live probe. SC throws/returns based on TCC, BUT
     /// the very first call in a process when *no TCC record exists*
@@ -63,8 +66,18 @@ public final class PermissionsService {
         self.init(userDefaults: .standard)
     }
 
-    internal init(userDefaults: UserDefaults) {
+    internal init(
+        userDefaults: UserDefaults,
+        automationConsentProbe: @escaping @Sendable () async throws -> Void = {
+            try await PermissionsService.runAutomationConsentProbeScript()
+        },
+        openSystemSettings: @escaping @MainActor (Permission) -> Void = { permission in
+            PermissionsService.openSystemSettingsPane(for: permission)
+        }
+    ) {
         self.userDefaults = userDefaults
+        self.automationConsentProbe = automationConsentProbe
+        self.openSystemSettingsHandler = openSystemSettings
         self.automationOnboardingAcknowledged = userDefaults.bool(
             forKey: Self.automationOnboardingAcknowledgedKey
         )
@@ -135,7 +148,11 @@ public final class PermissionsService {
     /// matches the pattern used by `playground/open-codex-computer-use`:
     /// the system prompt fires the first time only, so opening Settings
     /// is the reliable path when the user has a stale-denied record.
-    public func request(_ permission: Permission) {
+    public func request(_ permission: Permission) async throws {
+        defer {
+            openSystemSettings(for: permission)
+        }
+
         switch permission {
         case .accessibility:
             let options: NSDictionary = [
@@ -150,26 +167,25 @@ public final class PermissionsService {
             _ = CGRequestScreenCaptureAccess()
             screenRecordingProbeIsSafe = true
         case .automation:
-            triggerAutomationConsentProbe()
+            try await automationConsentProbe()
             acknowledgeAutomationOnboarding()
         }
-        openSystemSettings(for: permission)
     }
 
     /// Sends a tiny Finder Apple Event so macOS creates the Automation TCC
     /// row and shows the consent prompt for AOS -> Finder. The returned
     /// selection is intentionally ignored; the adapter that owns Finder
     /// context performs the real read later.
-    private func triggerAutomationConsentProbe() {
-        // Apple Events can block while Finder or TCC is responding. Keep
-        // the synchronous NSAppleScript call off MainActor so onboarding UI
-        // stays responsive while macOS shows the Automation prompt.
-        Task.detached(priority: .userInitiated) {
-            Self.executeAutomationConsentProbeScript()
-        }
+    private nonisolated static func runAutomationConsentProbeScript() async throws {
+        // Apple Events can block while Finder or TCC is responding. Run the
+        // synchronous NSAppleScript call off MainActor while preserving its
+        // success/failure result for onboarding.
+        try await Task.detached(priority: .userInitiated) {
+            try Self.executeAutomationConsentProbeScript()
+        }.value
     }
 
-    private nonisolated static func executeAutomationConsentProbeScript() {
+    private nonisolated static func executeAutomationConsentProbeScript() throws {
         guard let script = NSAppleScript(source: Self.automationConsentProbeScript) else {
             preconditionFailure("invalid Automation consent probe AppleScript")
         }
@@ -177,13 +193,15 @@ public final class PermissionsService {
         var errorInfo: NSDictionary?
         _ = script.executeAndReturnError(&errorInfo)
         if let errorInfo {
-            FileHandle.standardError.write(
-                Data("[permissions] Automation consent probe failed: \(errorInfo)\n".utf8)
-            )
+            throw AutomationConsentProbeError(errorInfo: errorInfo)
         }
     }
 
     public func openSystemSettings(for permission: Permission) {
+        openSystemSettingsHandler(permission)
+    }
+
+    private nonisolated static func openSystemSettingsPane(for permission: Permission) {
         let urlString: String
         switch permission {
         case .accessibility:
@@ -214,4 +232,12 @@ public final class PermissionsService {
         get selection
     end tell
     """
+}
+
+private struct AutomationConsentProbeError: Error, CustomStringConvertible {
+    let description: String
+
+    init(errorInfo: NSDictionary) {
+        self.description = "[permissions] Automation consent probe failed: \(errorInfo)"
+    }
 }

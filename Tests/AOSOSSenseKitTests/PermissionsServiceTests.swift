@@ -82,27 +82,61 @@ struct PermissionsServiceTests {
         #expect(restored.automationOnboardingAcknowledged)
     }
 
-    @Test("Automation request executes Finder AppleScript probe")
-    func automationRequestExecutesFinderAppleScriptProbe() throws {
-        let source = try String(
-            contentsOfFile: "Sources/AOSOSSenseKit/Core/PermissionsService.swift",
-            encoding: .utf8
+    @MainActor
+    @Test("Automation request acknowledges only after consent probe succeeds")
+    func automationRequestAcknowledgesOnlyAfterConsentProbeSucceeds() async throws {
+        let suiteName = "aos.permissions.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let probeRecorder = ProbeRecorder()
+
+        let svc = PermissionsService(
+            userDefaults: defaults,
+            automationConsentProbe: {
+                await probeRecorder.record()
+            },
+            openSystemSettings: { _ in }
         )
 
-        #expect(source.contains("triggerAutomationConsentProbe"))
-        #expect(source.contains("tell application \"Finder\""))
-        #expect(source.contains("executeAndReturnError"))
+        try await svc.request(.automation)
+
+        #expect(await probeRecorder.count == 1)
+        #expect(svc.automationOnboardingAcknowledged)
+        let restored = PermissionsService(userDefaults: defaults)
+        #expect(restored.automationOnboardingAcknowledged)
     }
 
-    @Test("Automation consent probe is scheduled off the MainActor")
-    func automationConsentProbeIsScheduledOffMainActor() throws {
-        let source = try String(
-            contentsOfFile: "Sources/AOSOSSenseKit/Core/PermissionsService.swift",
-            encoding: .utf8
+    @MainActor
+    @Test("Automation request does not acknowledge when consent probe fails")
+    func automationRequestDoesNotAcknowledgeWhenConsentProbeFails() async {
+        struct ProbeFailure: Error {}
+        let suiteName = "aos.permissions.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+
+        let svc = PermissionsService(
+            userDefaults: defaults,
+            automationConsentProbe: {
+                throw ProbeFailure()
+            },
+            openSystemSettings: { _ in }
         )
 
-        #expect(source.contains("Task.detached"))
-        #expect(source.contains("executeAutomationConsentProbeScript"))
-        #expect(!source.contains("case .automation:\n            executeAutomationConsentProbeScript()"))
+        await #expect(throws: ProbeFailure.self) {
+            try await svc.request(.automation)
+        }
+        #expect(!svc.automationOnboardingAcknowledged)
+        let restored = PermissionsService(userDefaults: defaults)
+        #expect(!restored.automationOnboardingAcknowledged)
+    }
+}
+
+private actor ProbeRecorder {
+    private var callCount = 0
+
+    var count: Int { callCount }
+
+    func record() {
+        callCount += 1
     }
 }

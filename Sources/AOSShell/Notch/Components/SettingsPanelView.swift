@@ -435,7 +435,7 @@ struct SettingsPanelView: View {
     // Settings.
 
     private var missingPermissions: [Permission] {
-        Permission.settingsDisplayOrder.filter { permissionsService.state.denied.contains($0) }
+        Self.missingProbeablePermissions(denied: permissionsService.state.denied)
     }
 
     private var permissionsRow: some View {
@@ -499,13 +499,31 @@ struct SettingsPanelView: View {
         }
     }
 
-    private func permissionStatus(for permission: Permission) -> PermissionStatusRow.Status {
+    static func missingProbeablePermissions(denied: Set<Permission>) -> [Permission] {
+        Permission.settingsDisplayOrder.filter { permission in
+            switch permission {
+            case .screenRecording, .accessibility:
+                return denied.contains(permission)
+            case .automation:
+                return false
+            }
+        }
+    }
+
+    static func permissionStatus(
+        for permission: Permission,
+        denied: Set<Permission>
+    ) -> PermissionSettingsStatus {
         switch permission {
         case .screenRecording, .accessibility:
-            return permissionsService.state.denied.contains(permission) ? .disabled : .granted
+            return denied.contains(permission) ? .disabled : .granted
         case .automation:
             return .opensSettings
         }
+    }
+
+    private func permissionStatus(for permission: Permission) -> PermissionSettingsStatus {
+        Self.permissionStatus(for: permission, denied: permissionsService.state.denied)
     }
 
     // MARK: - Dev Mode
@@ -712,19 +730,19 @@ struct SettingsPanelView: View {
 
 // MARK: - PermissionStatusRow
 
+enum PermissionSettingsStatus: Equatable {
+    case granted
+    case disabled
+    case opensSettings
+}
+
 /// One row per permission inside the Permissions sub-page. Reads the
 /// live `denied` set; tap → opens the matching Privacy pane in System
 /// Settings. The state pill mirrors the convention used elsewhere
 /// (green check / red dot).
 private struct PermissionStatusRow: View {
-    enum Status {
-        case granted
-        case disabled
-        case opensSettings
-    }
-
     let permission: Permission
-    let status: Status
+    let status: PermissionSettingsStatus
     let onOpenSettings: () -> Void
 
     var body: some View {
@@ -764,7 +782,7 @@ private struct PermissionStatusRow: View {
     }
 }
 
-private extension PermissionStatusRow.Status {
+private extension PermissionSettingsStatus {
     var label: String {
         switch self {
         case .granted: return "Granted"

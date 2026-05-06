@@ -21,14 +21,16 @@ import AOSOSSenseKit
 //     real Settings appearance automatically
 
 struct PermissionGlyph: View {
-    enum AutomationIcon {
+    enum AutomationIcon: Equatable {
         case gear
         case finder
     }
 
+    static let defaultAutomationIcon: AutomationIcon = .gear
+
     let permission: Permission
     let size: CGFloat
-    var automationIcon: AutomationIcon = .gear
+    var automationIcon: AutomationIcon = Self.defaultAutomationIcon
 
     var body: some View {
         Group {
