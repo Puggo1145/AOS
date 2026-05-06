@@ -21,6 +21,18 @@ function fullCitedContext(): CitedContext {
         displaySummary: "AOS — Notch agent",
         payload: { url: "https://example.com/aos", pageTitle: "AOS — Notch agent" },
       },
+      {
+        kind: "general.currentInput",
+        citationKey: "general.currentInput:4242",
+        displaySummary: "Current input",
+        payload: {
+          value: "draft",
+          target: {
+            locatorId: "axloc_abc123",
+            pathFromWindow: [{ role: "AXTextField", siblingOrdinal: 1 }],
+          },
+        },
+      },
     ],
     clipboards: [{ kind: "text", content: "hello clipboard" }],
   };
@@ -50,6 +62,8 @@ test("buildUserMessage prepends an <os-context> block when CitedContext has data
   expect(content).toContain("AOS — Notch agent");
   // Opaque payload is JSON-serialized through.
   expect(content).toContain("https://example.com/aos");
+  expect(content).toContain("axloc_abc123");
+  expect(content).toContain('"siblingOrdinal":1');
   // Clipboards are NOT listed inside <os-context> — they are inlined at
   // the user's caret via `[[clipboard:N]]` markers. Without a marker in
   // the prompt, no clipboard text should appear.

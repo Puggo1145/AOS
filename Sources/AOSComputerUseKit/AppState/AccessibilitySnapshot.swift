@@ -92,6 +92,52 @@ public actor AccessibilitySnapshot {
     /// existence + active subscription, not callbacks.
     private var observers: [pid_t: AXObserver] = [:]
 
+    private struct NodeAttributes {
+        let role: String
+        let subrole: String?
+        let title: String?
+        let value: String?
+        let description: String?
+        let identifier: String?
+        let help: String?
+        let enabled: Bool?
+        let actions: [String]
+
+        var locatorSignature: LocatorSignature {
+            LocatorSignature(
+                role: role,
+                subrole: Self.nonEmpty(subrole),
+                identifier: Self.nonEmpty(identifier),
+                title: Self.nonEmpty(title),
+                description: Self.nonEmpty(description)
+            )
+        }
+
+        func locatorPathComponent(siblingOrdinal: Int?) -> AXElementLocator.PathComponent {
+            AXElementLocator.PathComponent(
+                role: role,
+                subrole: subrole,
+                identifier: identifier,
+                title: title,
+                description: description,
+                siblingOrdinal: siblingOrdinal
+            )
+        }
+
+        private static func nonEmpty(_ value: String?) -> String? {
+            guard let value, !value.isEmpty else { return nil }
+            return value
+        }
+    }
+
+    private struct LocatorSignature: Hashable {
+        let role: String
+        let subrole: String?
+        let identifier: String?
+        let title: String?
+        let description: String?
+    }
+
     public init(enablement: AXEnablementAssertion) {
         self.enablement = enablement
     }
@@ -107,6 +153,7 @@ public actor AccessibilitySnapshot {
 
         let root = AXUIElementCreateApplication(pid)
         try await activateAccessibilityIfNeeded(pid: pid, root: root)
+        let bundleId = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
 
         var elements: [Int: AXUIElement] = [:]
         var nextIndex = 0
@@ -116,7 +163,11 @@ public actor AccessibilitySnapshot {
         renderTree(
             root,
             depth: 0,
+            pid: pid,
+            bundleId: bundleId,
             targetWindowId: windowId,
+            attributes: nil,
+            locatorPath: nil,
             elements: &elements,
             nextIndex: &nextIndex,
             renderedNodes: &renderedNodes,
@@ -297,7 +348,11 @@ public actor AccessibilitySnapshot {
     private func renderTree(
         _ element: AXUIElement,
         depth: Int,
+        pid: pid_t,
+        bundleId: String?,
         targetWindowId: CGWindowID,
+        attributes initialAttributes: NodeAttributes?,
+        locatorPath: [AXElementLocator.PathComponent]?,
         elements: inout [Int: AXUIElement],
         nextIndex: inout Int,
         renderedNodes: inout Int,
@@ -312,36 +367,40 @@ public actor AccessibilitySnapshot {
         guard renderedNodes < Self.maxRenderedNodes else { return }
         renderedNodes += 1
 
-        let role = Self.attributeString(element, "AXRole") ?? "?"
-        let subrole = Self.attributeString(element, "AXSubrole")
-        let title = Self.attributeString(element, "AXTitle")
-        let value = Self.attributeString(element, "AXValue")
-        let description = Self.attributeString(element, "AXDescription")
-        let identifier = Self.attributeString(element, "AXIdentifier")
-        let help = Self.attributeString(element, "AXHelp")
-        let enabled = Self.attributeBool(element, "AXEnabled")
-        let actions = Self.actionNames(of: element)
+        let attributes = initialAttributes ?? Self.readNodeAttributes(element)
 
-        let interactive = !actions.isEmpty
+        let interactive = !attributes.actions.isEmpty
         var assignedIndex: Int? = nil
         if interactive {
             assignedIndex = nextIndex
             elements[nextIndex] = element
             nextIndex += 1
         }
+        let locatorId: String?
+        if interactive, let locatorPath {
+            locatorId = AXElementLocator(
+                pid: pid,
+                bundleId: bundleId,
+                windowId: targetWindowId,
+                pathFromWindow: locatorPath
+            ).locatorId
+        } else {
+            locatorId = nil
+        }
 
         let line = TreeRenderer.renderLine(
             depth: depth,
             elementIndex: assignedIndex,
-            role: role,
-            subrole: subrole,
-            title: title,
-            value: value,
-            description: description,
-            identifier: identifier,
-            help: help,
-            enabled: enabled,
-            actions: actions
+            locatorId: locatorId,
+            role: attributes.role,
+            subrole: attributes.subrole,
+            title: attributes.title,
+            value: attributes.value,
+            description: attributes.description,
+            identifier: attributes.identifier,
+            help: attributes.help,
+            enabled: attributes.enabled,
+            actions: attributes.actions
         )
         output += line + "\n"
 
@@ -349,38 +408,72 @@ public actor AccessibilitySnapshot {
         // Item macOS has ever seen, which would inflate the tree 10-100x.
         // Open menus (just AXPick'd) DO get walked so AXMenuItem children
         // pick up element indices.
-        if role == "AXMenu" && !Self.isMenuOpen(element) { return }
+        if attributes.role == "AXMenu" && !Self.isMenuOpen(element) { return }
 
-        var kids = (depth == 0 && role == "AXApplication")
+        let kids = (depth == 0 && attributes.role == "AXApplication")
             ? topLevelChildren(of: element)
             : Self.children(of: element)
 
         // At app root, filter AXWindow children to only the target window
         // (keep non-window children: menu bar, etc).
-        if depth == 0 && role == "AXApplication" {
-            kids = kids.filter { child in
-                let childRole = Self.attributeString(child, "AXRole")
-                guard childRole == "AXWindow" else { return true }
-                guard let cgWindowId = axWindowID(for: child) else {
+        var siblingCounts: [LocatorSignature: Int] = [:]
+        for childElement in kids {
+            guard elements.count < Self.maxElements else { break }
+            guard renderedNodes < Self.maxRenderedNodes else { break }
+
+            let childAttributes = Self.readNodeAttributes(childElement)
+            if depth == 0 && attributes.role == "AXApplication" && childAttributes.role == "AXWindow" {
+                if let cgWindowId = axWindowID(for: childElement) {
+                    guard cgWindowId == targetWindowId else { continue }
+                } else {
                     // Couldn't resolve the CGWindowID — keep it rather than
                     // silently dropping a window we can't classify.
-                    return true
                 }
-                return cgWindowId == targetWindowId
             }
-        }
 
-        for child in kids {
+            let signature = childAttributes.locatorSignature
+            let siblingOrdinal = siblingCounts[signature, default: 0]
+            siblingCounts[signature] = siblingOrdinal + 1
+            let childLocatorPath = Self.childLocatorPath(
+                parentPath: locatorPath,
+                parentRole: attributes.role,
+                childElement: childElement,
+                childAttributes: childAttributes,
+                siblingOrdinal: siblingOrdinal,
+                targetWindowId: targetWindowId
+            )
             renderTree(
-                child,
+                childElement,
                 depth: depth + 1,
+                pid: pid,
+                bundleId: bundleId,
                 targetWindowId: targetWindowId,
+                attributes: childAttributes,
+                locatorPath: childLocatorPath,
                 elements: &elements,
                 nextIndex: &nextIndex,
                 renderedNodes: &renderedNodes,
                 output: &output
             )
         }
+    }
+
+    private static func childLocatorPath(
+        parentPath: [AXElementLocator.PathComponent]?,
+        parentRole: String,
+        childElement: AXUIElement,
+        childAttributes: NodeAttributes,
+        siblingOrdinal: Int,
+        targetWindowId: CGWindowID
+    ) -> [AXElementLocator.PathComponent]? {
+        if parentRole == "AXApplication",
+           childAttributes.role == "AXWindow",
+           axWindowID(for: childElement) == targetWindowId {
+            return []
+        }
+        guard var path = parentPath else { return nil }
+        path.append(childAttributes.locatorPathComponent(siblingOrdinal: siblingOrdinal))
+        return path
     }
 
     /// Union `AXChildren` ∪ `AXWindows` on the app root. `AXChildren`
@@ -397,6 +490,20 @@ public actor AccessibilitySnapshot {
     }
 
     // MARK: - Static AX helpers
+
+    private static func readNodeAttributes(_ element: AXUIElement) -> NodeAttributes {
+        NodeAttributes(
+            role: attributeString(element, "AXRole") ?? "?",
+            subrole: attributeString(element, "AXSubrole"),
+            title: attributeString(element, "AXTitle"),
+            value: attributeString(element, "AXValue"),
+            description: attributeString(element, "AXDescription"),
+            identifier: attributeString(element, "AXIdentifier"),
+            help: attributeString(element, "AXHelp"),
+            enabled: attributeBool(element, "AXEnabled"),
+            actions: actionNames(of: element)
+        )
+    }
 
     private static func windows(of appRoot: AXUIElement) -> [AXUIElement] {
         var value: CFTypeRef?

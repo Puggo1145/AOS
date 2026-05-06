@@ -1,5 +1,7 @@
-import Foundation
+import AOSAXSupport
+import AppKit
 import ApplicationServices
+import Foundation
 
 // MARK: - GeneralProbe
 //
@@ -33,6 +35,7 @@ public final class GeneralProbe {
     private var pid: pid_t?
     private var appElement: AXUIElement?
     private var focusedElement: AXUIElement?
+    private var focusedLocator: AXElementLocator?
 
     /// Token for the app-level focused-element-changed subscription.
     private var focusToken: AXObserverHub.Token?
@@ -89,6 +92,7 @@ public final class GeneralProbe {
         pid = nil
         appElement = nil
         focusedElement = nil
+        focusedLocator = nil
         // Notify the store the probe contributes nothing for this app.
         onChange([])
     }
@@ -97,8 +101,6 @@ public final class GeneralProbe {
 
     private func refocus() {
         guard let pid, let appElement else { return }
-        for token in elementTokens { hub.unsubscribe(token) }
-        elementTokens.removeAll()
 
         var ref: CFTypeRef?
         let err = AXUIElementCopyAttributeValue(
@@ -107,12 +109,21 @@ public final class GeneralProbe {
             &ref
         )
         guard err == .success, let value = ref else {
-            focusedElement = nil
-            recompute()
+            handleMissingFocusedElement(pid: pid)
             return
         }
-        let element = value as! AXUIElement
+        guard let element = axElement(from: value) else {
+            handleMissingFocusedElement(pid: pid)
+            return
+        }
+        unsubscribeFocusedElementNotifications()
         focusedElement = element
+        let app = NSRunningApplication(processIdentifier: pid)
+        focusedLocator = AXElementLocatorReader.locate(
+            element: element,
+            pid: pid,
+            bundleId: app?.bundleIdentifier
+        )
 
         let notes: [String] = [
             kAXSelectedTextChangedNotification as String,
@@ -134,6 +145,32 @@ public final class GeneralProbe {
             }
         }
         recompute()
+    }
+
+    /// Some apps report `AXFocusedUIElement == nil` when keyboard focus moves
+    /// to AOS' non-activating Notch input. That is not an in-source-app focus
+    /// change, so preserve the last external focused element instead of
+    /// deleting `general.currentInput`.
+    private func handleMissingFocusedElement(pid: pid_t) {
+        if Self.shouldRetainFocusedElementWhenFocusReadFails(
+            hasFocusedElement: focusedElement != nil,
+            targetPid: pid,
+            frontmostPid: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+            appHasKeyWindow: NSApp.keyWindow != nil
+        ) {
+            recompute()
+            return
+        }
+
+        unsubscribeFocusedElementNotifications()
+        focusedElement = nil
+        focusedLocator = nil
+        recompute()
+    }
+
+    private func unsubscribeFocusedElementNotifications() {
+        for token in elementTokens { hub.unsubscribe(token) }
+        elementTokens.removeAll()
     }
 
     // MARK: - Debounce dispatch
@@ -217,7 +254,7 @@ public final class GeneralProbe {
             envelopes.append(Self.makeSelectedTextEnvelope(text: s, pid: pid))
         }
         if currentInputApplies {
-            envelopes.append(Self.makeCurrentInputEnvelope(value: value ?? "", pid: pid))
+            envelopes.append(Self.makeCurrentInputEnvelope(value: value ?? "", pid: pid, target: focusedLocator))
         }
 
         let items = readSelectedItems(element)
@@ -400,7 +437,7 @@ public final class GeneralProbe {
         // *that* something is selected, not the prefix of it. The full text
         // travels in payload.content for the LLM. Same rationale as the paste
         // chip — see docs/designs/os-sense.md §"Clipboard capture".
-        BehaviorEnvelope(
+        return BehaviorEnvelope(
             kind: "general.selectedText",
             citationKey: "general.selectedText:\(pid)",
             displaySummary: "Selected text",
@@ -408,13 +445,71 @@ public final class GeneralProbe {
         )
     }
 
-    internal nonisolated static func makeCurrentInputEnvelope(value: String, pid: pid_t) -> BehaviorEnvelope {
-        BehaviorEnvelope(
+    internal nonisolated static func makeCurrentInputEnvelope(
+        value: String,
+        pid: pid_t,
+        target: AXElementLocator? = nil
+    ) -> BehaviorEnvelope {
+        var payload: [String: JSONValue] = [
+            "value": .string(PayloadSizeGuard.clamp(value))
+        ]
+        if let target {
+            payload["target"] = locatorJSON(target)
+        }
+        return BehaviorEnvelope(
             kind: "general.currentInput",
             citationKey: "general.currentInput:\(pid)",
             displaySummary: "Current input",
-            payload: .object(["value": .string(PayloadSizeGuard.clamp(value))])
+            payload: .object(payload)
         )
+    }
+
+    private nonisolated static func locatorJSON(_ locator: AXElementLocator) -> JSONValue {
+        var object: [String: JSONValue] = [
+            "pid": .int(Int(locator.pid)),
+            "locatorId": .string(locator.locatorId),
+            "pathFromWindow": .array(locator.pathFromWindow.map(pathComponentJSON(_:))),
+        ]
+        if let bundleId = locator.bundleId {
+            object["bundleId"] = .string(bundleId)
+        }
+        if let windowId = locator.windowId {
+            object["windowId"] = .int(Int(windowId))
+        }
+        if let windowTitle = locator.windowTitle {
+            object["windowTitle"] = .string(windowTitle)
+        }
+        if let frame = locator.frame {
+            object["frame"] = .object([
+                "x": .double(frame.x),
+                "y": .double(frame.y),
+                "width": .double(frame.width),
+                "height": .double(frame.height),
+            ])
+        }
+        return .object(object)
+    }
+
+    private nonisolated static func pathComponentJSON(_ component: AXElementLocator.PathComponent) -> JSONValue {
+        var object: [String: JSONValue] = [
+            "role": .string(component.role)
+        ]
+        if let subrole = component.subrole {
+            object["subrole"] = .string(subrole)
+        }
+        if let identifier = component.identifier {
+            object["identifier"] = .string(identifier)
+        }
+        if let title = component.title {
+            object["title"] = .string(title)
+        }
+        if let description = component.description {
+            object["description"] = .string(description)
+        }
+        if let siblingOrdinal = component.siblingOrdinal {
+            object["siblingOrdinal"] = .int(siblingOrdinal)
+        }
+        return .object(object)
     }
 
     internal nonisolated static func shouldEmitCurrentInput(
@@ -424,6 +519,18 @@ public final class GeneralProbe {
     ) -> Bool {
         let hasSelectedText = !(selectedText ?? "").isEmpty
         return !hasSelectedText && editable
+    }
+
+    internal nonisolated static func shouldRetainFocusedElementWhenFocusReadFails(
+        hasFocusedElement: Bool,
+        targetPid: pid_t,
+        frontmostPid: pid_t?,
+        appHasKeyWindow: Bool
+    ) -> Bool {
+        guard hasFocusedElement else { return false }
+        if appHasKeyWindow { return true }
+        guard let frontmostPid else { return false }
+        return frontmostPid != targetPid
     }
 
     internal nonisolated static func makeSelectedItemsEnvelope(items: [SelectedItem], pid: pid_t) -> BehaviorEnvelope {

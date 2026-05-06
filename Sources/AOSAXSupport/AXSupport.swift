@@ -44,6 +44,14 @@ public func axWindowID(for element: AXUIElement) -> CGWindowID? {
     return err == .success ? windowId : nil
 }
 
+/// Checked bridge from an opaque AX `CFTypeRef` attribute value to
+/// `AXUIElement`. AX is a cross-process API; callers must not force-cast
+/// arbitrary attribute values returned by another process.
+public func axElement(from value: CFTypeRef) -> AXUIElement? {
+    guard CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+    return unsafeBitCast(value, to: AXUIElement.self)
+}
+
 // MARK: - Sendable conformance for shared AX CFTypes
 //
 // Apple has not annotated Sendable on AX CF types. Both AOSOSSenseKit and

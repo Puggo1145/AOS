@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import AOSAXSupport
 @testable import AOSOSSenseKit
 
 @Suite("GeneralProbe — pure helpers")
@@ -109,5 +110,68 @@ struct GeneralProbeTests {
     func emptyEditableFieldEmitsCurrentInput() {
         #expect(GeneralProbe.shouldEmitCurrentInput(selectedText: nil, value: "", editable: true))
         #expect(GeneralProbe.shouldEmitCurrentInput(selectedText: nil, value: nil, editable: true))
+    }
+
+    @Test("currentInput payload carries locator target when provided")
+    func currentInputPayloadCarriesLocatorTarget() {
+        let locator = AXElementLocator(
+            pid: 5,
+            bundleId: "com.example.Editor",
+            windowId: 9,
+            windowTitle: "Draft",
+            pathFromWindow: [
+                AXElementLocator.PathComponent(role: "AXGroup", siblingOrdinal: 0),
+                AXElementLocator.PathComponent(role: "AXTextField", identifier: "body", siblingOrdinal: 1),
+            ],
+            frame: AXElementLocator.Frame(x: 10, y: 20, width: 300, height: 24)
+        )
+        let env = GeneralProbe.makeCurrentInputEnvelope(value: "hello", pid: 5, target: locator)
+
+        guard case let .object(payload) = env.payload,
+              case let .object(target)? = payload["target"],
+              case let .string(locatorId)? = target["locatorId"],
+              case let .array(path)? = target["pathFromWindow"],
+              case let .object(lastPath)? = path.last,
+              case let .int(siblingOrdinal)? = lastPath["siblingOrdinal"] else {
+            Issue.record("expected currentInput target locator payload")
+            return
+        }
+
+        #expect(locatorId == locator.locatorId)
+        #expect(siblingOrdinal == 1)
+    }
+
+    @Test("missing AX focus is retained when Notch owns keyboard focus")
+    func missingAXFocusRetainsPriorInputWhileNotchIsKey() {
+        #expect(GeneralProbe.shouldRetainFocusedElementWhenFocusReadFails(
+            hasFocusedElement: true,
+            targetPid: 42,
+            frontmostPid: 42,
+            appHasKeyWindow: true
+        ))
+
+        #expect(!GeneralProbe.shouldRetainFocusedElementWhenFocusReadFails(
+            hasFocusedElement: true,
+            targetPid: 42,
+            frontmostPid: 42,
+            appHasKeyWindow: false
+        ))
+    }
+
+    @Test("missing AX focus is retained after the source app deactivates")
+    func missingAXFocusRetainsPriorInputAfterSourceAppDeactivates() {
+        #expect(GeneralProbe.shouldRetainFocusedElementWhenFocusReadFails(
+            hasFocusedElement: true,
+            targetPid: 42,
+            frontmostPid: 99,
+            appHasKeyWindow: false
+        ))
+
+        #expect(!GeneralProbe.shouldRetainFocusedElementWhenFocusReadFails(
+            hasFocusedElement: false,
+            targetPid: 42,
+            frontmostPid: 99,
+            appHasKeyWindow: true
+        ))
     }
 }

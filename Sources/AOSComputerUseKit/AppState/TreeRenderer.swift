@@ -14,6 +14,7 @@ public enum TreeRenderer {
     public static func renderLine(
         depth: Int,
         elementIndex: Int?,
+        locatorId: String? = nil,
         role: String,
         subrole: String?,
         title: String?,
@@ -46,6 +47,9 @@ public enum TreeRenderer {
         }
         if let id = identifier, !id.isEmpty {
             line += " id=\(id)"
+        }
+        if let locatorId, !locatorId.isEmpty {
+            line += " locator=\(locatorId)"
         }
         // DISABLED only meaningful on interactive elements; containers
         // routinely report enabled=false.

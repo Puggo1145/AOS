@@ -171,6 +171,7 @@ screen_point.y = windowBounds.y + image_pixel.y / backingScale
 
 `getAppState({pid, windowId, captureMode?})` 必传 `windowId`（先 `listWindows({pid})` 选）。Kit 内部：
 
+- AX tree 渲染时同步维护 locator path：每个 parent 的 children 只读一遍属性，并在同一层一次性计算 sibling ordinal。禁止在每个 interactive node 上重新调用 `AXElementLocatorReader.locate` 反向遍历 ancestor / sibling；大窗口快照必须保持单次 DFS 成本。
 - 完成 AX 遍历后，在 `StateCache` 中按 `(pid, windowId)` 保存 `[elementIndex → AXUIElement]`，分配 UUID `stateId`，TTL 30s
 - 同 `(pid, windowId)` 的新 snapshot 直接覆盖旧缓存（不做 LRU，单 key 仅保留最新）
 - `click({pid, windowId, stateId, elementIndex})`：

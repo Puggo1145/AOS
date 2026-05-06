@@ -19,4 +19,17 @@ struct AXSupportTests {
         // Application element doesn't have a CGWindowID — expect nil.
         #expect(id == nil)
     }
+
+    @Test("AX element cast helper rejects non-AX CF values")
+    func axElementCastRejectsNonAXValues() {
+        let notElement: CFTypeRef = "not an element" as CFString
+        #expect(axElement(from: notElement) == nil)
+    }
+
+    @Test("AX element cast helper accepts AXUIElement values")
+    func axElementCastAcceptsAXValues() {
+        let app = AXUIElementCreateApplication(getpid())
+        let value: CFTypeRef = app
+        #expect(axElement(from: value) != nil)
+    }
 }

@@ -1,3 +1,4 @@
+import AOSAXSupport
 import AppKit
 import ApplicationServices
 import Foundation
@@ -113,7 +114,6 @@ public actor FocusGuard {
         var value: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(element, "AXWindow" as CFString, &value)
         guard result == .success, let raw = value else { return nil }
-        guard CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
-        return unsafeBitCast(raw, to: AXUIElement.self)
+        return axElement(from: raw)
     }
 }

@@ -199,7 +199,7 @@ public final class WindowMirror {
             &focusedRef
         )
         guard err == .success, let value = focusedRef else { return nil }
-        let windowElement = value as! AXUIElement
+        guard let windowElement = axElement(from: value) else { return nil }
 
         var titleRef: CFTypeRef?
         AXUIElementCopyAttributeValue(

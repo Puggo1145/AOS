@@ -114,9 +114,26 @@ producer 内部可保留强类型 struct，最后一步映射为 envelope。
 |---|---|---|---|
 | `general.selectedText` | `{ content: String }` | `AXSelectedText` | 属性存在且非空 |
 | `general.selectedItems` | `{ items: SelectedItem[] }` | `AXSelectedChildren` / `AXSelectedRows` | 数组非空 |
-| `general.currentInput` | `{ value: String }` | `AXFocusedUIElement` 的 `AXValue` | 元素可编辑且 value 非空 |
+| `general.currentInput` | `{ value: String, target: AXElementLocator }` | `AXFocusedUIElement` 的 `AXValue` + focused element 局部 AX locator | 元素可编辑且 value 非空 |
 
 **去重**：`general.selectedText` 与 `general.currentInput` 来自同一元素时只保留前者。
+
+**`currentInput.target` 定位契约**：`target.locatorId` 由 `AOSAXSupport.AXElementLocator`
+生成，输入包括 stable app/window identity、从 window 到 focused element 的 ancestor path、
+每层同 signature sibling ordinal 与常用 AX 属性；window title 与 screen frame 作为 payload
+metadata 输出，不参与 `locatorId`，避免标题变化或窗口移动后 context 与下一次 app state
+无法对齐。它不是长期句柄；agent 仍需调用 `computer_use_get_app_state` 获取新鲜
+`stateId + elementIndex`。Computer Use 用同一 locator 算法在 AX tree 行渲染
+`locator=axloc_...`，因此 agent 可以把
+`currentInput.payload.target.locatorId` 与 app state 中的具体 `[elementIndex]` 对齐。
+GeneralProbe 只在 focused element 切换时计算 locator；`AXValueChanged` 只更新 `value`，
+不做全窗口遍历。
+
+**Notch 抢焦保留规则**：用户先聚焦外部 app 输入框，再打开 Notch 并聚焦 AOS 输入框时，
+部分 app 会把自己的 `AXFocusedUIElement` 暴露为 missing。这个事件不代表用户在源 app
+内部换了目标，因此 GeneralProbe 保留上一 focused element 与 `currentInput`：仅当 AOS
+自身持有 key window，或 `NSWorkspace.frontmostApplication` 已不是源 app 时触发保留。
+若源 app 仍是前台且 AOS 没有 key window，missing focus 才清空 `currentInput`。
 
 **逐字捕获，1 MiB 兜底**：所有文本（`selectedText`、`currentInput`、剪贴板）都按"用户的显式信号必须完整给模型"原则**逐字**进入 payload，没有内容感知的截断（不按 token、句子、段落裁）。`PayloadSizeGuard.clamp` 在单个字符串超过 1 MiB UTF-8 字节时做 defense-in-depth 兜底裁剪并附 `…[truncated, original N bytes]` 标记，避免一次失控捕获把 NDJSON 帧撑破——但这条 cap 在任何现实人类内容下都不会触发，业务语义上仍然按"不截断"对待。
 

@@ -1,3 +1,4 @@
+import AOSAXSupport
 import ApplicationServices
 import CoreGraphics
 import Foundation
@@ -149,12 +150,8 @@ public enum AXInput {
             if CFEqual(node, target) { return true }
             var parent: CFTypeRef?
             let result = AXUIElementCopyAttributeValue(node, "AXParent" as CFString, &parent)
-            guard
-                result == .success,
-                let parent,
-                CFGetTypeID(parent) == AXUIElementGetTypeID()
-            else { return false }
-            current = unsafeBitCast(parent, to: AXUIElement.self)
+            guard result == .success, let parent else { return false }
+            current = axElement(from: parent)
         }
         return false
     }
