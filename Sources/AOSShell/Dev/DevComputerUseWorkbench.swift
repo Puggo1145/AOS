@@ -73,6 +73,18 @@ final class DevComputerUseWorkbench {
     var dragToX: String = "100"
     var dragToY: String = "100"
 
+    var coordinateReliabilityScript: String = """
+    80,80
+    160,120
+    240,180
+    320,240
+    """
+    var coordinateReliabilityTolerance: String = "4"
+    var coordinateReliabilityResults: [DevCoordinateReliabilityResult] = []
+    var coordinateReliabilitySummary: String?
+    @ObservationIgnored let coordinateReliabilityStore = DevCoordinateReliabilityStore()
+    @ObservationIgnored let coordinateReliabilityTarget = DevCoordinateReliabilityTargetProcess()
+
     var textToType: String = ""
     var key: String = "return"
     var keyModifiers: String = ""
@@ -119,6 +131,8 @@ final class DevComputerUseWorkbench {
         axTree = nil
         screenshot = nil
         stateSummary = nil
+        coordinateReliabilityResults = []
+        coordinateReliabilitySummary = nil
     }
 }
 

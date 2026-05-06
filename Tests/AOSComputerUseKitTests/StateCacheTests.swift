@@ -153,15 +153,39 @@ struct StateCacheTests {
         #expect(missing == nil)
     }
 
+    @Test("recordScreenshot stores the full coordinate space")
+    func screenshotCoordinateSpaceRoundTrips() async {
+        let cache = StateCache(ttlSeconds: 30)
+        let reference = ScreenshotCoordinateSpace(
+            windowFrame: WindowBounds(x: 20, y: 40, width: 500, height: 300),
+            pixelSize: CGSize(width: 1000, height: 600)
+        )
+
+        await cache.recordScreenshot(pid: 1, windowId: 2, coordinateSpace: reference)
+        let stored = await cache.screenshotCoordinateSpace(pid: 1, windowId: 2)
+
+        #expect(stored == reference)
+    }
+
     @Test("recordScreenshot rejects zero/negative dimensions")
     func screenshotRecordRejectsInvalid() async {
         let cache = StateCache(ttlSeconds: 30)
         await cache.recordScreenshot(pid: 1, windowId: 2, pixelSize: CGSize(width: 0, height: 800))
         await cache.recordScreenshot(pid: 1, windowId: 3, pixelSize: CGSize(width: 100, height: -1))
+        await cache.recordScreenshot(
+            pid: 1,
+            windowId: 4,
+            coordinateSpace: ScreenshotCoordinateSpace(
+                windowFrame: WindowBounds(x: 0, y: 0, width: 0, height: 100),
+                pixelSize: CGSize(width: 100, height: 100)
+            )
+        )
         let a = await cache.screenshotPixelSize(pid: 1, windowId: 2)
         let b = await cache.screenshotPixelSize(pid: 1, windowId: 3)
+        let c = await cache.screenshotCoordinateSpace(pid: 1, windowId: 4)
         #expect(a == nil)
         #expect(b == nil)
+        #expect(c == nil)
     }
 
     @Test("Screenshot record is dropped after TTL")

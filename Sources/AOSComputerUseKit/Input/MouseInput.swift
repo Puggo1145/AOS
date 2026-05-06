@@ -66,7 +66,8 @@ public enum MouseInput {
         windowId: CGWindowID,
         button: Button,
         count: Int = 1,
-        modifiers: [String] = []
+        modifiers: [String] = [],
+        windowFrame: WindowBounds? = nil
     ) throws {
         let targetIsFrontmost = NSRunningApplication(processIdentifier: pid)?.isActive ?? false
         if targetIsFrontmost {
@@ -83,7 +84,8 @@ public enum MouseInput {
 
         if button == .left, count == 1 || count == 2, modifiers.isEmpty {
             try clickViaAuthSignedPost(
-                at: point, toPid: pid, windowId: windowId, count: count)
+                at: point, toPid: pid, windowId: windowId, count: count,
+                windowFrame: windowFrame)
             return
         }
 
@@ -200,15 +202,16 @@ public enum MouseInput {
         at point: CGPoint,
         toPid pid: pid_t,
         windowId: CGWindowID,
-        count: Int
+        count: Int,
+        windowFrame: WindowBounds?
     ) throws {
         let clickPairs = max(1, min(2, count))
         let winNum = Int(windowId)
 
-        let windowBounds = WindowEnumerator.window(forId: windowId)?.bounds
+        let windowBounds = windowFrame ?? WindowEnumerator.window(forId: windowId)?.bounds
         let windowLocalTarget: CGPoint = {
             guard let bounds = windowBounds else { return point }
-            return CGPoint(x: point.x - bounds.x, y: point.y - bounds.y)
+            return Self.windowLocalPoint(screenPoint: point, windowFrame: bounds)
         }()
 
         // Step 1: yabai-style activation. Skip if SPI unavailable —
@@ -475,6 +478,20 @@ public enum MouseInput {
         // Mouse path skips auth message — see file-level doc.
         _ = SkyLightEventPost.postToPid(pid, event: event, attachAuthMessage: false)
         event.postToPid(pid)
+    }
+
+    static func _windowLocalPointForTesting(
+        screenPoint: CGPoint,
+        windowFrame: WindowBounds
+    ) -> CGPoint {
+        windowLocalPoint(screenPoint: screenPoint, windowFrame: windowFrame)
+    }
+
+    private static func windowLocalPoint(
+        screenPoint: CGPoint,
+        windowFrame: WindowBounds
+    ) -> CGPoint {
+        CGPoint(x: screenPoint.x - windowFrame.x, y: screenPoint.y - windowFrame.y)
     }
 
     private static func buildBridgedEvent(

@@ -36,6 +36,7 @@ struct DevComputerUseSectionView: View {
                 stateSection
                 elementClickSection
                 coordinateSection
+                coordinateReliabilitySection
                 keyboardSection
                 doctorSection
             }
@@ -253,6 +254,87 @@ struct DevComputerUseSectionView: View {
         }
     }
 
+    private var coordinateReliabilitySection: some View {
+        devGroup("Coordinate Reliability") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Button {
+                        Task { await workbench.openCoordinateReliabilityTarget() }
+                    } label: {
+                        Label("Open Target", systemImage: "scope")
+                    }
+                    .disabled(workbench.isRunning)
+
+                    TextField("Tolerance pt", text: $workbench.coordinateReliabilityTolerance)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 110)
+
+                    Button {
+                        Task { await workbench.runCoordinateReliabilityClicks() }
+                    } label: {
+                        Label("Run Clicks", systemImage: "cursorarrow.click.2")
+                    }
+                    .disabled(!workbench.hasTarget || workbench.isRunning)
+
+                    Button {
+                        Task { await workbench.clearCoordinateReliabilityTarget() }
+                    } label: {
+                        Label("Clear", systemImage: "eraser")
+                    }
+                    .disabled(workbench.isRunning)
+
+                    if let summary = workbench.coordinateReliabilitySummary {
+                        Text(summary)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                TextEditor(text: $workbench.coordinateReliabilityScript)
+                    .font(.caption.monospaced())
+                    .frame(minHeight: 96)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(Color.secondary.opacity(0.20))
+                    )
+                    .accessibilityLabel("Coordinate reliability input")
+
+                if !workbench.coordinateReliabilityResults.isEmpty {
+                    coordinateReliabilityResults
+                }
+            }
+        }
+    }
+
+    private var coordinateReliabilityResults: some View {
+        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
+            GridRow {
+                Text("#")
+                Text("Expected")
+                Text("Actual")
+                Text("Delta")
+                Text("Distance")
+                Text("Result")
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+
+            ForEach(workbench.coordinateReliabilityResults) { result in
+                GridRow {
+                    Text("\(result.index)")
+                    Text(pointLabel(result.expected))
+                    Text(pointLabel(result.actual))
+                    Text(sizeLabel(result.delta))
+                    Text(String(format: "%.2f pt", result.distance))
+                    Label(result.passed ? "pass" : "fail", systemImage: result.passed ? "checkmark.circle.fill" : "xmark.circle.fill")
+                        .foregroundStyle(result.passed ? .green : .red)
+                }
+                .font(.caption.monospaced())
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+
     private var keyboardSection: some View {
         devGroup("Keyboard") {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -432,5 +514,15 @@ struct DevComputerUseSectionView: View {
         let f = DateFormatter()
         f.dateFormat = "HH:mm:ss"
         return f.string(from: d)
+    }
+
+    private func pointLabel(_ point: CGPoint) -> String {
+        if !point.x.isFinite || !point.y.isFinite { return "-" }
+        return "\(String(format: "%.1f", point.x)), \(String(format: "%.1f", point.y))"
+    }
+
+    private func sizeLabel(_ size: CGSize) -> String {
+        if !size.width.isFinite || !size.height.isFinite { return "-" }
+        return "\(String(format: "%+.1f", size.width)), \(String(format: "%+.1f", size.height))"
     }
 }

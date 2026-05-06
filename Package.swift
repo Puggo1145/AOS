@@ -24,6 +24,10 @@ let package = Package(
             name: "AOSShell",
             targets: ["AOSShell"]
         ),
+        .executable(
+            name: "AOSCoordinateTarget",
+            targets: ["AOSCoordinateTarget"]
+        ),
         .library(
             name: "AOSRPCSchema",
             targets: ["AOSRPCSchema"]
@@ -125,6 +129,13 @@ let package = Package(
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency=minimal")
             ]
+        ),
+        // Dev-only coordinate target used by AOSShell Dev Mode. It runs as a
+        // separate process so Computer Use coordinate tests exercise the real
+        // pid/window event-posting path instead of self-posting into AOS.
+        .executableTarget(
+            name: "AOSCoordinateTarget",
+            path: "Sources/AOSCoordinateTarget"
         ),
         .testTarget(
             name: "AOSShellTests",

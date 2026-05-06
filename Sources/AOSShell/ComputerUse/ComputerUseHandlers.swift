@@ -424,6 +424,17 @@ public final class ComputerUseHandlers {
                     "remedy": .string("call computer_use_get_app_state with captureMode 'som' or 'vision' first")
                 ])
             )
+        case .screenshotReferenceStale(let pid, let windowId, let reason):
+            return RPCError(
+                code: RPCErrorCode.invalidParams,
+                message: err.description,
+                data: .object([
+                    "pid": .int(Int(pid)),
+                    "windowId": .int(Int(windowId)),
+                    "reason": .string(reason),
+                    "remedy": .string("refresh app state before issuing coordinate operations")
+                ])
+            )
         case .axNotAuthorized:
             return RPCError(
                 code: RPCErrorCode.permissionDenied,

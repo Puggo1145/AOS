@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import AppKit
 import AOSComputerUseKit
 
 // MARK: - Computer Use Commands
@@ -105,6 +106,91 @@ extension DevComputerUseWorkbench {
                 )
             )
             lastResult = "computerUse.drag OK: success=\(success)"
+        }
+    }
+
+    func openCoordinateReliabilityTarget() async {
+        await run("coordinate reliability target launch") {
+            try coordinateReliabilityTarget.launch()
+            try await Task.sleep(nanoseconds: 350_000_000)
+            apps = await service.listApps(mode: appListMode)
+            guard let targetPid = coordinateReliabilityTarget.pid else {
+                throw DevComputerUseInputError.missingTarget("coordinate target pid")
+            }
+            guard let identity = apps.first(where: { $0.pid == targetPid })?.identity else {
+                throw DevComputerUseInputError.missingTarget("coordinate target app identity")
+            }
+            selectedAppIdentity = identity
+            _ = await loadWindowsForSelectedApp()
+            guard let targetWindow = windows.first(where: { $0.title == DevCoordinateReliabilityTargetProcess.windowTitle }) else {
+                throw DevComputerUseInputError.missingTarget("coordinate target window")
+            }
+            selectedWindowId = targetWindow.id
+            lastResult = "coordinate reliability target ready: pid=\(targetPid) windowId=\(targetWindow.id)"
+        }
+    }
+
+    func runCoordinateReliabilityClicks() async {
+        await run("coordinate reliability click sequence") {
+            let points = try DevCoordinateScript.parse(coordinateReliabilityScript)
+            let tolerance = try parseDouble(
+                coordinateReliabilityTolerance,
+                label: "coordinate reliability tolerance"
+            )
+            try coordinateReliabilityTarget.clearEvents()
+            let bundle = try await service.getAppState(
+                pid: try requirePid(),
+                windowId: try requireWindowId(),
+                captureMode: .vision,
+                maxImageDimension: 0
+            )
+            guard let screenshot = bundle.screenshot else {
+                throw DevComputerUseInputError.missingTarget("coordinate reliability screenshot")
+            }
+            for point in points {
+                let screenshotPixel = DevCoordinateReliabilityInput.screenshotPixel(
+                    fromTargetPoint: point,
+                    coordinateSpace: screenshot.coordinateSpace
+                )
+                _ = try await service.clickByCoords(
+                    pid: try requirePid(),
+                    windowId: try requireWindowId(),
+                    x: screenshotPixel.x,
+                    y: screenshotPixel.y,
+                    count: 1,
+                    modifiers: []
+                )
+            }
+            try await Task.sleep(nanoseconds: 180_000_000)
+            let actualEvents = try coordinateReliabilityTarget.readEvents()
+            let actualClicks = actualEvents.filter { $0.kind == .mouseDown }
+            let results = zip(points.indices, points).map { index, expected in
+                let actual = actualClicks.indices.contains(index)
+                    ? actualClicks[index].point
+                    : CGPoint(x: Double.nan, y: Double.nan)
+                return DevCoordinateReliabilityResult(
+                    index: index + 1,
+                    expected: expected,
+                    actual: actual,
+                    tolerancePixels: tolerance
+                )
+            }
+            coordinateReliabilityResults = results
+            let passed = results.filter(\.passed).count
+            coordinateReliabilitySummary = "\(passed)/\(results.count) click(s) within \(tolerance) pt"
+            resetAOSVisualCursor()
+            NSApp.activate(ignoringOtherApps: true)
+            lastResult = "coordinate reliability click sequence OK: \(coordinateReliabilitySummary ?? "-")"
+        }
+    }
+
+    func clearCoordinateReliabilityTarget() async {
+        await run("coordinate reliability clear") {
+            try coordinateReliabilityTarget.clearEvents()
+            coordinateReliabilityStore.reset()
+            coordinateReliabilityResults = []
+            coordinateReliabilitySummary = nil
+            lastResult = "coordinate reliability clear OK"
         }
     }
 

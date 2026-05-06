@@ -44,16 +44,14 @@ public actor StateCache {
         let elements: [Int: AXUIElement]
     }
 
-    /// The most recent screenshot's actual pixel size for `(pid, windowId)`.
+    /// The most recent screenshot coordinate space for `(pid, windowId)`.
     /// Stored independently of any AX snapshot so vision-only flows
-    /// (`captureMode: .vision`) and pure coordinate clicks can still find the
-    /// reference dimensions used to convert the model's pixel coords to
-    /// window-local points. `WindowCoordinateSpace` prefers this ratio
-    /// (`bounds.size / pixelSize`) over the assumed `backingScale` because
-    /// it survives `maxImageDimension` downscaling, fractional bounds
-    /// rounding, and any other real/declared scale mismatch.
+    /// (`captureMode: .vision`) and pure coordinate clicks can still
+    /// convert the model's screenshot pixels through the same
+    /// ScreenCaptureKit window frame that produced the image. CGWindowList
+    /// bounds are not a safe substitute on mixed-display Retina setups.
     private struct ScreenshotRecord {
-        let pixelSize: CGSize
+        let coordinateSpace: ScreenshotCoordinateSpace
         let recordedAt: Date
     }
 
@@ -174,34 +172,66 @@ public actor StateCache {
         return result == .success
     }
 
-    /// Record the actual pixel size of the latest screenshot for
-    /// `(pid, windowId)`. Same overwrite semantics as `store`.
+    /// Record the coordinate frame and actual pixel size of the latest
+    /// screenshot for `(pid, windowId)`. Same overwrite semantics as
+    /// `store`.
+    public func recordScreenshot(
+        pid: pid_t,
+        windowId: CGWindowID,
+        coordinateSpace: ScreenshotCoordinateSpace
+    ) {
+        let pixelSize = coordinateSpace.pixelSize
+        let frame = coordinateSpace.windowFrame
+        guard pixelSize.width > 0, pixelSize.height > 0,
+              frame.width > 0, frame.height > 0
+        else { return }
+        screenshotBucket[Key(pid: pid, windowId: windowId)] = ScreenshotRecord(
+            coordinateSpace: coordinateSpace,
+            recordedAt: Date()
+        )
+    }
+
     public func recordScreenshot(
         pid: pid_t,
         windowId: CGWindowID,
         pixelSize: CGSize
     ) {
-        guard pixelSize.width > 0, pixelSize.height > 0 else { return }
-        screenshotBucket[Key(pid: pid, windowId: windowId)] = ScreenshotRecord(
-            pixelSize: pixelSize,
-            recordedAt: Date()
+        recordScreenshot(
+            pid: pid,
+            windowId: windowId,
+            coordinateSpace: ScreenshotCoordinateSpace(
+                windowFrame: WindowBounds(
+                    x: 0,
+                    y: 0,
+                    width: pixelSize.width,
+                    height: pixelSize.height
+                ),
+                pixelSize: pixelSize
+            )
         )
     }
 
-    /// Most recent screenshot's actual pixel dimensions for
-    /// `(pid, windowId)`, if any. TTL matches the AX snapshot TTL so a
-    /// stale entry doesn't outlive a moved/resized window.
-    public func screenshotPixelSize(
+    /// Most recent screenshot coordinate space for `(pid, windowId)`, if
+    /// any. TTL matches the AX snapshot TTL so a stale entry doesn't
+    /// outlive a moved/resized window.
+    public func screenshotCoordinateSpace(
         pid: pid_t,
         windowId: CGWindowID
-    ) -> CGSize? {
+    ) -> ScreenshotCoordinateSpace? {
         let key = Key(pid: pid, windowId: windowId)
         guard let record = screenshotBucket[key] else { return nil }
         if Date().timeIntervalSince(record.recordedAt) > ttl {
             screenshotBucket.removeValue(forKey: key)
             return nil
         }
-        return record.pixelSize
+        return record.coordinateSpace
+    }
+
+    public func screenshotPixelSize(
+        pid: pid_t,
+        windowId: CGWindowID
+    ) -> CGSize? {
+        screenshotCoordinateSpace(pid: pid, windowId: windowId)?.pixelSize
     }
 
     /// Drop everything — used by `agent.reset` semantics if/when the

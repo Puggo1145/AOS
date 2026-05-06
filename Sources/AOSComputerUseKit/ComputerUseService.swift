@@ -79,6 +79,10 @@ public enum ComputerUseError: Error, CustomStringConvertible, Sendable {
     /// flow (call `getAppState` with `som`/`vision` first) instead of
     /// retrying the same coords.
     case noScreenshotReference(pid: pid_t, windowId: CGWindowID)
+    /// A coordinate operation used a screenshot reference captured before
+    /// the target window resized. The screenshot pixels no longer map to
+    /// the current window-local layout, so the caller must refresh state.
+    case screenshotReferenceStale(pid: pid_t, windowId: CGWindowID, reason: String)
     case axNotAuthorized
     case windowNotFound(windowId: CGWindowID)
     case noElement(message: String)
@@ -113,6 +117,8 @@ public enum ComputerUseError: Error, CustomStringConvertible, Sendable {
             return "\(label) (\(point.x), \(point.y)) is invalid (negative/NaN/non-finite or no reference screenshot dims)"
         case .noScreenshotReference(let pid, let windowId):
             return "no screenshot reference for (pid=\(pid), windowId=\(windowId)); call computer_use_get_app_state with captureMode 'som' or 'vision' before issuing coordinate operations — image-pixel coordinates have no defined space without a captured screenshot"
+        case .screenshotReferenceStale(let pid, let windowId, let reason):
+            return "screenshot reference for (pid=\(pid), windowId=\(windowId)) is stale: \(reason); refresh app state before issuing coordinate operations"
         case .axNotAuthorized:
             return "Accessibility permission required"
         case .windowNotFound(let id):
@@ -204,15 +210,14 @@ public actor ComputerUseService {
             )
         }
 
-        // Record the screenshot's actual pixel dimensions so subsequent
-        // coord-mode clicks (which only carry x/y, no stateId) can convert
-        // those pixels back to window-local points using the same ratio
-        // the model saw — independent of maxImageDimension downscaling.
+        // Record the screenshot coordinate space so subsequent coord-mode
+        // clicks (which only carry x/y, no stateId) use the same
+        // ScreenCaptureKit frame and pixel dimensions the model saw.
         if let shot {
             await cache.recordScreenshot(
                 pid: pid,
                 windowId: windowId,
-                pixelSize: CGSize(width: shot.width, height: shot.height)
+                coordinateSpace: shot.coordinateSpace
             )
         }
 
@@ -330,21 +335,29 @@ public actor ComputerUseService {
         count: Int,
         modifiers: [String]
     ) async throws -> (success: Bool, method: String) {
-        try validateOwnership(pid: pid, windowId: windowId)
+        let currentWindow = try validateOwnership(pid: pid, windowId: windowId)
         try validateOnSpace(windowId: windowId)
-        let referencePixelSize = try await requireReferencePixelSize(pid: pid, windowId: windowId)
+        let reference = try await requireReferenceCoordinateSpace(pid: pid, windowId: windowId)
         try validateImagePoint(
-            CGPoint(x: x, y: y), label: "click point", against: referencePixelSize
+            CGPoint(x: x, y: y), label: "click point", against: reference.pixelSize
+        )
+        let referenceFrame = try currentReferenceFrame(
+            reference,
+            currentWindowBounds: currentWindow.bounds,
+            pid: pid,
+            windowId: windowId
         )
         let screenPoint = try WindowCoordinateSpace.screenPoint(
             fromImagePixel: CGPoint(x: x, y: y),
             forPid: pid, windowId: windowId,
-            referenceImagePixelSize: referencePixelSize
+            referenceFrame: referenceFrame,
+            referenceImagePixelSize: reference.pixelSize
         )
         try await focusGuard.withFocusSuppressed(pid: pid, element: nil) {
             try MouseInput.click(
                 at: screenPoint, toPid: pid, windowId: windowId,
-                button: .left, count: count, modifiers: modifiers
+                button: .left, count: count, modifiers: modifiers,
+                windowFrame: referenceFrame
             )
         }
         return (true, "eventPost")
@@ -358,18 +371,26 @@ public actor ComputerUseService {
         from: CGPoint,
         to: CGPoint
     ) async throws -> Bool {
-        try validateOwnership(pid: pid, windowId: windowId)
+        let currentWindow = try validateOwnership(pid: pid, windowId: windowId)
         try validateOnSpace(windowId: windowId)
-        let referencePixelSize = try await requireReferencePixelSize(pid: pid, windowId: windowId)
-        try validateImagePoint(from, label: "drag.from", against: referencePixelSize)
-        try validateImagePoint(to, label: "drag.to", against: referencePixelSize)
+        let reference = try await requireReferenceCoordinateSpace(pid: pid, windowId: windowId)
+        try validateImagePoint(from, label: "drag.from", against: reference.pixelSize)
+        try validateImagePoint(to, label: "drag.to", against: reference.pixelSize)
+        let referenceFrame = try currentReferenceFrame(
+            reference,
+            currentWindowBounds: currentWindow.bounds,
+            pid: pid,
+            windowId: windowId
+        )
         let fromScreen = try WindowCoordinateSpace.screenPoint(
             fromImagePixel: from, forPid: pid, windowId: windowId,
-            referenceImagePixelSize: referencePixelSize
+            referenceFrame: referenceFrame,
+            referenceImagePixelSize: reference.pixelSize
         )
         let toScreen = try WindowCoordinateSpace.screenPoint(
             fromImagePixel: to, forPid: pid, windowId: windowId,
-            referenceImagePixelSize: referencePixelSize
+            referenceFrame: referenceFrame,
+            referenceImagePixelSize: reference.pixelSize
         )
         try await focusGuard.withFocusSuppressed(pid: pid, element: nil) {
             try MouseInput.drag(
@@ -387,16 +408,23 @@ public actor ComputerUseService {
         dx: Int32,
         dy: Int32
     ) async throws -> Bool {
-        try validateOwnership(pid: pid, windowId: windowId)
+        let currentWindow = try validateOwnership(pid: pid, windowId: windowId)
         try validateOnSpace(windowId: windowId)
-        let referencePixelSize = try await requireReferencePixelSize(pid: pid, windowId: windowId)
+        let reference = try await requireReferenceCoordinateSpace(pid: pid, windowId: windowId)
         try validateImagePoint(
-            CGPoint(x: x, y: y), label: "scroll point", against: referencePixelSize
+            CGPoint(x: x, y: y), label: "scroll point", against: reference.pixelSize
+        )
+        let referenceFrame = try currentReferenceFrame(
+            reference,
+            currentWindowBounds: currentWindow.bounds,
+            pid: pid,
+            windowId: windowId
         )
         let screenPoint = try WindowCoordinateSpace.screenPoint(
             fromImagePixel: CGPoint(x: x, y: y),
             forPid: pid, windowId: windowId,
-            referenceImagePixelSize: referencePixelSize
+            referenceFrame: referenceFrame,
+            referenceImagePixelSize: reference.pixelSize
         )
         try await focusGuard.withFocusSuppressed(pid: pid, element: nil) {
             try MouseInput.scroll(
@@ -443,7 +471,8 @@ public actor ComputerUseService {
     /// Hard contract: `windowId` must belong to `pid`. Cheap CGWindowList
     /// lookup; throws `windowMismatch` so the wire layer maps it onto
     /// `ErrWindowMismatch`.
-    private func validateOwnership(pid: pid_t, windowId: CGWindowID) throws {
+    @discardableResult
+    private func validateOwnership(pid: pid_t, windowId: CGWindowID) throws -> WindowInfo {
         guard let info = WindowEnumerator.window(forId: windowId) else {
             throw ComputerUseError.windowNotFound(windowId: windowId)
         }
@@ -452,21 +481,38 @@ public actor ComputerUseService {
                 pid: pid, windowId: windowId, ownerPid: info.pid, expectedWindowId: nil
             )
         }
+        return info
     }
 
     /// Look up the recorded screenshot dimensions for `(pid, windowId)`
     /// and reject the operation if there's no reference. Coordinate ops
     /// MUST run inside a known image-pixel space — see
     /// `ComputerUseError.noScreenshotReference` for why.
-    private func requireReferencePixelSize(
+    private func requireReferenceCoordinateSpace(
         pid: pid_t, windowId: CGWindowID
-    ) async throws -> CGSize {
-        guard let size = await cache.screenshotPixelSize(pid: pid, windowId: windowId),
-              size.width > 0, size.height > 0
+    ) async throws -> ScreenshotCoordinateSpace {
+        guard let reference = await cache.screenshotCoordinateSpace(pid: pid, windowId: windowId),
+              reference.pixelSize.width > 0, reference.pixelSize.height > 0
         else {
             throw ComputerUseError.noScreenshotReference(pid: pid, windowId: windowId)
         }
-        return size
+        return reference
+    }
+
+    private func currentReferenceFrame(
+        _ reference: ScreenshotCoordinateSpace,
+        currentWindowBounds: WindowBounds,
+        pid: pid_t,
+        windowId: CGWindowID
+    ) throws -> WindowBounds {
+        guard reference.hasSameWindowSize(as: currentWindowBounds) else {
+            throw ComputerUseError.screenshotReferenceStale(
+                pid: pid,
+                windowId: windowId,
+                reason: "window size changed from \(Int(reference.windowBounds.width))x\(Int(reference.windowBounds.height)) to \(Int(currentWindowBounds.width))x\(Int(currentWindowBounds.height))"
+            )
+        }
+        return reference.frameTranslatedToCurrentWindowBounds(currentWindowBounds)
     }
 
     /// Reject NaN/Inf, negatives, and anything outside `[0, width) x [0,

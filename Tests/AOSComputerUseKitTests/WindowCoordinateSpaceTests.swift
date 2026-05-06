@@ -60,6 +60,58 @@ struct WindowCoordinateSpaceTests {
         #expect(pt.y == 25)
     }
 
+    @Test("Screenshot frame anchors coordinates when CGWindow bounds are offset")
+    func screenshotFrameAnchorsCoordinates() {
+        // On the built-in Retina display, CGWindowList can report a
+        // window bounds origin offset from ScreenCaptureKit's frame by
+        // the window shadow margin. Using that bounds origin turns a
+        // 100 px screenshot click into a ~189 px canvas click.
+        let cgWindowBounds = WindowBounds(x: 44.5, y: 44.5, width: 900, height: 620)
+        let screenshotFrame = WindowBounds(x: 0, y: 0, width: 900, height: 620)
+        let pt = WindowCoordinateSpace._convertForTesting(
+            imagePixel: CGPoint(x: 100, y: 100),
+            windowBounds: cgWindowBounds,
+            referenceFrame: screenshotFrame,
+            referencePixelSize: CGSize(width: 1800, height: 1240)
+        )
+
+        #expect(pt.x == 50)
+        #expect(pt.y == 50)
+    }
+
+    @Test("Moved window translates the screenshot frame by the current CG bounds delta")
+    func movedWindowTranslatesScreenshotFrame() {
+        let reference = ScreenshotCoordinateSpace(
+            windowFrame: WindowBounds(x: 0, y: 0, width: 900, height: 620),
+            windowBounds: WindowBounds(x: 44.5, y: 44.5, width: 900, height: 620),
+            pixelSize: CGSize(width: 1800, height: 1240)
+        )
+        let currentWindowBounds = WindowBounds(x: 444.5, y: 144.5, width: 900, height: 620)
+
+        let frame = reference.frameTranslatedToCurrentWindowBounds(currentWindowBounds)
+        let pt = WindowCoordinateSpace._convertForTesting(
+            imagePixel: CGPoint(x: 100, y: 100),
+            windowBounds: currentWindowBounds,
+            referenceFrame: frame,
+            referencePixelSize: reference.pixelSize
+        )
+
+        #expect(frame == WindowBounds(x: 400, y: 100, width: 900, height: 620))
+        #expect(pt.x == 450)
+        #expect(pt.y == 150)
+    }
+
+    @Test("Window-local event stamp uses screenshot frame origin")
+    func windowLocalStampUsesScreenshotFrameOrigin() {
+        let local = MouseInput._windowLocalPointForTesting(
+            screenPoint: CGPoint(x: 50, y: 50),
+            windowFrame: WindowBounds(x: 0, y: 0, width: 900, height: 620)
+        )
+
+        #expect(local.x == 50)
+        #expect(local.y == 50)
+    }
+
     @Test("Nil reference size falls back to backing-scale path without crashing")
     func nilReferenceFallback() {
         // We can't assert exact values without controlling NSScreen, but

@@ -24,9 +24,13 @@ cd "$REPO_ROOT"
 
 BUILD_CONFIG="${AOS_BUILD_CONFIG:-debug}"
 swift build -c "$BUILD_CONFIG" --product AOSShell
+swift build -c "$BUILD_CONFIG" --product AOSCoordinateTarget
 
 mkdir -p AOS.app/Contents/MacOS AOS.app/Contents/Resources
 cp .build/"$BUILD_CONFIG"/AOSShell AOS.app/Contents/MacOS/AOS
+mkdir -p AOS.app/Contents/Resources/dev
+cp .build/"$BUILD_CONFIG"/AOSCoordinateTarget AOS.app/Contents/Resources/dev/AOSCoordinateTarget
+chmod +x AOS.app/Contents/Resources/dev/AOSCoordinateTarget
 
 # ----- Info.plist (with version injection) ------------------------------
 # Single source of truth for the app version is sidecar/package.json so
@@ -130,6 +134,11 @@ ENTITLEMENTS="$REPO_ROOT/Sources/AOSShellResources/AOS.entitlements"
 # is what we want here — but signing inner binaries explicitly first
 # guarantees the ordering is right (notarisation requires nested signing
 # in dependency order).
+codesign --force --options runtime \
+  --sign "$CODESIGN_IDENTITY" \
+  --entitlements "$ENTITLEMENTS" \
+  AOS.app/Contents/Resources/dev/AOSCoordinateTarget
+
 codesign --force --options runtime \
   --sign "$CODESIGN_IDENTITY" \
   --entitlements "$ENTITLEMENTS" \

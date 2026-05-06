@@ -70,7 +70,7 @@ func visualCursorScreenStateVelocity(
 }
 
 func visualCursorPostInteractionIdleTimeout() -> TimeInterval {
-    30
+    1
 }
 
 func visualCursorIdleRotationAmplitude() -> CGFloat {

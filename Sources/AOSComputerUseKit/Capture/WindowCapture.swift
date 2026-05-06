@@ -24,10 +24,31 @@ public struct Screenshot: Sendable {
     public let width: Int
     public let height: Int
     public let scaleFactor: Double
+    public let coordinateSpace: ScreenshotCoordinateSpace
     /// When the image was downscaled by `maxImageDimension`, the original
     /// width before resizing. nil when no resize happened.
     public let originalWidth: Int?
     public let originalHeight: Int?
+
+    public init(
+        imageData: Data,
+        format: ImageFormat,
+        width: Int,
+        height: Int,
+        scaleFactor: Double,
+        coordinateSpace: ScreenshotCoordinateSpace,
+        originalWidth: Int?,
+        originalHeight: Int?
+    ) {
+        self.imageData = imageData
+        self.format = format
+        self.width = width
+        self.height = height
+        self.scaleFactor = scaleFactor
+        self.coordinateSpace = coordinateSpace
+        self.originalWidth = originalWidth
+        self.originalHeight = originalHeight
+    }
 }
 
 // MARK: - ScreenshotPayloadPolicy
@@ -125,6 +146,9 @@ public actor WindowCapture {
         guard let window = content.windows.first(where: { $0.windowID == windowID }) else {
             throw CaptureError.windowNotFound(windowID)
         }
+        guard let windowInfo = WindowEnumerator.window(forId: windowID) else {
+            throw CaptureError.windowNotFound(windowID)
+        }
 
         let filter = SCContentFilter(desktopIndependentWindow: window)
         let config = SCStreamConfiguration()
@@ -154,6 +178,16 @@ public actor WindowCapture {
             width: resized.width,
             height: resized.height,
             scaleFactor: Double(scale),
+            coordinateSpace: ScreenshotCoordinateSpace(
+                windowFrame: WindowBounds(
+                    x: window.frame.origin.x,
+                    y: window.frame.origin.y,
+                    width: window.frame.size.width,
+                    height: window.frame.size.height
+                ),
+                windowBounds: windowInfo.bounds,
+                pixelSize: CGSize(width: resized.width, height: resized.height)
+            ),
             originalWidth: didResize ? origW : nil,
             originalHeight: didResize ? origH : nil
         )

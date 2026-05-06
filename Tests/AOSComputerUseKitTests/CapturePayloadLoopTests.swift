@@ -22,6 +22,15 @@ struct CapturePayloadLoopTests {
             width: width,
             height: width,
             scaleFactor: 2.0,
+            coordinateSpace: ScreenshotCoordinateSpace(
+                windowFrame: WindowBounds(
+                    x: 0,
+                    y: 0,
+                    width: Double(width) / 2.0,
+                    height: Double(width) / 2.0
+                ),
+                pixelSize: CGSize(width: width, height: width)
+            ),
             originalWidth: nil,
             originalHeight: nil
         )
