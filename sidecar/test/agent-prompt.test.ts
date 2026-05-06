@@ -78,6 +78,53 @@ test("formatCitedContext returns empty string for fully empty input", () => {
   expect(formatCitedContext({})).toBe("");
 });
 
+test("formatCitedContext renders exact text selections as marked context", () => {
+  const block = formatCitedContext({
+    behaviors: [
+      {
+        kind: "general.textSelection",
+        citationKey: "general.textSelection:4242",
+        displaySummary: "Selected text",
+        payload: {
+          context: "alpha selected omega",
+          selectedText: "selected",
+          range: { location: 6, length: 8, unit: "utf16" },
+          annotatedContext: "alpha [[SELECTED_START]]selected[[SELECTED_END]] omega",
+          source: "axRange",
+        },
+      },
+    ],
+  });
+
+  expect(block).toContain("Text selection:");
+  expect(block).toContain("<selected-text-context>");
+  expect(block).toContain("alpha [[SELECTED_START]]selected[[SELECTED_END]] omega");
+  expect(block).toContain("</selected-text-context>");
+  expect(block).not.toContain('"annotatedContext"');
+});
+
+test("formatCitedContext escapes XML-significant chars in marked text selection context", () => {
+  const block = formatCitedContext({
+    behaviors: [
+      {
+        kind: "general.textSelection",
+        citationKey: "general.textSelection:4242",
+        displaySummary: "Selected text",
+        payload: {
+          context: "<before> & after",
+          selectedText: "before",
+          range: { location: 1, length: 6, unit: "utf16" },
+          annotatedContext: "<[[SELECTED_START]]before[[SELECTED_END]]> & after",
+          source: "axRange",
+        },
+      },
+    ],
+  });
+
+  expect(block).toContain("&lt;[[SELECTED_START]]before[[SELECTED_END]]&gt; &amp; after");
+  expect(block).not.toContain("<[[SELECTED_START]]");
+});
+
 test("buildUserMessage expands [[clipboard:N]] markers inline using clipboards array", () => {
   // Shell ships chip positions as inline markers; the sidecar substitutes
   // them with the chip content so position becomes signal to the LLM.

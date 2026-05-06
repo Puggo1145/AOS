@@ -5,9 +5,9 @@
 //   "BehaviorEnvelope payload 完全 opaque, Bun 持有、序列化进 prompt、转发给 LLM"
 //
 // Format is plain text wrapped in <os-context> tags so the LLM can clearly
-// separate the user's prompt from the captured OS state. Each behavior carries
-// `kind` + `displaySummary` + opaque `payload`; the LLM is the only consumer
-// that interprets the payload structure by `kind`.
+// separate the user's prompt from the captured OS state. Most behaviors carry
+// `kind` + `displaySummary` + opaque `payload`; exact text selections are the
+// one deliberate exception because the model needs the marked context directly.
 
 import type { CitedContext, BehaviorEnvelope } from "../rpc/rpc-types";
 import type { ImageContent, UserContent, UserMessage } from "../llm/types";
@@ -147,6 +147,19 @@ function escapeXmlAttr(s: string): string {
 }
 
 function formatBehavior(b: BehaviorEnvelope): string[] {
+  if (b.kind === "general.textSelection") {
+    const marked = textSelectionAnnotatedContext(b.payload);
+    if (marked) {
+      return [
+        "  - general.textSelection: Selected text",
+        "    Text selection:",
+        "    <selected-text-context>",
+        `    ${escapeXmlText(marked)}`,
+        "    </selected-text-context>",
+      ];
+    }
+  }
+
   const head = `  - ${b.kind}: ${b.displaySummary}`;
   // Opaque payload — Bun does not interpret. JSON.stringify with sorted keys
   // gives a stable, compact rendering; LLM reads the structure per `kind`.
@@ -160,3 +173,8 @@ function formatBehavior(b: BehaviorEnvelope): string[] {
   return payloadLine ? [head, payloadLine] : [head];
 }
 
+function textSelectionAnnotatedContext(payload: BehaviorEnvelope["payload"]): string | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const value = payload["annotatedContext"];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}

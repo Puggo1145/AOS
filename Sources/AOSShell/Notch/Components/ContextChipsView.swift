@@ -215,6 +215,7 @@ struct ContextChipsView: View {
     /// rides in the envelope payload and is the LLM's to read.
     static func behaviorIcon(for envelope: BehaviorEnvelope) -> String {
         switch envelope.kind {
+        case "general.textSelection": return "text.quote"
         case "general.selectedText": return "text.quote"
         case "general.currentInput": return "keyboard"
         case "general.selectedItems": return "checklist"

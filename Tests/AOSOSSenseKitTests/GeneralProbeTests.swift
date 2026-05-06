@@ -98,6 +98,150 @@ struct GeneralProbeTests {
         #expect(content == raw)
     }
 
+    @Test("textSelection payload marks the selected range inside context")
+    func textSelectionPayloadMarksSelectedRange() {
+        let snapshot = GeneralProbe.TextSelectionSnapshot(
+            context: "hello selected world",
+            selectedText: "selected",
+            range: CFRange(location: 6, length: 8)
+        )
+        guard let env = GeneralProbe.makeTextSelectionEnvelope(snapshot: snapshot, pid: 42) else {
+            Issue.record("expected exact text selection envelope")
+            return
+        }
+
+        #expect(env.kind == "general.textSelection")
+        #expect(env.citationKey == "general.textSelection:42")
+        #expect(env.displaySummary == "Selected text")
+
+        guard case let .object(payload) = env.payload,
+              case let .string(context)? = payload["context"],
+              case let .string(selectedText)? = payload["selectedText"],
+              case let .object(range)? = payload["range"],
+              case let .int(location)? = range["location"],
+              case let .int(length)? = range["length"],
+              case let .string(unit)? = range["unit"],
+              case let .string(annotated)? = payload["annotatedContext"],
+              case let .string(source)? = payload["source"] else {
+            Issue.record("expected textSelection payload")
+            return
+        }
+
+        #expect(context == "hello selected world")
+        #expect(selectedText == "selected")
+        #expect(location == 6)
+        #expect(length == 8)
+        #expect(unit == "utf16")
+        #expect(annotated == "hello [[SELECTED_START]]selected[[SELECTED_END]] world")
+        #expect(source == "axRange")
+    }
+
+    @Test("textSelection validates UTF-16 ranges")
+    func textSelectionValidatesUTF16Ranges() {
+        let context = "hello 👋 selected"
+        let ns = context as NSString
+        let range = ns.range(of: "selected")
+        let snapshot = GeneralProbe.TextSelectionSnapshot(
+            context: context,
+            selectedText: "selected",
+            range: CFRange(location: range.location, length: range.length)
+        )
+
+        let env = GeneralProbe.makeTextSelectionEnvelope(snapshot: snapshot, pid: 7)
+        guard case let .object(payload)? = env?.payload,
+              case let .string(annotated)? = payload["annotatedContext"] else {
+            Issue.record("expected textSelection payload")
+            return
+        }
+
+        #expect(annotated == "hello 👋 [[SELECTED_START]]selected[[SELECTED_END]]")
+    }
+
+    @Test("textSelection rejects mismatched and out-of-bounds ranges")
+    func textSelectionRejectsInvalidRanges() {
+        let mismatched = GeneralProbe.TextSelectionSnapshot(
+            context: "hello selected world",
+            selectedText: "wrong",
+            range: CFRange(location: 6, length: 8)
+        )
+        let outOfBounds = GeneralProbe.TextSelectionSnapshot(
+            context: "hello selected world",
+            selectedText: "selected",
+            range: CFRange(location: 100, length: 8)
+        )
+
+        #expect(GeneralProbe.makeTextSelectionEnvelope(snapshot: mismatched, pid: 1) == nil)
+        #expect(GeneralProbe.makeTextSelectionEnvelope(snapshot: outOfBounds, pid: 1) == nil)
+    }
+
+    @Test("textSelection snapshot rebases a document selection into a larger context range")
+    func textSelectionSnapshotRebasesDocumentRangeIntoContextRange() {
+        let snapshot = GeneralProbe.makeTextSelectionSnapshot(
+            context: "beta selected gamma",
+            selectedText: "selected",
+            selectedRange: CFRange(location: 10, length: 8),
+            contextRange: CFRange(location: 5, length: 19)
+        )
+
+        guard let snapshot else {
+            Issue.record("expected rebased text selection snapshot")
+            return
+        }
+        let env = GeneralProbe.makeTextSelectionEnvelope(snapshot: snapshot, pid: 9)
+        guard case let .object(payload)? = env?.payload,
+              case let .object(range)? = payload["range"],
+              case let .int(location)? = range["location"],
+              case let .string(annotated)? = payload["annotatedContext"] else {
+            Issue.record("expected textSelection payload")
+            return
+        }
+
+        #expect(location == 5)
+        #expect(annotated == "beta [[SELECTED_START]]selected[[SELECTED_END]] gamma")
+    }
+
+    @Test("textSelection snapshot rejects a selection outside the context range")
+    func textSelectionSnapshotRejectsSelectionOutsideContextRange() {
+        let snapshot = GeneralProbe.makeTextSelectionSnapshot(
+            context: "beta selected gamma",
+            selectedText: "selected",
+            selectedRange: CFRange(location: 100, length: 8),
+            contextRange: CFRange(location: 5, length: 19)
+        )
+
+        #expect(snapshot == nil)
+    }
+
+    @Test("textSelection snapshot rejects invalid AXValue context and accepts ranged context")
+    func textSelectionSnapshotRejectsInvalidAXValueContextAndAcceptsRangedContext() {
+        let invalidAXValueSnapshot = GeneralProbe.makeTextSelectionSnapshot(
+            context: "selected",
+            selectedText: "selected",
+            selectedRange: CFRange(location: 10, length: 8),
+            contextRange: CFRange(location: 0, length: 8)
+        )
+        let rangedSnapshot = GeneralProbe.makeTextSelectionSnapshot(
+            context: "beta selected gamma",
+            selectedText: "selected",
+            selectedRange: CFRange(location: 10, length: 8),
+            contextRange: CFRange(location: 5, length: 19)
+        )
+
+        #expect(invalidAXValueSnapshot == nil)
+        guard let rangedSnapshot else {
+            Issue.record("expected ranged context snapshot")
+            return
+        }
+        let env = GeneralProbe.makeTextSelectionEnvelope(snapshot: rangedSnapshot, pid: 10)
+        guard case let .object(payload)? = env?.payload,
+              case let .string(annotated)? = payload["annotatedContext"] else {
+            Issue.record("expected textSelection payload")
+            return
+        }
+
+        #expect(annotated == "beta [[SELECTED_START]]selected[[SELECTED_END]] gamma")
+    }
+
     @Test("selectedText / currentInput chips show fixed labels, not content")
     func fixedDisplaySummary() {
         let sel = GeneralProbe.makeSelectedTextEnvelope(text: "anything goes here", pid: 1)

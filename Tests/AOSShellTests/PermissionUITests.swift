@@ -24,6 +24,18 @@ struct PermissionUITests {
         ])
     }
 
+    @Test("Exact text selection behavior uses a text quote icon")
+    func textSelectionUsesTextQuoteIcon() {
+        let envelope = BehaviorEnvelope(
+            kind: "general.textSelection",
+            citationKey: "general.textSelection:42",
+            displaySummary: "Selected text",
+            payload: .object([:])
+        )
+
+        #expect(ContextChipsView.behaviorIcon(for: envelope) == "text.quote")
+    }
+
     @Test("Finder file selection behavior uses a file icon")
     func finderFileSelectionUsesFileIcon() {
         let envelope = BehaviorEnvelope(

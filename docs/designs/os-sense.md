@@ -96,7 +96,7 @@ enum Permission { case accessibility, screenRecording, automation }
 
 ```swift
 struct BehaviorEnvelope: Codable, Sendable, Identifiable {
-    let kind: String              // 跨进程鉴别符，e.g. "general.selectedText"
+    let kind: String              // 跨进程鉴别符，e.g. "general.textSelection"
     let citationKey: String       // 引用稳定 ID
     let displaySummary: String    // 默认 chip 渲染用
     let payload: JSONValue        // opaque payload，结构由 kind 约定
@@ -112,11 +112,23 @@ producer 内部可保留强类型 struct，最后一步映射为 envelope。
 
 | kind | payload schema | 采集源 | 识别条件 |
 |---|---|---|---|
-| `general.selectedText` | `{ content: String }` | `AXSelectedText` | 属性存在且非空 |
+| `general.textSelection` | `{ context: String, selectedText: String, range: { location: number, length: number, unit: "utf16" }, annotatedContext: String, source: "axRange" }` | `AXSelectedTextRange(s)` + `AXValue` / `AXStringForRange` + `AXSelectedText` | 单一 selection range 存在、range 在 context 内、range 对应 substring 与 `AXSelectedText` 一致 |
+| `general.selectedText` | `{ content: String }` | `AXSelectedText` | degraded path：属性存在且非空，但无法形成 exact `general.textSelection` |
 | `general.selectedItems` | `{ items: SelectedItem[] }` | `AXSelectedChildren` / `AXSelectedRows` | 数组非空 |
 | `general.currentInput` | `{ value: String, target: AXElementLocator }` | `AXFocusedUIElement` 的 `AXValue` + focused element 局部 AX locator | 元素可编辑且 value 非空 |
 
-**去重**：`general.selectedText` 与 `general.currentInput` 来自同一元素时只保留前者。
+**文本 selection 输出优先级**：`general.textSelection` 是 preferred exact path，
+表达"总 context + 其中被选中的文本"。`annotatedContext` 必须把 selection 包在
+`[[SELECTED_START]]` / `[[SELECTED_END]]` marker 内，供 LLM 直接消费。若只拿到
+`AXSelectedText`，但拿不到单一 range、拿不到 context，或 range 对应 substring 与
+`AXSelectedText` 不一致，则不伪造上下文，退回 `general.selectedText`。context 获取顺序：
+先读 `AXValue`；若 app 不暴露完整 value，则使用 `AXVisibleCharacterRange` 或
+`AXNumberOfCharacters` 搭配 `AXStringForRange` 读取包含 selection 的文本上下文。
+浏览器 / WebView / Electron 可能只暴露 text marker 或 DOM selection；这类不能依赖
+GeneralProbe 的 CFRange 通道，需要 app-specific adapter。
+
+**去重**：`general.textSelection`、`general.selectedText` 与 `general.currentInput`
+来自同一元素时只保留最高优先级的 selection signal。
 
 **`currentInput.target` 定位契约**：`target.locatorId` 由 `AOSAXSupport.AXElementLocator`
 生成，输入包括 stable app/window identity、从 window 到 focused element 的 ancestor path、
@@ -135,7 +147,14 @@ GeneralProbe 只在 focused element 切换时计算 locator；`AXValueChanged` �
 自身持有 key window，或 `NSWorkspace.frontmostApplication` 已不是源 app 时触发保留。
 若源 app 仍是前台且 AOS 没有 key window，missing focus 才清空 `currentInput`。
 
-**逐字捕获，1 MiB 兜底**：所有文本（`selectedText`、`currentInput`、剪贴板）都按"用户的显式信号必须完整给模型"原则**逐字**进入 payload，没有内容感知的截断（不按 token、句子、段落裁）。`PayloadSizeGuard.clamp` 在单个字符串超过 1 MiB UTF-8 字节时做 defense-in-depth 兜底裁剪并附 `…[truncated, original N bytes]` 标记，避免一次失控捕获把 NDJSON 帧撑破——但这条 cap 在任何现实人类内容下都不会触发，业务语义上仍然按"不截断"对待。
+**不使用 pasteboard 作为 live selection**：Copy/Paste 证明的是前台 app 在 copy
+gesture 时能把自己的选区写入 pasteboard，不证明 OS Sense 在 copy 前拥有全局
+selection 真相。OS Sense 不模拟 Cmd+C、不读取 pasteboard 来推断 live selection。
+
+**不做视觉高亮复原**：`general.textSelection` 面向 LLM 的需求是文本上下文与
+selection marker，不包含屏幕 rect、颜色、OCR 或视觉高亮形状。
+
+**逐字捕获，1 MiB 兜底**：所有文本（`textSelection.context`、`textSelection.selectedText`、`textSelection.annotatedContext`、`selectedText`、`currentInput`、剪贴板）都按"用户的显式信号必须完整给模型"原则**逐字**进入 payload，没有内容感知的截断（不按 token、句子、段落裁）。`PayloadSizeGuard.clamp` 在单个字符串超过 1 MiB UTF-8 字节时做 defense-in-depth 兜底裁剪并附 `…[truncated, original N bytes]` 标记，避免一次失控捕获把 NDJSON 帧撑破——但这条 cap 在任何现实人类内容下都不会触发，业务语义上仍然按"不截断"对待。
 
 chip 表面只显示固定 label（`Selected text` / `Current input`），不暴露内容前缀——signal 是
 "用户选了/输入了什么类型的东西"，内容由 LLM 读 payload。
@@ -171,7 +190,7 @@ chip 表面只显示固定 label（`Selected text` / `Current input`），不暴
 | 前台 app 切换 | `NSWorkspace.didActivateApplicationNotification` | `app` / 重建 AX 订阅 / 重新路由 adapter | 无 |
 | 焦点窗口切换 | `kAXFocusedWindowChangedNotification` | `window.title` | 无 |
 | 焦点元素切换 | `kAXFocusedUIElementChangedNotification` | currentInput 目标 | 无 |
-| 选中文本变化 | `kAXSelectedTextChangedNotification` | `general.selectedText` | 50ms debounce |
+| 选中文本变化 | `kAXSelectedTextChangedNotification` | `general.textSelection` / `general.selectedText` | 50ms debounce |
 | 选中条目变化 | `kAXSelectedChildrenChangedNotification` / `kAXSelectedRowsChangedNotification` | `general.selectedItems` | 50ms debounce |
 | 输入框内容变化 | `kAXValueChangedNotification` | `general.currentInput` | 250ms debounce |
 | 视觉兜底 | `SCScreenshotManager` 单次捕获 | 提交时 `captureVisualSnapshot()` 返回值 | 仅在用户点 send 时执行一次 |

@@ -9,10 +9,11 @@ import Foundation
 // Subscribes to AX notifications on the frontmost app via `AXObserverHub`
 // and emits three built-in envelope kinds:
 //
-//   - general.selectedText  ← AXSelectedText, 50ms debounce
+//   - general.textSelection ← AXSelectedTextRange + AXValue, 50ms debounce
+//   - general.selectedText  ← AXSelectedText only, 50ms debounce
 //   - general.selectedItems ← AXSelectedChildren / AXSelectedRows, 50ms debounce
 //   - general.currentInput  ← focused element AXValue (editable only),
-//                             250ms debounce, 2KB truncation
+//                             250ms debounce
 //
 // Dedup rule (§"Built-in kinds"): when both selectedText and currentInput
 // are derivable from the same focused element, only emit selectedText.
@@ -239,6 +240,7 @@ public final class GeneralProbe {
         var envelopes: [BehaviorEnvelope] = []
 
         let selectedText = readString(element, attribute: kAXSelectedTextAttribute as CFString)
+        let textSelection = readTextSelectionSnapshot(element, selectedText: selectedText)
         let value = readString(element, attribute: kAXValueAttribute as CFString)
         let editable = isAttributeSettable(element, attribute: kAXValueAttribute as CFString)
 
@@ -250,7 +252,9 @@ public final class GeneralProbe {
             editable: editable
         )
 
-        if hasSelectedText, let s = selectedText {
+        if let textSelectionEnvelope = textSelection.flatMap({ Self.makeTextSelectionEnvelope(snapshot: $0, pid: pid) }) {
+            envelopes.append(textSelectionEnvelope)
+        } else if hasSelectedText, let s = selectedText {
             envelopes.append(Self.makeSelectedTextEnvelope(text: s, pid: pid))
         }
         if currentInputApplies {
@@ -278,6 +282,111 @@ public final class GeneralProbe {
         var settable: DarwinBoolean = false
         let err = AXUIElementIsAttributeSettable(element, attribute, &settable)
         return err == .success && settable.boolValue
+    }
+
+    private func readTextSelectionSnapshot(_ element: AXUIElement, selectedText: String?) -> TextSelectionSnapshot? {
+        guard let selectedText = Self.nonEmpty(selectedText) else { return nil }
+        guard let selectedRange = readSingleSelectedTextRange(element) else { return nil }
+
+        if let valueContext = readString(element, attribute: kAXValueAttribute as CFString),
+           let snapshot = Self.makeTextSelectionSnapshot(
+                context: valueContext,
+                selectedText: selectedText,
+                selectedRange: selectedRange,
+                contextRange: CFRange(location: 0, length: (valueContext as NSString).length)
+           ) {
+            return snapshot
+        }
+
+        guard let rangedContext = readRangedTextContext(element, selectedRange: selectedRange) else {
+            return nil
+        }
+        return Self.makeTextSelectionSnapshot(
+            context: rangedContext.context,
+            selectedText: selectedText,
+            selectedRange: selectedRange,
+            contextRange: rangedContext.range
+        )
+    }
+
+    private func readSingleSelectedTextRange(_ element: AXUIElement) -> CFRange? {
+        if let ranges = readCFRangeArray(element, attribute: kAXSelectedTextRangesAttribute as CFString) {
+            guard ranges.count == 1 else { return nil }
+            return ranges[0]
+        }
+        return readCFRange(element, attribute: kAXSelectedTextRangeAttribute as CFString)
+    }
+
+    private func readCFRangeArray(_ element: AXUIElement, attribute: CFString) -> [CFRange]? {
+        var ref: CFTypeRef?
+        let err = AXUIElementCopyAttributeValue(element, attribute, &ref)
+        guard err == .success, let value = ref else { return nil }
+        guard let values = value as? [AXValue] else { return nil }
+        return values.compactMap(Self.cfRange(from:))
+    }
+
+    private func readCFRange(_ element: AXUIElement, attribute: CFString) -> CFRange? {
+        var ref: CFTypeRef?
+        let err = AXUIElementCopyAttributeValue(element, attribute, &ref)
+        guard err == .success, let value = ref else { return nil }
+        guard CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+        return Self.cfRange(from: value as! AXValue)
+    }
+
+    private struct RangedTextContext: Sendable {
+        let context: String
+        let range: CFRange
+
+        init(context: String, range: CFRange) {
+            self.context = context
+            self.range = range
+        }
+    }
+
+    private func readRangedTextContext(_ element: AXUIElement, selectedRange: CFRange) -> RangedTextContext? {
+        if let visibleRange = readCFRange(element, attribute: kAXVisibleCharacterRangeAttribute as CFString),
+           Self.contains(outer: visibleRange, inner: selectedRange),
+           let context = readStringForRange(element, range: visibleRange) {
+            return RangedTextContext(context: context, range: visibleRange)
+        }
+
+        if let fullRange = readFullTextRange(element),
+           Self.contains(outer: fullRange, inner: selectedRange),
+           let context = readStringForRange(element, range: fullRange) {
+            return RangedTextContext(context: context, range: fullRange)
+        }
+
+        return nil
+    }
+
+    private func readFullTextRange(_ element: AXUIElement) -> CFRange? {
+        var ref: CFTypeRef?
+        let err = AXUIElementCopyAttributeValue(element, kAXNumberOfCharactersAttribute as CFString, &ref)
+        guard err == .success, let value = ref else { return nil }
+        let count: Int?
+        if let number = value as? NSNumber {
+            count = number.intValue
+        } else if CFGetTypeID(value) == CFNumberGetTypeID() {
+            count = value as? Int
+        } else {
+            count = nil
+        }
+        guard let count, count > 0 else { return nil }
+        return CFRange(location: 0, length: count)
+    }
+
+    private func readStringForRange(_ element: AXUIElement, range: CFRange) -> String? {
+        var mutableRange = range
+        guard let rangeValue = AXValueCreate(.cfRange, &mutableRange) else { return nil }
+        var ref: CFTypeRef?
+        let err = AXUIElementCopyParameterizedAttributeValue(
+            element,
+            kAXStringForRangeParameterizedAttribute as CFString,
+            rangeValue,
+            &ref
+        )
+        guard err == .success, let value = ref else { return nil }
+        return value as? String
     }
 
     /// Read AXSelectedChildren first (covers most lists / browsers); fall back
@@ -443,6 +552,111 @@ public final class GeneralProbe {
             displaySummary: "Selected text",
             payload: .object(["content": .string(PayloadSizeGuard.clamp(text))])
         )
+    }
+
+    internal struct TextSelectionSnapshot: Sendable {
+        let context: String
+        let selectedText: String
+        let range: CFRange
+
+        init(context: String, selectedText: String, range: CFRange) {
+            self.context = context
+            self.selectedText = selectedText
+            self.range = range
+        }
+    }
+
+    internal nonisolated static func makeTextSelectionEnvelope(
+        snapshot: TextSelectionSnapshot,
+        pid: pid_t
+    ) -> BehaviorEnvelope? {
+        guard let annotatedContext = annotatedContext(
+            context: snapshot.context,
+            selectedText: snapshot.selectedText,
+            range: snapshot.range
+        ) else {
+            return nil
+        }
+
+        return BehaviorEnvelope(
+            kind: "general.textSelection",
+            citationKey: "general.textSelection:\(pid)",
+            displaySummary: "Selected text",
+            payload: .object([
+                "context": .string(PayloadSizeGuard.clamp(snapshot.context)),
+                "selectedText": .string(PayloadSizeGuard.clamp(snapshot.selectedText)),
+                "range": .object([
+                    "location": .int(snapshot.range.location),
+                    "length": .int(snapshot.range.length),
+                    "unit": .string("utf16"),
+                ]),
+                "annotatedContext": .string(PayloadSizeGuard.clamp(annotatedContext)),
+                "source": .string("axRange"),
+            ])
+        )
+    }
+
+    internal nonisolated static func makeTextSelectionSnapshot(
+        context: String,
+        selectedText: String,
+        selectedRange: CFRange,
+        contextRange: CFRange
+    ) -> TextSelectionSnapshot? {
+        guard contains(outer: contextRange, inner: selectedRange) else { return nil }
+        let relativeRange = CFRange(
+            location: selectedRange.location - contextRange.location,
+            length: selectedRange.length
+        )
+        let snapshot = TextSelectionSnapshot(
+            context: context,
+            selectedText: selectedText,
+            range: relativeRange
+        )
+        guard annotatedContext(
+            context: snapshot.context,
+            selectedText: snapshot.selectedText,
+            range: snapshot.range
+        ) != nil else {
+            return nil
+        }
+        return snapshot
+    }
+
+    private nonisolated static func annotatedContext(
+        context: String,
+        selectedText: String,
+        range: CFRange
+    ) -> String? {
+        guard range.location >= 0, range.length > 0 else { return nil }
+        let ns = context as NSString
+        guard range.location <= ns.length,
+              range.length <= ns.length - range.location else {
+            return nil
+        }
+
+        let selected = ns.substring(with: NSRange(location: range.location, length: range.length))
+        guard selected == selectedText else { return nil }
+
+        let before = ns.substring(with: NSRange(location: 0, length: range.location))
+        let afterStart = range.location + range.length
+        let after = ns.substring(with: NSRange(location: afterStart, length: ns.length - afterStart))
+        return "\(before)[[SELECTED_START]]\(selected)[[SELECTED_END]]\(after)"
+    }
+
+    private nonisolated static func cfRange(from value: AXValue) -> CFRange? {
+        guard AXValueGetType(value) == .cfRange else { return nil }
+        var range = CFRange()
+        guard AXValueGetValue(value, .cfRange, &range) else { return nil }
+        return range
+    }
+
+    private nonisolated static func contains(outer: CFRange, inner: CFRange) -> Bool {
+        guard outer.location >= 0, inner.location >= 0, outer.length >= 0, inner.length > 0 else {
+            return false
+        }
+        guard inner.location >= outer.location else { return false }
+        guard inner.length <= outer.length else { return false }
+        return inner.location - outer.location <= outer.length - inner.length
     }
 
     internal nonisolated static func makeCurrentInputEnvelope(

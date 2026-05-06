@@ -320,8 +320,10 @@ export interface BehaviorEnvelope {
   kind: string;
   citationKey: string;
   displaySummary: string;
-  /// Opaque per-producer JSON; sidecar passes through unchanged. For
-  /// `general.currentInput`, Shell includes `{ value, target }`, where
+  /// Opaque per-producer JSON; sidecar usually passes through unchanged.
+  /// `general.textSelection` is rendered specially in the LLM prompt so
+  /// the model sees a marked text context instead of a raw JSON blob.
+  /// For `general.currentInput`, Shell includes `{ value, target }`, where
   /// `target.locatorId` can be matched against locator markers emitted by
   /// `computer_use_get_app_state` AX tree lines.
   payload: JSONValue;
