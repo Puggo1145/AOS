@@ -13,6 +13,7 @@ struct ComputerUseCLITests {
         #expect(output.contains("list-apps"))
         #expect(output.contains("list-windows"))
         #expect(output.contains("get-app-state"))
+        #expect(output.contains("focus-window"))
         #expect(output.contains("grant-permissions"))
         #expect(output.contains("--help"))
     }
@@ -138,6 +139,23 @@ struct ComputerUseCLITests {
         #expect(result.exitCode == 0)
     }
 
+    @Test("focus-window requires pid and window id")
+    func focusWindowRequiresPidAndWindowID() async throws {
+        let fake = FakeComputerUseCore()
+
+        let result = try await ComputerUseCLI.run(
+            arguments: ["focus-window", "--pid", "123", "--window-id", "456"],
+            core: fake,
+            permissions: FakePermissionClient()
+        )
+
+        #expect(await fake.requestedFocusPID == 123)
+        #expect(await fake.requestedFocusWindowID == 456)
+        #expect(result.stdout.contains("Focused window 456 without raising it"))
+        #expect(result.stderr.isEmpty)
+        #expect(result.exitCode == 0)
+    }
+
     @Test("json flag keeps machine-readable output")
     func jsonFlagKeepsMachineReadableOutput() async throws {
         let fake = FakeComputerUseCore()
@@ -207,6 +225,8 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
     private(set) var requestedStateWindowID: CGWindowID?
     private(set) var requestedCaptureMode: CaptureMode?
     private(set) var requestedMaxImageDimension: Int?
+    private(set) var requestedFocusPID: pid_t?
+    private(set) var requestedFocusWindowID: CGWindowID?
 
     func setApps(_ apps: [AppInfo]) {
         self.apps = apps
@@ -241,5 +261,11 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
         requestedCaptureMode = captureMode
         requestedMaxImageDimension = maxImageDimension
         return try #require(state)
+    }
+
+    func focusWindowWithoutRaise(pid: pid_t, windowId: CGWindowID) async throws -> WindowFocusResult {
+        requestedFocusPID = pid
+        requestedFocusWindowID = windowId
+        return WindowFocusResult(pid: pid, windowId: windowId)
     }
 }

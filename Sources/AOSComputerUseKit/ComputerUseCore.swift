@@ -5,10 +5,10 @@ import Foundation
 
 // MARK: - ComputerUseCore
 //
-// Public façade for the remaining Computer Use foundation: app/window
-// enumeration, AX snapshot rendering, screenshot capture, and snapshot cache
-// ownership. App operation layers were removed so this actor has no ability
-// to click, type, drag, scroll, or suppress focus.
+// Public façade for the Computer Use foundation: app/window enumeration,
+// AX snapshot rendering, screenshot capture, non-raising focus, and snapshot
+// cache ownership. App operation layers were removed so this actor has no
+// ability to click, type, drag, or scroll.
 
 public struct AppStateBundle: Sendable {
     public let stateId: StateID?
@@ -35,6 +35,17 @@ public struct AppStateBundle: Sendable {
     }
 }
 
+/// Result of focusing a WindowServer window without changing its z-order.
+public struct WindowFocusResult: Sendable, Equatable {
+    public let pid: pid_t
+    public let windowId: CGWindowID
+
+    public init(pid: pid_t, windowId: CGWindowID) {
+        self.pid = pid
+        self.windowId = windowId
+    }
+}
+
 public enum CaptureMode: String, Sendable, Equatable {
     case som
     case vision
@@ -44,6 +55,7 @@ public enum CaptureMode: String, Sendable, Equatable {
 public enum ComputerUseError: Error, CustomStringConvertible, Sendable {
     case windowMismatch(pid: pid_t, windowId: CGWindowID, ownerPid: pid_t?)
     case captureUnavailable(String)
+    case focusUnavailable(String)
     case payloadTooLarge(bytes: Int, limit: Int)
     case windowNotFound(windowId: CGWindowID)
 
@@ -57,6 +69,8 @@ public enum ComputerUseError: Error, CustomStringConvertible, Sendable {
             return detail
         case .captureUnavailable(let message):
             return "capture unavailable: \(message)"
+        case .focusUnavailable(let message):
+            return "focus unavailable: \(message)"
         case .payloadTooLarge(let bytes, let limit):
             return "screenshot payload \(bytes) bytes exceeds raw limit \(limit) bytes after downscale retries"
         case .windowNotFound(let windowId):
@@ -70,13 +84,41 @@ public actor ComputerUseCore {
     private let snapshot: AccessibilitySnapshot
     private let cache: StateCache
     private let capture: WindowCapture
+    private let windowLookup: @Sendable (CGWindowID) -> WindowInfo?
+    private let focusWindowWithoutRaising: @Sendable (pid_t, CGWindowID) async throws -> Void
 
     public init() {
         let webAccessibilityActivator = AXWebAccessibilityActivator()
+        let windowFocuser = SkyLightWindowFocuser()
+        self.init(
+            webAccessibilityActivator: webAccessibilityActivator,
+            snapshot: AccessibilitySnapshot(webAccessibilityActivator: webAccessibilityActivator),
+            cache: StateCache(ttlSeconds: 30),
+            capture: WindowCapture(),
+            windowLookup: { windowId in
+                WindowEnumerator.window(forId: windowId)
+            },
+            focusWindowWithoutRaising: { pid, windowId in
+                try windowFocuser.focusWindowWithoutRaising(pid: pid, windowId: windowId)
+            }
+        )
+    }
+
+    init(
+        webAccessibilityActivator: AXWebAccessibilityActivator = AXWebAccessibilityActivator(),
+        snapshot: AccessibilitySnapshot? = nil,
+        cache: StateCache = StateCache(ttlSeconds: 30),
+        capture: WindowCapture = WindowCapture(),
+        windowLookup: @escaping @Sendable (CGWindowID) -> WindowInfo?,
+        focusWindowWithoutRaising: @escaping @Sendable (pid_t, CGWindowID) async throws -> Void
+    ) {
+        let snapshot = snapshot ?? AccessibilitySnapshot(webAccessibilityActivator: webAccessibilityActivator)
         self.webAccessibilityActivator = webAccessibilityActivator
-        self.snapshot = AccessibilitySnapshot(webAccessibilityActivator: webAccessibilityActivator)
-        self.cache = StateCache(ttlSeconds: 30)
-        self.capture = WindowCapture()
+        self.snapshot = snapshot
+        self.cache = cache
+        self.capture = capture
+        self.windowLookup = windowLookup
+        self.focusWindowWithoutRaising = focusWindowWithoutRaising
     }
 
     public func listApps(mode: AppListMode) -> [AppInfo] {
@@ -136,9 +178,19 @@ public actor ComputerUseCore {
         )
     }
 
+    /// Focuses `windowId` for `pid` without raising or reordering the window.
+    public func focusWindowWithoutRaise(
+        pid: pid_t,
+        windowId: CGWindowID
+    ) async throws -> WindowFocusResult {
+        try validateOwnership(pid: pid, windowId: windowId)
+        try await focusWindowWithoutRaising(pid, windowId)
+        return WindowFocusResult(pid: pid, windowId: windowId)
+    }
+
     @discardableResult
     private func validateOwnership(pid: pid_t, windowId: CGWindowID) throws -> WindowInfo {
-        guard let info = WindowEnumerator.window(forId: windowId) else {
+        guard let info = windowLookup(windowId) else {
             throw ComputerUseError.windowNotFound(windowId: windowId)
         }
         if info.pid != pid {

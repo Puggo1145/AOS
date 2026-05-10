@@ -109,6 +109,8 @@ public protocol ComputerUseCoreClient: Sendable {
         captureMode: CaptureMode,
         maxImageDimension: Int
     ) async throws -> AppStateBundle
+    /// Focuses the pid/window pair without raising or reordering the window.
+    func focusWindowWithoutRaise(pid: pid_t, windowId: CGWindowID) async throws -> WindowFocusResult
 }
 
 public struct ComputerUseCoreAdapter: ComputerUseCoreClient {
@@ -139,6 +141,10 @@ public struct ComputerUseCoreAdapter: ComputerUseCoreClient {
             maxImageDimension: maxImageDimension
         )
     }
+
+    public func focusWindowWithoutRaise(pid: pid_t, windowId: CGWindowID) async throws -> WindowFocusResult {
+        try await core.focusWindowWithoutRaise(pid: pid, windowId: windowId)
+    }
 }
 
 public struct ComputerUseCLIResult: Sendable, Equatable {
@@ -163,6 +169,7 @@ public enum ComputerUseCLI {
           AOSComputerUseCLI list-apps [--mode running|all]
           AOSComputerUseCLI list-windows --pid <pid>
           AOSComputerUseCLI get-app-state --pid <pid> --window-id <id> [--mode som|vision|ax] [--max-image-dimension <pixels>] [--screenshot-output <path>]
+          AOSComputerUseCLI focus-window --pid <pid> --window-id <id>
 
         Options:
           --json          Emit machine-readable JSON instead of the default readable text.
@@ -172,6 +179,7 @@ public enum ComputerUseCLI {
           list-apps       List running apps by default, or all launchable apps with --mode all.
           list-windows    List layer-0 windows owned by a process id.
           get-app-state   Capture AX tree and/or screenshot for a specific app window.
+          focus-window    Focus a specific app window without raising it.
 
         Output:
           Successful commands write readable text to stdout by default.
@@ -210,6 +218,12 @@ public enum ComputerUseCLI {
                     try screenshot.imageData.write(to: URL(fileURLWithPath: outputPath), options: .atomic)
                 }
                 return try success(AppStateOutput(request: request, state: state), format: parsed.outputFormat)
+            case .focusWindow(let request):
+                let result = try await core.focusWindowWithoutRaise(
+                    pid: request.pid,
+                    windowId: request.windowId
+                )
+                return try success(FocusWindowOutput(request: request, result: result), format: parsed.outputFormat)
             }
         } catch let error as UsageError {
             return ComputerUseCLIResult(stdout: "", stderr: error.message + "\n", exitCode: 64)
@@ -251,6 +265,7 @@ private struct ParsedCommand {
         case listApps(mode: AppListMode)
         case listWindows(pid: pid_t)
         case getAppState(AppStateRequest)
+        case focusWindow(FocusWindowRequest)
     }
 
     init(arguments: [String]) throws {
@@ -294,6 +309,11 @@ private struct ParsedCommand {
                 maxImageDimension: maxImageDimension,
                 screenshotOutput: screenshotOutput
             ))
+        case "focus-window":
+            let pid = try options.requiredPID("--pid")
+            let windowId = try options.requiredWindowID("--window-id")
+            try options.rejectUnused()
+            command = .focusWindow(FocusWindowRequest(pid: pid, windowId: windowId))
         default:
             throw UsageError("unknown command \(first). Run AOSComputerUseCLI --help")
         }
@@ -402,6 +422,11 @@ private struct AppStateRequest: Sendable {
     let captureMode: CaptureMode
     let maxImageDimension: Int
     let screenshotOutput: String?
+}
+
+private struct FocusWindowRequest: Sendable {
+    let pid: pid_t
+    let windowId: CGWindowID
 }
 
 private struct GrantPermissionsOutput: Encodable, ReadableOutput {
@@ -581,6 +606,21 @@ private struct AppStateOutput: Encodable, ReadableOutput {
             lines.append(treeMarkdown)
         }
         return lines.joined(separator: "\n")
+    }
+}
+
+private struct FocusWindowOutput: Encodable, ReadableOutput {
+    let command = "focus-window"
+    let pid: pid_t
+    let windowId: CGWindowID
+
+    init(request _: FocusWindowRequest, result: WindowFocusResult) {
+        self.pid = result.pid
+        self.windowId = result.windowId
+    }
+
+    var readableText: String {
+        "Focused window \(windowId) without raising it (pid \(pid))."
     }
 }
 
