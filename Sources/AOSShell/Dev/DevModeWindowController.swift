@@ -32,19 +32,19 @@ public extension Notification.Name {
 public final class DevModeWindowController: NSObject, NSWindowDelegate {
     private let contextService: DevContextService
     private let senseStore: SenseStore
-    private let computerUseService: ComputerUseService
+    private let computerUseCore: ComputerUseCore
     private weak var sessionStore: SessionStore?
     private var window: NSWindow?
 
     public init(
         contextService: DevContextService,
         senseStore: SenseStore,
-        computerUseService: ComputerUseService,
+        computerUseCore: ComputerUseCore,
         sessionStore: SessionStore? = nil
     ) {
         self.contextService = contextService
         self.senseStore = senseStore
-        self.computerUseService = computerUseService
+        self.computerUseCore = computerUseCore
         self.sessionStore = sessionStore
     }
 
@@ -68,7 +68,7 @@ public final class DevModeWindowController: NSObject, NSWindowDelegate {
             rootView: DevModePanelView(
                 contextService: contextService,
                 senseStore: senseStore,
-                computerUseService: computerUseService,
+                computerUseCore: computerUseCore,
                 sessionStore: sessionStore
             )
         )

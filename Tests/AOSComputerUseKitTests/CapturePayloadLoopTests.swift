@@ -3,14 +3,14 @@ import CoreGraphics
 import Foundation
 @testable import AOSComputerUseKit
 
-// MARK: - ComputerUseService.capturePayloadLoop
+// MARK: - ComputerUseCore.capturePayloadLoop
 //
 // End-to-end coverage for the capture-retry orchestration the service
 // uses inside `getAppState`. The closure-based `capturePayloadLoop`
 // lets us inject a fake capture (no SCStream / no Screen Recording
 // permission) and assert the policy → retry → throw chain.
 
-@Suite("ComputerUseService.capturePayloadLoop")
+@Suite("ComputerUseCore.capturePayloadLoop")
 struct CapturePayloadLoopTests {
 
     private static func screenshot(width: Int, bytes: Int) -> Screenshot {
@@ -39,7 +39,7 @@ struct CapturePayloadLoopTests {
     @Test("Single attempt returns immediately when bytes already fit budget")
     func singleAttemptHappyPath() async throws {
         var calls: [Int] = []
-        let shot = try await ComputerUseService.capturePayloadLoop(
+        let shot = try await ComputerUseCore.capturePayloadLoop(
             initialMaxImageDimension: 0
         ) { dim in
             calls.append(dim)
@@ -52,7 +52,7 @@ struct CapturePayloadLoopTests {
     @Test("Oversize on first attempt triggers a single shrink retry that fits")
     func oneShrinkRetry() async throws {
         var calls: [Int] = []
-        let shot = try await ComputerUseService.capturePayloadLoop(
+        let shot = try await ComputerUseCore.capturePayloadLoop(
             initialMaxImageDimension: 0
         ) { dim in
             calls.append(dim)
@@ -74,7 +74,7 @@ struct CapturePayloadLoopTests {
     func exhaustsAndThrows() async {
         var calls: [Int] = []
         do {
-            _ = try await ComputerUseService.capturePayloadLoop(
+            _ = try await ComputerUseCore.capturePayloadLoop(
                 initialMaxImageDimension: 0
             ) { dim in
                 calls.append(dim)
@@ -104,7 +104,7 @@ struct CapturePayloadLoopTests {
     @Test("Loop respects an honored initial maxImageDimension")
     func honorsInitialDim() async throws {
         var calls: [Int] = []
-        _ = try await ComputerUseService.capturePayloadLoop(
+        _ = try await ComputerUseCore.capturePayloadLoop(
             initialMaxImageDimension: 1024
         ) { dim in
             calls.append(dim)
@@ -117,7 +117,7 @@ struct CapturePayloadLoopTests {
     func captureErrorPropagates() async {
         struct Boom: Error {}
         do {
-            _ = try await ComputerUseService.capturePayloadLoop(
+            _ = try await ComputerUseCore.capturePayloadLoop(
                 initialMaxImageDimension: 0
             ) { _ in
                 throw Boom()

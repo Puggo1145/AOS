@@ -56,7 +56,7 @@ public func axElement(from value: CFTypeRef) -> AXUIElement? {
 //
 // Apple has not annotated Sendable on AX CF types. Both AOSOSSenseKit and
 // AOSComputerUseKit hand AXUIElement / AXObserver across actor boundaries
-// (StateCache, ComputerUseService, AXObserverHub). The retroactive
+// (StateCache, ComputerUseCore, AXObserverHub). The retroactive
 // conformance lives here — the only module both kits depend on — so a
 // single declaration governs both packages and avoids a duplicate
 // retroactive conformance when both modules link into the same binary

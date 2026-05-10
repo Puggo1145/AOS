@@ -12,7 +12,7 @@ import AOSOSSenseKit
 struct DevModePanelView: View {
     let contextService: DevContextService
     let senseStore: SenseStore
-    let computerUseService: ComputerUseService
+    let computerUseCore: ComputerUseCore
     var sessionStore: SessionStore?
 
     @State private var selected: Section = .context
@@ -38,7 +38,7 @@ struct DevModePanelView: View {
             case .osSense:
                 DevOSSenseSectionView(senseStore: senseStore)
             case .computerUse:
-                DevComputerUseSectionView(service: computerUseService)
+                DevComputerUseSectionView(core: computerUseCore)
             }
         }
         .task {

@@ -52,7 +52,7 @@ public struct Screenshot: Sendable {
 
 // MARK: - ScreenshotPayloadPolicy
 //
-// Pure decision helper for `ComputerUseService.getAppState`'s capture
+// Pure decision helper for `ComputerUseCore.getAppState`'s capture
 // retry loop. Lives here (next to `WindowCapture`) so the retry policy
 // is co-located with the encoder it controls.
 //

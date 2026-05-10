@@ -5,6 +5,7 @@ import PackageDescription
 //
 // Targets:
 //   - executable `AOSShell`      (Notch UI + RPC client + AgentService composition root)
+//   - executable `AOSComputerUseCLI` (terminal entrypoint for Computer Use core)
 //   - library `AOSRPCSchema`     (wire protocol — see docs/plans/rpc-protocol.md)
 //   - library `AOSOSSenseKit`    (OS Sense — see docs/designs/os-sense.md)
 //   - library `AOSComputerUseKit` (Computer Use foundation)
@@ -39,6 +40,10 @@ let package = Package(
         .library(
             name: "AOSComputerUseKit",
             targets: ["AOSComputerUseKit"]
+        ),
+        .executable(
+            name: "AOSComputerUseCLI",
+            targets: ["AOSComputerUseCLI"]
         )
     ],
     dependencies: [
@@ -97,6 +102,20 @@ let package = Package(
             name: "AOSComputerUseKitTests",
             dependencies: ["AOSComputerUseKit", "AOSAXSupport"],
             path: "Tests/AOSComputerUseKitTests"
+        ),
+        // Terminal-only interface for calling the Computer Use core without
+        // launching AOSShell. CLI parsing, output formatting, and permission
+        // prompts live in the executable target; the reusable foundation stays
+        // in AOSComputerUseKit.
+        .executableTarget(
+            name: "AOSComputerUseCLI",
+            dependencies: ["AOSComputerUseKit"],
+            path: "Sources/AOSComputerUseCLI"
+        ),
+        .testTarget(
+            name: "AOSComputerUseCLITests",
+            dependencies: ["AOSComputerUseCLI", "AOSComputerUseKit"],
+            path: "Tests/AOSComputerUseCLITests"
         ),
         // AOSShell — the macOS Notch UI executable. Depends on both library
         // targets; bundles Info.plist and AOS.entitlements as resources via

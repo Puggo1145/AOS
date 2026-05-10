@@ -4,7 +4,7 @@ import Testing
 // MARK: - ScreenshotPayloadPolicy
 //
 // Pure-function tests for the screenshot retry policy used by
-// `ComputerUseService.getAppState`. The policy decides the next
+// `ComputerUseCore.getAppState`. The policy decides the next
 // `maxImageDimension` to retry capture at when the previous encode
 // blew past the wire payload budget. Regression context: shipping
 // without a cap let 4K-window PNGs (>1MB base64) silently stall

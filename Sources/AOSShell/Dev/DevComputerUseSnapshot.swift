@@ -5,7 +5,7 @@ import Foundation
 //
 // Formatting-only projection for the Dev Mode Computer Use section. Keeping
 // this separate from the SwiftUI view gives tests a deterministic seam while
-// the live section still talks directly to `ComputerUseService`.
+// the live section still talks directly to `ComputerUseCore`.
 
 struct DevComputerUseSnapshot {
     let apps: [AppInfo]

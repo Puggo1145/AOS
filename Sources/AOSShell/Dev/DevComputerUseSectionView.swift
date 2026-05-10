@@ -10,7 +10,7 @@ import SwiftUI
 // removed app-operation stack.
 
 struct DevComputerUseSectionView: View {
-    let service: ComputerUseService
+    let core: ComputerUseCore
 
     @State private var apps: [AppInfo] = []
     @State private var windows: [WindowInfo] = []
@@ -218,7 +218,7 @@ struct DevComputerUseSectionView: View {
         defer { isRefreshingApps = false }
         errorMessage = nil
 
-        let loaded = await service.listApps(mode: .running)
+        let loaded = await core.listApps(mode: .running)
             .sorted { lhs, rhs in
                 if lhs.active != rhs.active { return lhs.active && !rhs.active }
                 return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
@@ -243,7 +243,7 @@ struct DevComputerUseSectionView: View {
         defer { isRefreshingWindows = false }
         errorMessage = nil
 
-        let loaded = await service.listWindows(pid: pid)
+        let loaded = await core.listWindows(pid: pid)
             .sorted { lhs, rhs in
                 if lhs.isOnScreen != rhs.isOnScreen { return lhs.isOnScreen && !rhs.isOnScreen }
                 return lhs.zIndex > rhs.zIndex
@@ -263,7 +263,7 @@ struct DevComputerUseSectionView: View {
         errorMessage = nil
 
         do {
-            let bundle = try await service.getAppState(
+            let bundle = try await core.getAppState(
                 pid: pid,
                 windowId: windowId,
                 captureMode: captureMode,

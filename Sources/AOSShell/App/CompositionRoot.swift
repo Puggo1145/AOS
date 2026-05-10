@@ -24,7 +24,7 @@ import AOSOSSenseKit
 public final class CompositionRoot {
     public let permissionsService: PermissionsService
     public let senseStore: SenseStore
-    public let computerUseService: ComputerUseService
+    public let computerUseCore: ComputerUseCore
     public let adapterRegistry: AdapterRegistry
     public let visualCapturePolicyStore: VisualCapturePolicyStore
     public let sidecarProcess: SidecarProcess
@@ -56,7 +56,7 @@ public final class CompositionRoot {
             permissionsService: permissionsService,
             registry: adapterRegistry
         )
-        self.computerUseService = ComputerUseService()
+        self.computerUseCore = ComputerUseCore()
         self.visualCapturePolicyStore = VisualCapturePolicyStore()
         self.sidecarProcess = SidecarProcess()
     }
@@ -108,7 +108,7 @@ public final class CompositionRoot {
         let devWindow = DevModeWindowController(
             contextService: devContext,
             senseStore: senseStore,
-            computerUseService: computerUseService,
+            computerUseCore: computerUseCore,
             sessionStore: store
         )
         self.devModeWindowController = devWindow

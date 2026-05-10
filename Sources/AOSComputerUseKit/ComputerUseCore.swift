@@ -3,7 +3,7 @@ import AOSAXSupport
 import CoreGraphics
 import Foundation
 
-// MARK: - ComputerUseService
+// MARK: - ComputerUseCore
 //
 // Public façade for the remaining Computer Use foundation: app/window
 // enumeration, AX snapshot rendering, screenshot capture, and snapshot cache
@@ -17,6 +17,22 @@ public struct AppStateBundle: Sendable {
     public let screenshot: Screenshot?
     public let bundleId: String?
     public let appName: String?
+
+    public init(
+        stateId: StateID?,
+        treeMarkdown: String?,
+        elementCount: Int?,
+        screenshot: Screenshot?,
+        bundleId: String?,
+        appName: String?
+    ) {
+        self.stateId = stateId
+        self.treeMarkdown = treeMarkdown
+        self.elementCount = elementCount
+        self.screenshot = screenshot
+        self.bundleId = bundleId
+        self.appName = appName
+    }
 }
 
 public enum CaptureMode: String, Sendable, Equatable {
@@ -49,7 +65,7 @@ public enum ComputerUseError: Error, CustomStringConvertible, Sendable {
     }
 }
 
-public actor ComputerUseService {
+public actor ComputerUseCore {
     private let webAccessibilityActivator: AXWebAccessibilityActivator
     private let snapshot: AccessibilitySnapshot
     private let cache: StateCache

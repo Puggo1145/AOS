@@ -139,6 +139,26 @@
             "target": "AOSCoordinateTarget",
             "configuration": "release",
             "preLaunchTask": "swift: Build Release AOSCoordinateTarget"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:aos}",
+            "name": "Debug AOSComputerUseCLI",
+            "target": "AOSComputerUseCLI",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug AOSComputerUseCLI"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:aos}",
+            "name": "Release AOSComputerUseCLI",
+            "target": "AOSComputerUseCLI",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release AOSComputerUseCLI"
         }
     ]
 }
