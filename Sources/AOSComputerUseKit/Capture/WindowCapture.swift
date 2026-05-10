@@ -9,9 +9,8 @@ import UniformTypeIdentifiers
 //
 // Per `docs/designs/computer-use.md` §"截图". `SCStream` +
 // `SCContentFilter(desktopIndependentWindow:)` captures a single layer-0
-// window without raising it. Output sized as `bounds × backingScale` so
-// pixel coordinates map cleanly back to the AX point coordinates the
-// click path consumes.
+// window without raising it. Output records the screenshot coordinate space
+// alongside encoded image dimensions.
 
 public enum ImageFormat: String, Sendable {
     case png

@@ -225,9 +225,8 @@ public struct CitedApp: Codable, Sendable, Equatable {
 
 public struct CitedWindow: Codable, Sendable, Equatable {
     public let title: String
-    /// `CGWindowID`. Hint, not a long-lived handle. Per design, callers must
-    /// re-resolve via `computerUse.listWindows({pid})` if the window has
-    /// been recreated, moved between Spaces, etc.
+    /// `CGWindowID`. Hint, not a long-lived handle; windows can be recreated
+    /// or moved between Spaces after OS Sense captures this value.
     public let windowId: Int?
 
     public init(title: String, windowId: Int? = nil) {

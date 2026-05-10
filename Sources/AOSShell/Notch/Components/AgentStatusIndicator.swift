@@ -45,10 +45,7 @@ struct AgentStatusIndicator: View {
 // MARK: - ToolIconBadge
 //
 // Renders the SF Symbol returned by the tool's presenter. We deliberately do
-// not echo `BackgroundOpBadge` here — that one shows the *target app's icon*
-// for `computer_use_*` calls (a "what we're operating on" cue), while this
-// shows the *tool's* glyph (a "what kind of action" cue). Both can be on
-// screen at the same time without redundancy.
+// shows the tool's glyph as a compact "what kind of action is running" cue.
 
 private struct ToolIconBadge: View {
     let symbolName: String

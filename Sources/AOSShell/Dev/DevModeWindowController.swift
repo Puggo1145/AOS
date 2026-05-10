@@ -32,23 +32,20 @@ public extension Notification.Name {
 public final class DevModeWindowController: NSObject, NSWindowDelegate {
     private let contextService: DevContextService
     private let senseStore: SenseStore
+    private let computerUseService: ComputerUseService
     private weak var sessionStore: SessionStore?
-    private let computerUseService: ComputerUseService?
-    private let doctorService: ComputerUseDoctorService?
     private var window: NSWindow?
 
     public init(
         contextService: DevContextService,
         senseStore: SenseStore,
-        sessionStore: SessionStore? = nil,
-        computerUseService: ComputerUseService? = nil,
-        doctorService: ComputerUseDoctorService? = nil
+        computerUseService: ComputerUseService,
+        sessionStore: SessionStore? = nil
     ) {
         self.contextService = contextService
         self.senseStore = senseStore
-        self.sessionStore = sessionStore
         self.computerUseService = computerUseService
-        self.doctorService = doctorService
+        self.sessionStore = sessionStore
     }
 
     public func show() {
@@ -71,9 +68,8 @@ public final class DevModeWindowController: NSObject, NSWindowDelegate {
             rootView: DevModePanelView(
                 contextService: contextService,
                 senseStore: senseStore,
-                sessionStore: sessionStore,
                 computerUseService: computerUseService,
-                doctorService: doctorService
+                sessionStore: sessionStore
             )
         )
         window = win

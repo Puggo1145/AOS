@@ -4,7 +4,7 @@ import Foundation
 
 // MARK: - ScreenInfo
 //
-// Backing-scale resolver shared by `WindowCapture` and `WindowCoordinateSpace`.
+// Backing-scale resolver used by `WindowCapture`.
 // Per `docs/designs/computer-use.md` §"截图" the rule is:
 //
 //   pick the NSScreen with the largest intersection area with the window

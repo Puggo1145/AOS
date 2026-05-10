@@ -2,10 +2,8 @@ import Foundation
 
 // MARK: - AppInfo
 //
-// Per `docs/designs/computer-use.md` §"模块结构" / `computerUse.listApps`.
 // Plain-data record of an available macOS application. Apps that are already
-// running carry a pid; the agent can then call `listWindows({pid})` to drive
-// actions. Installed-but-not-running apps intentionally keep pid nil.
+// running carry a pid. Installed-but-not-running apps intentionally keep pid nil.
 
 public struct AppInfo: Sendable, Hashable {
     public let pid: pid_t?

@@ -4,7 +4,7 @@
 
 定义 AOS Shell (Swift) 和 Bun Sidecar (TS) 之间的**唯一通信通道**。承载：
 - Shell → Bun：用户提交的 prompt（含用户显式引用的 context 子集）、设置变更
-- Bun → Shell：agent 发起的 Computer Use 工具调用、流式 agent 输出、状态更新
+- Bun → Shell：流式 agent 输出、状态更新
 
 ## 非目标
 
@@ -74,7 +74,6 @@ Method 名用点号分隔：`<namespace>.<method>`。每个 namespace 有**固�
 | `conversation.*` | Bun → Shell | Sidecar 拥有的 per-session Conversation 状态向 Shell 镜像 |
 | `config.*` | Shell → Bun | 全局用户配置（已选模型、effort、catalog snapshot） |
 | `settings.*` | Shell → Bun | 配置变更通知（注：当前轮被 `config.*` 取代，预留扩展） |
-| `computerUse.*` | Bun → Shell | Agent 发起的 app 操作 |
 | `ui.*` | Bun → Shell | Per-session agent 流式输出、状态推送（每帧带 `sessionId`） |
 | `provider.*` | 双向 | LLM provider 状态查询、OAuth login 控制（详见下文方向子表） |
 
@@ -177,7 +176,7 @@ interface SessionListItem {
 
   - `BehaviorEnvelope.payload` 是 opaque JSON，由 producer（GeneralProbe 或某个 adapter）决定 schema。Bun 透传，不解码
   - `CitedContext` 与 `BehaviorEnvelope` 是 RPC 层的唯一边界类型，Swift / TS 各自维护对应 Codable / TS 类型并由 fixture conformance test 守住
-  - **`CitedContext.window.windowId` 是 hint，不是 long-lived handle**：可以直接喂给 `computerUse.*` 作为首选 windowId，但窗口重建 / title 更新 / Space 切换后可能 stale。Bun 收到 `ErrWindowMismatch` / `ErrWindowOffSpace` / `ErrStateStale` 时应当回头调 `computerUse.listWindows({pid})` 重新选窗（必要时让 LLM 决策），不要直接报错给用户
+  - **`CitedContext.window.windowId` 是 hint，不是 long-lived handle**：窗口重建 / title 更新 / Space 切换后可能 stale。当前 RPC 层不提供 Computer Use 操作接口。
 - Shell 本地保留完整 `SenseContext`，**未被勾选的项永不传到 Bun**；live model 不直接参与序列化
 - `agent.submit` 立刻返回 `{ accepted: true }` 作为 ack，实际输出走 notifications
 - `agent.cancel` 返回 `{ cancelled: boolean }`（已结束的 turn 返 false）
@@ -254,31 +253,6 @@ interface ConfigSelection   { providerId: string; modelId: string; }
 
 用户改设置（模型选择、API key、行为开关等）时推送。Bun 侧热更新 in-memory 配置。
 
-### `computerUse.*`（Bun → Shell）
-
-| Method | 类型 | Params | Result |
-|---|---|---|---|
-| `computerUse.listApps` | Request | `{ mode: "running" \| "all" }` | `{ apps: AppInfo[] }`；`running` 只返回当前运行 app，`all` 包含已安装 app；未运行 app 的 `pid` 为 `null`，需先打开再操作 |
-| `computerUse.listWindows` | Request | `{ pid }` | `{ windows: WindowInfo[] }`，每项含 `windowId` / `title` / `bounds` / `isOnScreen` / `onCurrentSpace` |
-| `computerUse.getAppState` | Request | `{ pid, windowId, captureMode? }` | `{ stateId, axTree?, screenshot? }` |
-| `computerUse.click` | Request | `{ pid, windowId, stateId, elementIndex, action? }`（语义化）<br>或 `{ pid, windowId, x, y, count?, modifiers? }`（坐标） | `{ success, method }` |
-| `computerUse.drag` | Request | `{ pid, windowId, from: {x,y}, to: {x,y} }` | `{ success }` |
-| `computerUse.typeText` | Request | `{ pid, windowId, text }` | `{ success }` |
-| `computerUse.pressKey` | Request | `{ pid, windowId, key, modifiers? }` | `{ success }` |
-| `computerUse.scroll` | Request | `{ pid, windowId, x, y, dx, dy }` | `{ success }` |
-| `computerUse.doctor` | Request | `{}` | `{ accessibility, screenRecording, automation, skyLightSPI }` |
-
-- agent 必须先 `listWindows({pid})` 选定 `windowId`，再调用任何状态 / 操作方法。**永远不隐式选窗口**；`(pid, windowId)` 是所有操作的硬契约
-- `getAppState` 返回的 `stateId` 是 Kit 内部对 `(pid, windowId)` 一次 AX 树遍历结果的 handle，TTL 30s
-- `captureMode ∈ "som" (默认) | "vision" | "ax"`：分别对应 AX 树+截图 / 仅截图 / 仅 AX 树
-- 使用 `elementIndex` 点击时必须带对应的 `stateId`；stateId 过期或窗口状态变化返回 `ErrStateStale`
-- 坐标点击路径不依赖 stateId，每次独立 hit-test
-- `(pid, windowId)` 与 `stateId` 记录不一致 → `ErrWindowMismatch`
-- 目标 window 不在用户当前 Space → `ErrWindowOffSpace`，`error.data` 附 `currentSpaceID` / `windowSpaceIDs`
-- `doctor.skyLightSPI` 子结构：`{ postToPid, authMessage, focusWithoutRaise, windowLocation, spaces, getWindow }`，每项 `bool` 表示对应 SkyLight SPI 是否成功 dlsym 解析
-
-Shell 的 `ComputerUseHandlers` 通过 async handler 调用 `AOSComputerUseKit` 对应方法。每个 handler 在独立 Swift Task 内执行，不阻塞 dispatcher。
-
 ### `ui.*`（Bun → Shell）
 
 | Method | 类型 | Params | 说明 |
@@ -322,11 +296,6 @@ JSON-RPC 标准错误码保留：`-32700 ~ -32603`。应用自定义错误分段
 | `-32001` | `ErrPayloadTooLarge` | 单条消息或 binary payload 超上限 |
 | `-32002` | `ErrTimeout` | 方法执行超时 |
 | `-32003` | `ErrPermissionDenied` | Accessibility / Screen Recording / Automation 权限缺失 |
-| `-32100 ~ -32199` | `computerUse.*` | Computer Use 错误 |
-| `-32100` | `ErrStateStale` | `stateId` 过期 / 元素失效 / 窗口结构变化 |
-| `-32101` | `ErrOperationFailed` | 三层降级链路全部失败 |
-| `-32102` | `ErrWindowMismatch` | `windowId` 不属于 `pid`，或与 `stateId` 记录的 `(pid, windowId)` 不一致 |
-| `-32103` | `ErrWindowOffSpace` | 目标 window 不在用户当前 Space |
 | `-32200 ~ -32299` | `auth.*` | Provider 鉴权 / login 错误 |
 | `-32200` | `loginInProgress` | 已有未完成的 login session |
 | `-32201` | `loginCancelled` | session 被显式 cancel |
@@ -340,12 +309,7 @@ JSON-RPC 标准错误码保留：`-32700 ~ -32603`。应用自定义错误分段
 | `-32400` | `unknownSession` | `agent.*` / `session.activate` 引用了不存在的 sessionId |
 | `-32401` | `noActiveSession` | 保留——目前每个 session-aware 调用都显式带 sessionId，wire 上未实际使用 |
 
-`error.data` 承载结构化 context，供 agent 判断重试或换策略：
-
-- `ErrOperationFailed.data = { layers: [{ name: "axAction" | "axAttribute" | "eventPost", status: <kit code|string> }, ...] }` —— 三层各自的失败原因
-- `ErrWindowOffSpace.data = { currentSpaceID: number, windowSpaceIDs: number[] }`
-- `ErrWindowMismatch.data = { pid: number, windowId: number, expected?: { pid, windowId } }`
-- `ErrStateStale.data = { stateId: string, reason: "expired" | "elementInvalid" | "windowChanged" }`
+`error.data` 承载结构化 context，供 agent 判断重试或换策略。
 
 ## 二进制 payload 规则
 
@@ -354,7 +318,6 @@ JSON-RPC 标准错误码保留：`-32700 ~ -32603`。应用自定义错误分段
 | 字段 | 上限（base64 编码后） |
 |---|---|
 | `citedContext.visual.frame` | 400KB |
-| `computerUse.getAppState.screenshot` | 1MB |
 | 单条 NDJSON 行 | 2MB |
 
 超限返回 `ErrPayloadTooLarge`，不做静默裁切。发送方在编码前做必要的下采样以满足上限。
@@ -372,9 +335,6 @@ Dispatcher 读满单行 2MB 仍未见 `\n` 时直接断开连接并重启 Bun。
 | Method | Timeout |
 |---|---|
 | `rpc.ping` | 1s |
-| `computerUse.listApps` / `doctor` | 2s |
-| `computerUse.click` / `drag` / `typeText` / `pressKey` / `scroll` | 5s |
-| `computerUse.getAppState` | 10s |
 | `agent.submit` / `agent.cancel` 的 ack | 1s |
 
 超时返回 `ErrTimeout`。
@@ -406,7 +366,6 @@ packages/
       Messages.swift                      # Request/Response/Notification 基础类型 + RPCMethod / RPCErrorCode 常量
       Agent.swift                         # agent.* params/results + CitedContext / CitedVisual / CitedClipboard / BehaviorEnvelope
       Session.swift                       # session.* params/results + SessionListItem
-      ComputerUse.swift                   # computerUse.* params/results
       UI.swift                            # ui.* params
       Settings.swift                      # settings.* params
     Tests/AOSRPCSchemaTests/
@@ -428,7 +387,6 @@ tests/
     config.get.json
     config.set.json
     config.setEffort.json
-    computerUse.click.json                # stage 1+
     ...
   rpc-conformance/
     swift-roundtrip-test.swift            # fixture → decode → re-encode → 断言 byte-equal

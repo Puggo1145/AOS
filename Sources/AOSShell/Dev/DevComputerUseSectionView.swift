@@ -1,545 +1,314 @@
 import AppKit
-import CoreGraphics
-import SwiftUI
 import AOSComputerUseKit
+import SwiftUI
 
 // MARK: - DevComputerUseSectionView
 //
-// Dev-only workbench for every public Computer Use capability. Calls the
-// same in-process `ComputerUseService` instance used by the RPC handlers so
-// state IDs and screenshot coordinate references are tested against the real
-// Shell wiring.
+// Local-only diagnostic surface for the remaining Computer Use foundation.
+// It intentionally does not register RPC handlers or agent tools; Dev Mode
+// can inspect apps, windows, AX trees, and screenshots without restoring the
+// removed app-operation stack.
 
 struct DevComputerUseSectionView: View {
-    @State private var workbench: DevComputerUseWorkbench
-    @State private var selectedPage: DevComputerUsePage? = DevComputerUsePage.defaultSelection
+    let service: ComputerUseService
 
-    init(service: ComputerUseService, doctorService: ComputerUseDoctorService) {
-        _workbench = State(
-            initialValue: DevComputerUseWorkbench(
-                service: service,
-                doctorService: doctorService
-            )
-        )
+    @State private var apps: [AppInfo] = []
+    @State private var windows: [WindowInfo] = []
+    @State private var selectedAppIdentity: String?
+    @State private var selectedWindowId: CGWindowID?
+    @State private var captureMode: CaptureMode = .som
+    @State private var maxImageDimension: Int = 1024
+    @State private var stateSnapshot: DevComputerUseStateSnapshot?
+    @State private var screenshotImage: NSImage?
+    @State private var errorMessage: String?
+    @State private var isRefreshingApps = false
+    @State private var isRefreshingWindows = false
+    @State private var isCapturingState = false
+
+    private var snapshot: DevComputerUseSnapshot {
+        DevComputerUseSnapshot(apps: apps, windows: windows, state: stateSnapshot)
+    }
+
+    private var selectedApp: AppInfo? {
+        guard let selectedAppIdentity else { return nil }
+        return apps.first { $0.identity == selectedAppIdentity }
+    }
+
+    private var selectedWindow: WindowInfo? {
+        guard let selectedWindowId else { return nil }
+        return windows.first { $0.id == selectedWindowId }
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 16) {
-                header
-                if let message = workbench.lastError {
-                    statusBanner(message, systemImage: "exclamationmark.triangle.fill", tint: .yellow)
-                } else if let message = workbench.lastResult {
-                    statusBanner(message, systemImage: "checkmark.circle.fill", tint: .green)
-                }
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            Divider()
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    if let selectedPage {
-                        pageHeader(selectedPage)
-                        pageContent(selectedPage)
-                    } else {
-                        sectionIndex
-                    }
-                }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
+        HSplitView {
+            leftPane
+                .frame(minWidth: 250, idealWidth: 300)
+            detailPane
+                .frame(minWidth: 420)
         }
         .navigationTitle("Computer Use")
         .task {
-            await workbench.refreshApps()
-            await workbench.refreshDoctor()
+            await refreshApps()
         }
-        .onChange(of: workbench.selectedAppIdentity) { _, _ in
-            Task { await workbench.refreshWindows() }
-        }
-    }
-
-    @ViewBuilder
-    private func pageContent(_ page: DevComputerUsePage) -> some View {
-        switch page {
-        case .target:
-            targetSection
-        case .state:
-            stateSection
-        case .elementClick:
-            elementClickSection
-        case .coordinates:
-            coordinateSection
-        case .coordinateReliability:
-            coordinateReliabilitySection
-        case .keyboard:
-            keyboardSection
-        case .activeAppIndicator:
-            activeAppIndicatorSection
-        case .listApps:
-            listAppsSection
-        case .doctor:
-            doctorSection
+        .onChange(of: selectedAppIdentity) { _, _ in
+            Task { await refreshWindowsForSelection() }
         }
     }
 
-    private var sectionIndex: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Sections")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 220), spacing: 10)],
-                alignment: .leading,
-                spacing: 10
-            ) {
-                ForEach(DevComputerUsePage.allCases) { page in
-                    Button {
-                        selectedPage = page
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: page.systemImage)
-                                .frame(width: 18)
-                                .foregroundStyle(.secondary)
-                                .accessibilityHidden(true)
-                            Text(page.title)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            Image(systemName: "chevron.right")
-                                .foregroundStyle(.tertiary)
-                                .accessibilityHidden(true)
-                        }
-                        .frame(minHeight: 44)
-                        .padding(.horizontal, 10)
-                    }
-                    .buttonStyle(.plain)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(Color.secondary.opacity(0.08))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .stroke(Color.secondary.opacity(0.12))
-                    )
+    private var leftPane: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(snapshot.appCountLine)
+                    .font(.headline)
+                Spacer()
+                Button {
+                    Task { await refreshApps() }
+                } label: {
+                    Image(systemName: isRefreshingApps ? "arrow.clockwise.circle" : "arrow.clockwise")
                 }
+                .buttonStyle(.borderless)
+                .help("Refresh running apps")
+                .disabled(isRefreshingApps)
             }
+
+            List(apps, id: \.identity, selection: $selectedAppIdentity) { app in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(app.name)
+                        .lineLimit(1)
+                    Text(DevComputerUseSnapshot.appLine(app))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .tag(app.identity)
+            }
+            .listStyle(.sidebar)
         }
+        .padding(12)
     }
 
-    private func pageHeader(_ page: DevComputerUsePage) -> some View {
-        HStack(spacing: 8) {
-            Button {
-                selectedPage = nil
-            } label: {
-                Label("Sections", systemImage: "chevron.left")
+    private var detailPane: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                header
+                if let errorMessage {
+                    errorBanner(errorMessage)
+                }
+                windowsSection
+                captureSection
+                stateSection
             }
-            Divider()
-                .frame(height: 18)
-            Label(page.title, systemImage: page.systemImage)
-                .font(.headline)
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
-            Text("computerUse.*")
-                .font(.headline.monospaced())
-            Spacer()
-            if workbench.isRunning {
-                ProgressView()
-                    .controlSize(.small)
-            }
-            Button {
-                Task {
-                    await workbench.refreshApps()
-                    await workbench.refreshDoctor()
-                }
-            } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
-            }
-            .disabled(workbench.isRunning)
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Foundation diagnostics")
+                .font(.headline)
+            Text("Apps, windows, AX snapshots, and ScreenCaptureKit screenshots from the local Swift service.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
-    private var listAppsSection: some View {
-        devGroup("List Apps") {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("computerUse.listApps")
+    private var windowsSection: some View {
+        devGroup("Windows") {
+            HStack {
+                Text(snapshot.windowCountLine)
                     .font(.subheadline.monospaced())
-                Picker("Mode", selection: $workbench.appListMode) {
-                    Text("running").tag(AppListMode.running)
-                    Text("all").tag(AppListMode.all)
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 180)
                 Spacer()
                 Button {
-                    Task { await workbench.refreshApps() }
+                    Task { await refreshWindowsForSelection() }
                 } label: {
-                    Label("List Apps", systemImage: "square.grid.2x2")
+                    Image(systemName: isRefreshingWindows ? "arrow.clockwise.circle" : "arrow.clockwise")
                 }
-                .disabled(workbench.isRunning)
+                .buttonStyle(.borderless)
+                .help("Refresh windows")
+                .disabled(selectedApp == nil || isRefreshingWindows)
             }
 
-            resultBlock(workbench.appListSummary)
-        }
-    }
-
-    private var targetSection: some View {
-        devGroup("Target Selection") {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Picker("App", selection: $workbench.selectedAppIdentity) {
-                    Text("Select app").tag(Optional<String>.none)
-                    ForEach(workbench.apps, id: \.identity) { app in
-                        Text(appLabel(app)).tag(Optional(app.identity))
+            if selectedApp == nil {
+                emptyLine("Select a running app")
+            } else if windows.isEmpty {
+                emptyLine("No layer-0 windows")
+            } else {
+                Picker("Window", selection: $selectedWindowId) {
+                    ForEach(windows, id: \.id) { window in
+                        Text(DevComputerUseSnapshot.windowLine(window))
+                            .tag(Optional(window.id))
                     }
                 }
-                .frame(maxWidth: 460)
-                .disabled(workbench.isRunning)
+                .labelsHidden()
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-                Button {
-                    Task { await workbench.refreshWindows() }
-                } label: {
-                    Label("List Windows", systemImage: "macwindow")
-                }
-                .disabled(workbench.selectedPid == nil || workbench.isRunning)
-            }
-
-            Picker("Window", selection: $workbench.selectedWindowId) {
-                Text("Select window").tag(Optional<CGWindowID>.none)
-                ForEach(workbench.windows) { row in
-                    Text(windowLabel(row)).tag(Optional(row.id))
-                }
-            }
-            .frame(maxWidth: 520)
-            .disabled(workbench.windows.isEmpty)
-
-            resultBlock(workbench.enumerationSummary)
-        }
-    }
-
-    private var stateSection: some View {
-        devGroup("State") {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Picker("Capture", selection: $workbench.captureMode) {
-                    Text("som").tag(CaptureMode.som)
-                    Text("vision").tag(CaptureMode.vision)
-                    Text("ax").tag(CaptureMode.ax)
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 260)
-
-                TextField("Max image dimension", text: $workbench.maxImageDimension)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 160)
-
-                Button {
-                    Task { await workbench.getAppState() }
-                } label: {
-                    Label("Get App State", systemImage: "camera.viewfinder")
-                }
-                .disabled(!workbench.hasTarget || workbench.isRunning)
-            }
-
-            if let summary = workbench.stateSummary {
-                resultBlock(summary)
-            }
-
-            if let shot = workbench.screenshotImage {
-                Image(nsImage: shot)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxHeight: 260)
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .stroke(Color.secondary.opacity(0.25))
-                    )
-                    .accessibilityLabel("Latest Computer Use screenshot")
-            }
-
-            if let tree = workbench.axTree {
-                codeBlock(tree, maxHeight: 260)
-            }
-        }
-    }
-
-    private var elementClickSection: some View {
-        devGroup("Element Click") {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                TextField("Element index", text: $workbench.elementIndex)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 120)
-                TextField("AX action", text: $workbench.axAction)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 160)
-                Button {
-                    Task { await workbench.clickElement() }
-                } label: {
-                    Label("Click Element", systemImage: "cursorarrow.click")
-                }
-                .disabled(!workbench.canClickElement || workbench.isRunning)
-            }
-        }
-    }
-
-    private var coordinateSection: some View {
-        devGroup("Coordinates") {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    coordFields(x: $workbench.x, y: $workbench.y)
-                    Stepper("Count \(workbench.clickCount)", value: $workbench.clickCount, in: 1...3)
-                        .frame(width: 120)
-                    TextField("Modifiers", text: $workbench.modifiers)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 160)
-                    Button {
-                        Task { await workbench.clickAt() }
-                    } label: {
-                        Label("Click At", systemImage: "scope")
-                    }
-                    .disabled(!workbench.hasTarget || workbench.isRunning)
-                }
-
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    coordFields(x: $workbench.scrollX, y: $workbench.scrollY)
-                    TextField("dx", text: $workbench.scrollDX)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 72)
-                    TextField("dy", text: $workbench.scrollDY)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 72)
-                    Button {
-                        Task { await workbench.scroll() }
-                    } label: {
-                        Label("Scroll", systemImage: "scroll")
-                    }
-                    .disabled(!workbench.hasTarget || workbench.isRunning)
-                }
-
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    TextField("From x", text: $workbench.dragFromX)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 86)
-                    TextField("From y", text: $workbench.dragFromY)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 86)
-                    TextField("To x", text: $workbench.dragToX)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 86)
-                    TextField("To y", text: $workbench.dragToY)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 86)
-                    Button {
-                        Task { await workbench.drag() }
-                    } label: {
-                        Label("Drag", systemImage: "arrow.up.left.and.arrow.down.right")
-                    }
-                    .disabled(!workbench.hasTarget || workbench.isRunning)
-                }
-            }
-        }
-    }
-
-    private var coordinateReliabilitySection: some View {
-        devGroup("Coordinate Reliability") {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Button {
-                        Task { await workbench.openCoordinateReliabilityTarget() }
-                    } label: {
-                        Label("Open Target", systemImage: "scope")
-                    }
-                    .disabled(workbench.isRunning)
-
-                    TextField("Tolerance pt", text: $workbench.coordinateReliabilityTolerance)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 110)
-
-                    Button {
-                        Task { await workbench.runCoordinateReliabilityClicks() }
-                    } label: {
-                        Label("Run Clicks", systemImage: "cursorarrow.click.2")
-                    }
-                    .disabled(!workbench.hasTarget || workbench.isRunning)
-
-                    Button {
-                        Task { await workbench.clearCoordinateReliabilityTarget() }
-                    } label: {
-                        Label("Clear", systemImage: "eraser")
-                    }
-                    .disabled(workbench.isRunning)
-
-                    if let summary = workbench.coordinateReliabilitySummary {
-                        Text(summary)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                TextEditor(text: $workbench.coordinateReliabilityScript)
-                    .font(.caption.monospaced())
-                    .frame(minHeight: 96)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .stroke(Color.secondary.opacity(0.20))
-                    )
-                    .accessibilityLabel("Coordinate reliability input")
-
-                if !workbench.coordinateReliabilityResults.isEmpty {
-                    coordinateReliabilityResults
-                }
-            }
-        }
-    }
-
-    private var coordinateReliabilityResults: some View {
-        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
-            GridRow {
-                Text("#")
-                Text("Expected")
-                Text("Actual")
-                Text("Delta")
-                Text("Distance")
-                Text("Result")
-            }
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
-
-            ForEach(workbench.coordinateReliabilityResults) { result in
-                GridRow {
-                    Text("\(result.index)")
-                    Text(pointLabel(result.expected))
-                    Text(pointLabel(result.actual))
-                    Text(sizeLabel(result.delta))
-                    Text(String(format: "%.2f pt", result.distance))
-                    Label(result.passed ? "pass" : "fail", systemImage: result.passed ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .foregroundStyle(result.passed ? .green : .red)
-                }
-                .font(.caption.monospaced())
-            }
-        }
-        .accessibilityElement(children: .contain)
-    }
-
-    private var keyboardSection: some View {
-        devGroup("Keyboard") {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                TextField("Text", text: $workbench.textToType)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 320)
-                Button {
-                    Task { await workbench.typeText() }
-                } label: {
-                    Label("Type Text", systemImage: "text.cursor")
-                }
-                .disabled(!workbench.hasTarget || workbench.isRunning)
-            }
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                TextField("Key", text: $workbench.key)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 120)
-                TextField("Modifiers", text: $workbench.keyModifiers)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 180)
-                Button {
-                    Task { await workbench.pressKey() }
-                } label: {
-                    Label("Press Key", systemImage: "keyboard")
-                }
-                .disabled(!workbench.hasTarget || workbench.isRunning)
-            }
-        }
-    }
-
-    private var activeAppIndicatorSection: some View {
-        devGroup("Active App Indicator") {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Button {
-                        Task { await workbench.showActiveAppUseIndicator() }
-                    } label: {
-                        Label("Show", systemImage: "eye")
-                    }
-                    .disabled(!workbench.hasTarget || workbench.isRunning)
-
-                    Button {
-                        Task { await workbench.closeActiveAppUseIndicator() }
-                    } label: {
-                        Label("Close", systemImage: "xmark.circle")
-                    }
-                    .disabled(workbench.isRunning)
-
-                    if let summary = workbench.activeAppUseIndicatorSummary {
-                        Text(summary)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                resultBlock(workbench.enumerationSummary)
-            }
-        }
-    }
-
-    private var doctorSection: some View {
-        devGroup("Doctor") {
-            HStack(spacing: 8) {
-                Text("computerUse.doctor")
-                    .font(.subheadline.monospaced())
-                if let at = workbench.doctorService.lastRefreshedAt {
-                    Text(timestamp(at))
-                        .font(.caption)
+                if let selectedWindow {
+                    Text(DevComputerUseSnapshot.windowDetailLine(selectedWindow))
+                        .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
-                        .monospacedDigit()
+                        .textSelection(.enabled)
                 }
-                Spacer()
-                Button {
-                    Task { await workbench.refreshDoctor() }
-                } label: {
-                    Label("Re-run", systemImage: "stethoscope")
-                }
-                .disabled(workbench.doctorService.isRefreshing)
-            }
-            if let report = workbench.doctorService.lastReport {
-                checklistGroup(
-                    title: "Permissions",
-                    rows: [
-                        ("Accessibility", report.accessibility),
-                        ("Screen Recording", report.screenRecording),
-                        ("Automation", report.automation),
-                    ]
-                )
-                checklistGroup(
-                    title: "SkyLight Private SPI",
-                    rows: [
-                        ("SLEventPostToPid", report.skyLightSPI.postToPid),
-                        ("Authentication message envelope", report.skyLightSPI.authMessage),
-                        ("Focus without raise", report.skyLightSPI.focusWithoutRaise),
-                        ("Window-local CGEvent location", report.skyLightSPI.windowLocation),
-                        ("Spaces enumeration", report.skyLightSPI.spaces),
-                        ("_AXUIElementGetWindow", report.skyLightSPI.getWindow),
-                    ]
-                )
-            } else if workbench.doctorService.isRefreshing {
-                ProgressView("Probing...")
-                    .controlSize(.small)
             }
         }
     }
 
-    private func coordFields(x: Binding<String>, y: Binding<String>) -> some View {
-        Group {
-            TextField("x", text: x)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 86)
-            TextField("y", text: y)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 86)
+    private var captureSection: some View {
+        devGroup("Get App State") {
+            Picker("Mode", selection: $captureMode) {
+                ForEach(CaptureMode.devCases, id: \.self) { mode in
+                    Text(mode.rawValue.uppercased()).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            HStack(spacing: 10) {
+                Text("Max image dimension")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Stepper(value: $maxImageDimension, in: 256...2048, step: 256) {
+                    Text("\(maxImageDimension)")
+                        .font(.caption.monospacedDigit())
+                }
+                .frame(width: 140)
+                Spacer()
+                Button {
+                    Task { await captureState() }
+                } label: {
+                    Label(isCapturingState ? "Capturing" : "Capture", systemImage: "camera.viewfinder")
+                }
+                .disabled(selectedApp?.pid == nil || selectedWindowId == nil || isCapturingState)
+            }
         }
+    }
+
+    @ViewBuilder
+    private var stateSection: some View {
+        if let state = stateSnapshot {
+            devGroup("State") {
+                keyValueRow("App", state.identityLine)
+                keyValueRow("AX", state.axLine)
+                if let screenshot = state.screenshot {
+                    keyValueRow("Screenshot", screenshot.line)
+                } else {
+                    keyValueRow("Screenshot", "No screenshot")
+                }
+                if let screenshotImage {
+                    Image(nsImage: screenshotImage)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxHeight: 260)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
+                        )
+                }
+                if let tree = state.treeMarkdown {
+                    codeBlock(tree, maxHeight: 360)
+                } else {
+                    emptyLine("No AX tree")
+                }
+            }
+        }
+    }
+
+    private func refreshApps() async {
+        isRefreshingApps = true
+        defer { isRefreshingApps = false }
+        errorMessage = nil
+
+        let loaded = await service.listApps(mode: .running)
+            .sorted { lhs, rhs in
+                if lhs.active != rhs.active { return lhs.active && !rhs.active }
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+        apps = loaded
+
+        if selectedAppIdentity == nil || !loaded.contains(where: { $0.identity == selectedAppIdentity }) {
+            selectedAppIdentity = loaded.first?.identity
+        } else {
+            await refreshWindowsForSelection()
+        }
+    }
+
+    private func refreshWindowsForSelection() async {
+        guard let pid = selectedApp?.pid else {
+            windows = []
+            selectedWindowId = nil
+            return
+        }
+
+        isRefreshingWindows = true
+        defer { isRefreshingWindows = false }
+        errorMessage = nil
+
+        let loaded = await service.listWindows(pid: pid)
+            .sorted { lhs, rhs in
+                if lhs.isOnScreen != rhs.isOnScreen { return lhs.isOnScreen && !rhs.isOnScreen }
+                return lhs.zIndex > rhs.zIndex
+            }
+        windows = loaded
+
+        if selectedWindowId == nil || !loaded.contains(where: { $0.id == selectedWindowId }) {
+            selectedWindowId = loaded.first?.id
+        }
+    }
+
+    private func captureState() async {
+        guard let pid = selectedApp?.pid, let windowId = selectedWindowId else { return }
+
+        isCapturingState = true
+        defer { isCapturingState = false }
+        errorMessage = nil
+
+        do {
+            let bundle = try await service.getAppState(
+                pid: pid,
+                windowId: windowId,
+                captureMode: captureMode,
+                maxImageDimension: maxImageDimension
+            )
+            stateSnapshot = DevComputerUseStateSnapshot(bundle: bundle)
+            screenshotImage = bundle.screenshot.flatMap { NSImage(data: $0.imageData) }
+        } catch {
+            errorMessage = String(describing: error)
+        }
+    }
+
+    private func errorBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.yellow)
+            Text(message)
+                .font(.caption.monospaced())
+                .textSelection(.enabled)
+            Spacer()
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.yellow.opacity(0.10))
+        )
+    }
+
+    private func keyValueRow(_ key: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(key)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 88, alignment: .leading)
+            Text(value)
+                .font(.body.monospaced())
+                .textSelection(.enabled)
+            Spacer()
+        }
+    }
+
+    private func emptyLine(_ text: String) -> some View {
+        Text(text)
+            .font(.body)
+            .foregroundStyle(.secondary)
     }
 
     private func devGroup<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
@@ -560,31 +329,9 @@ struct DevComputerUseSectionView: View {
         }
     }
 
-    private func statusBanner(_ message: String, systemImage: String, tint: Color) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: systemImage)
-                .foregroundStyle(tint)
-                .accessibilityHidden(true)
-            Text(message)
-                .font(.caption.monospaced())
-                .textSelection(.enabled)
-            Spacer()
-        }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(tint.opacity(0.12))
-        )
-        .accessibilityElement(children: .combine)
-    }
-
-    private func resultBlock(_ value: String) -> some View {
-        codeBlock(value, maxHeight: 120)
-    }
-
     private func codeBlock(_ value: String, maxHeight: CGFloat) -> some View {
         ScrollView {
-            Text(value.isEmpty ? "-" : value)
+            Text(value.isEmpty ? "—" : value)
                 .font(.caption.monospaced())
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -596,53 +343,8 @@ struct DevComputerUseSectionView: View {
                 .fill(Color.black.opacity(0.08))
         )
     }
+}
 
-    private func checklistGroup(title: String, rows: [(String, Bool)]) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                HStack(spacing: 8) {
-                    Image(systemName: row.1 ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .foregroundStyle(row.1 ? .green : .red)
-                        .accessibilityHidden(true)
-                    Text(row.0)
-                        .font(.caption.monospaced())
-                    Spacer()
-                    Text(row.1 ? "pass" : "fail")
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.secondary)
-                }
-                .accessibilityElement(children: .combine)
-            }
-        }
-    }
-
-    private func appLabel(_ app: AppInfo) -> String {
-        let state = app.running ? "pid=\(app.pid.map(String.init) ?? "-")" : "not running"
-        return "\(app.active ? "* " : "")\(app.name) \(state)"
-    }
-
-    private func windowLabel(_ row: DevComputerUseWindowRow) -> String {
-        let title = row.title.isEmpty ? "(untitled)" : row.title
-        let space = row.onCurrentSpace ? "current" : "off-space"
-        return "\(title) id=\(row.id) \(space)"
-    }
-
-    private func timestamp(_ d: Date) -> String {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm:ss"
-        return f.string(from: d)
-    }
-
-    private func pointLabel(_ point: CGPoint) -> String {
-        if !point.x.isFinite || !point.y.isFinite { return "-" }
-        return "\(String(format: "%.1f", point.x)), \(String(format: "%.1f", point.y))"
-    }
-
-    private func sizeLabel(_ size: CGSize) -> String {
-        if !size.width.isFinite || !size.height.isFinite { return "-" }
-        return "\(String(format: "%+.1f", size.width)), \(String(format: "%+.1f", size.height))"
-    }
+private extension CaptureMode {
+    static let devCases: [CaptureMode] = [.som, .vision, .ax]
 }

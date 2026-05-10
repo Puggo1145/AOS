@@ -2,16 +2,15 @@
 
 AOS is a macOS Notch app: a background AI agent that lives in the notch area and collaborates with the user inside their real OS environment.
 
-Two core capabilities:
+Current core capability:
 
 - **OS Sense** (Read) — on Notch open, snapshots the user's citable state: frontmost app, window, selection, clipboard, focused input. Gives the agent a grounded view of what the user is currently looking at.
-- **Computer Use** (Write) — the agent operates macOS apps in the background without stealing focus, via Accessibility API, `CGEvent.postToPid`, and ScreenCaptureKit.
 
-Together they form a Read + Write loop that lets the agent collaborate with the user inside real applications, beyond the limits of pure filesystem + terminal interaction.
+`AOSComputerUseKit` currently exists only as a macOS app/window/snapshot/capture foundation. The previous app-operation stack has been removed and will be rewritten.
 
 Architecture:
 
-- **Shell** (Swift / SwiftUI, parent process) — hosts the Notch UI and all macOS-native kits (`AOSOSSenseKit`, `AOSComputerUseKit`).
+- **Shell** (Swift / SwiftUI, parent process) — hosts the Notch UI and macOS-native kits.
 - **Sidecar** (Bun / TypeScript, child process) — All agent functionalities and businesses including agent loop, session management, tool dispatch, context management, LLM orchestration.
 - **Channel** — single stdio JSON-RPC 2.0 between Shell and Sidecar. Swift `Codable` is the schema source of truth; TS types are generated.
 

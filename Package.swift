@@ -7,7 +7,7 @@ import PackageDescription
 //   - executable `AOSShell`      (Notch UI + RPC client + AgentService composition root)
 //   - library `AOSRPCSchema`     (wire protocol — see docs/plans/rpc-protocol.md)
 //   - library `AOSOSSenseKit`    (OS Sense — see docs/designs/os-sense.md)
-//   - library `AOSComputerUseKit` (Computer Use — see docs/designs/computer-use.md)
+//   - library `AOSComputerUseKit` (Computer Use foundation)
 //   - library `AOSAXSupport`     (shared AX SPI bridge + Chromium AX activation —
 //                                 see docs/designs/os-sense.md §"共享 AX SPI 底层模块".
 //                                 Holds `_AXUIElementGetWindow` and
@@ -23,10 +23,6 @@ let package = Package(
         .executable(
             name: "AOSShell",
             targets: ["AOSShell"]
-        ),
-        .executable(
-            name: "AOSCoordinateTarget",
-            targets: ["AOSCoordinateTarget"]
         ),
         .library(
             name: "AOSRPCSchema",
@@ -89,12 +85,9 @@ let package = Package(
             dependencies: ["AOSOSSenseKit", "AOSAXSupport"],
             path: "Tests/AOSOSSenseKitTests"
         ),
-        // AOSComputerUseKit — write-side macOS-native operations:
-        // background app control via SkyLight SPI + ScreenCaptureKit + AX.
-        // Per docs/designs/computer-use.md §"模块结构". Depends only on
-        // AOSAXSupport for the shared AX SPI bridge — never on
-        // AOSOSSenseKit (read↔write isolation, mirrored from the OS Sense
-        // dependency rule).
+        // AOSComputerUseKit — remaining app/window/snapshot/capture
+        // foundation. App operation layers were removed; this target depends
+        // only on AOSAXSupport for shared AX primitives.
         .target(
             name: "AOSComputerUseKit",
             dependencies: ["AOSAXSupport"],
@@ -129,13 +122,6 @@ let package = Package(
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency=minimal")
             ]
-        ),
-        // Dev-only coordinate target used by AOSShell Dev Mode. It runs as a
-        // separate process so Computer Use coordinate tests exercise the real
-        // pid/window event-posting path instead of self-posting into AOS.
-        .executableTarget(
-            name: "AOSCoordinateTarget",
-            path: "Sources/AOSCoordinateTarget"
         ),
         .testTarget(
             name: "AOSShellTests",

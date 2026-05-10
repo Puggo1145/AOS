@@ -17,7 +17,6 @@ import { registerSessionHandlers } from "./agent/session/handlers";
 import { registerProviderHandlers } from "./auth/register";
 import { registerConfigHandlers } from "./config/handlers";
 import { registerBuiltinTools } from "./agent/tools";
-import { registerComputerUseTools } from "./agent/tools/computer-use";
 import { registerTodoTool } from "./agent/tools/todo";
 import { registerBuiltinAmbient } from "./agent/ambient";
 import { ensureWorkspace } from "./agent/workspace";
@@ -42,12 +41,6 @@ async function main(): Promise<void> {
 
   const transport = new StdioTransport();
   const dispatcher = new Dispatcher(transport);
-
-  // Computer Use tools — bound to the dispatcher so each tool's `execute`
-  // can call back into Shell-hosted `computerUse.*`. Registered AFTER
-  // built-ins (filesystem / bash) so the agent surface contains both
-  // ambient OS access and AOS-specific background-app control.
-  registerComputerUseTools(dispatcher);
 
   // Single process-wide SessionManager. Manager starts EMPTY; the Shell
   // issues `session.create` after `rpc.hello` to obtain its bootstrap

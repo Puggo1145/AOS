@@ -80,10 +80,7 @@ export async function compactConversation(
 
   // Source the history through `llmMessages()` rather than the raw
   // `_messages` buffer: that view prepends the preface, normalizes
-  // cancelled turns (orphan tool_use filled + interrupt marker), and
-  // strips superseded computer_use screenshots (so the summarizer doesn't
-  // have to re-ingest the exact oversized image history compaction is
-  // meant to relieve).
+  // cancelled turns (orphan tool_use filled + interrupt marker).
   //
   // Auto vs. manual scope:
   //   - Auto runs at runTurn entry. The last turn is the brand-new

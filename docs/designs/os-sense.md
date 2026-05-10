@@ -26,7 +26,7 @@ Notch 打开只是 UI 视图切换，不触发任何数据采集。用户在展�
 2. **Specific 信息走插件**——通过 `Behavior` 协议下沉到 adapter 自己定义的类型里
 3. **Behavior 是 opaque payload**——SenseStore / RPC / 默认 UI 全程透传，不读字段；只有 LLM 在 prompt 里消费具体结构
 4. **失败隔离**——任一 adapter 失败不影响 General Probe 与其他 adapter
-5. **共享 AX 底座**——任何组件**为接收 AX 通知**而订阅时必须通过 `AXObserverHub`，由 hub 统一管理 observer 生命周期、跨进程消息分发、retain 关系。**已知例外**：`AOSComputerUseKit` 在 Chromium / Electron app 首次 snapshot 时会**自起 AXObserver** 挂在 Shell main runloop（callback 为 no-op）。该 observer 不消费通知，仅以"存在性"向 Chromium 发信号让其保持 web AX tree 开启，与 hub 的"接收并分发通知"职责正交，复用 hub 反而扭曲两者语义；故允许这一例外，但要求 Computer Use 自管该 observer 的 retain / 释放（详见 `designs/computer-use.md` Chromium AX 激活段），不得用于真实 AX 通知消费。
+5. **共享 AX 底座**——任何组件**为接收 AX 通知**而订阅时必须通过 `AXObserverHub`，由 hub 统一管理 observer 生命周期、跨进程消息分发、retain 关系。Computer Use foundation 只做 snapshot/capture 基础能力，不接收或分发 AX 通知。
 6. **共享 AX SPI 底层模块**——`_AXUIElementGetWindow` 等 macOS 私有 AX SPI 的 `@_silgen_name` 桥接归属于独立的 `AOSAXSupport` Swift package，OS Sense Core 与 `AOSComputerUseKit` 都依赖它。**禁止 `AOSOSSenseKit` 依赖 `AOSComputerUseKit`**（读侧不得依赖写侧），任何 SPI 复用必须经由 `AOSAXSupport` 下沉。
 7. **共享权限服务**——Accessibility / Screen Recording / Automation 的运行时探测由 Shell 级 `PermissionsService` 统一负责，OS Sense / Computer Use / 权限引导 UI 全部读同一份 `PermissionState`，不得在模块内自起探测路径。
 
@@ -143,10 +143,7 @@ GeneralProbe 的 CFRange 通道，需要 app-specific adapter。
 生成，输入包括 stable app/window identity、从 window 到 focused element 的 ancestor path、
 每层同 signature sibling ordinal 与常用 AX 属性；window title 与 screen frame 作为 payload
 metadata 输出，不参与 `locatorId`，避免标题变化或窗口移动后 context 与下一次 app state
-无法对齐。它不是长期句柄；agent 仍需调用 `computer_use_get_app_state` 获取新鲜
-`stateId + elementIndex`。Computer Use 用同一 locator 算法在 AX tree 行渲染
-`locator=axloc_...`，因此 agent 可以把
-`currentInput.payload.target.locatorId` 与 app state 中的具体 `[elementIndex]` 对齐。
+无法对齐。它不是长期句柄；当前 RPC 层不暴露 app 操作或 app-state tool。
 GeneralProbe 只在 focused element 切换时计算 locator；`AXValueChanged` 只更新 `value`，
 但 exact textSelection 存在时可跳过 `value` 读取，不做全窗口遍历。
 
@@ -199,7 +196,7 @@ chip 表面只显示固定 label（`Selected text` / `Current input`），不暴
 
 `SenseStore` 是唯一持有 `SenseContext` 的对象，所有写入经它的串行化入口，确保单源真相。
 
-`AXWebAccessibilityActivator` 属于 `AOSAXSupport`，由 OS Sense 和 Computer Use 共同复用。它只负责 Chromium / Electron web AX tree 的激活信号：写 `AXManualAccessibility` / `AXEnhancedUserInterface`、保留 no-op `AXObserver`、等待 `AXWebArea` 出现。OS Sense 仍然只在 `GeneralProbe` 中读取 focused element 与直接 selection / value / selected items，不做 Computer Use 的深层 tree walk。
+`AXWebAccessibilityActivator` 属于 `AOSAXSupport`，由 OS Sense 和 Computer Use foundation 共同复用。它只负责 Chromium / Electron web AX tree 的激活信号：写 `AXManualAccessibility` / `AXEnhancedUserInterface`、保留 no-op `AXObserver`、等待 `AXWebArea` 出现。OS Sense 仍然只在 `GeneralProbe` 中读取 focused element 与直接 selection / value / selected items。
 
 ## 事件源与字段映射
 
@@ -331,7 +328,7 @@ emits `kind = "browser.tab"`，payload schema：
 - 下采样：长边 ≤ 1280px
 - 体积约束：在 Shell 投影时按 base64 后大小 ≤ 400KB 校验，超限继续降采样（见 `CitedContextProjection`）
 
-**不附 AX 树**。视觉兜底只服务于"看"。Computer Use 工具链独立捕获 AX 树。
+**不附 AX 树**。视觉兜底只服务于"看"。
 
 ## Clipboard capture
 

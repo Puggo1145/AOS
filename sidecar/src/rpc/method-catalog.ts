@@ -26,7 +26,6 @@ const NAMESPACE_DIRECTIONS: Record<string, Direction> = {
   agent: "shellToBun",
   settings: "shellToBun",
   config: "shellToBun",
-  computerUse: "bunToShell",
   ui: "bunToShell",
   conversation: "bunToShell",
 };

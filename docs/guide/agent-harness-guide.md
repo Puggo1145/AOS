@@ -105,9 +105,7 @@ Sidecar (Bun/TS) 侧 runtime 的最核心 module 就是这个 loop。输入来�
 | Planning | `todo` / `task_*` | Sidecar 自管 |
 | Knowledge | `load_skill` / `compact` | Sidecar 自管 |
 | Concurrency | `background_run` / `task` (subagent) / `spawn` | Sidecar 自管 |
-| Computer Use | — | Sidecar 声明 schema，真实执行由 Shell 通过 `computerUse.*` RPC 完成 |
-
-Computer Use 这一类是 AOS 相对 learn-claude-code 的最大区别：tool 的 handler **不是本地函数**，而是对 Shell 的一次 RPC 请求。具体契约见 `docs/plans/rpc-protocol.md` 和 `docs/plans/computer-use.md`。
+| Computer Use | — | 当前未暴露为 Sidecar tool；只保留 Swift foundation |
 
 ### 3.3 权限与安全
 
@@ -519,7 +517,7 @@ learn-claude-code 为了教学清晰，用的是 non-streaming `messages.create`
   - 转发到 Shell（`ui.*` RPC 通知，见 `docs/plans/rpc-protocol.md`）
   - 在本地 buffer 里重建完整 `response.content` 以便 append 到 `messages[]`
 - **中断**：Shell 通过 RPC 发 `agent.cancel`，sidecar 关掉当前流的 reader，把已生成的部分作为 assistant 消息落地（保持 loop 不变形），然后退出本轮
-- **工具中断**：执行中的 tool（尤其 computerUse、background subprocess）必须支持 cancel —— worktree / subprocess 用 kill，computerUse 走 Shell 侧的取消 RPC
+- **工具中断**：执行中的 tool（尤其 background subprocess）必须支持 cancel —— worktree / subprocess 用 kill
 
 这套 streaming + cancel 不是 learn-claude-code 的主题，但是 AOS 的必做项，设计时预留 hook：`on_llm_chunk`、`on_cancel`。
 
@@ -528,7 +526,7 @@ learn-claude-code 为了教学清晰，用的是 non-streaming `messages.create`
 learn-claude-code 在 s05 的 skill 样例中提及 `mcp-builder` 这个 skill，但 section 主体不涉及 MCP 协议本身。原则上：
 
 - MCP server 暴露的 tool 可以直接挂接到 §3 的 dispatch map 里（MCP client 作为 adapter，把 MCP tool schema 翻译成 LLM tools 声明，把 LLM tool_use 翻译成 MCP 调用）
-- MCP 在 AOS 里是**外部工具接入渠道**，与 Sidecar 自己实现的工具（filesystem、planning、computerUse 代理）并列
+- MCP 在 AOS 里是**外部工具接入渠道**，与 Sidecar 自己实现的工具（filesystem、planning）并列
 - MCP 不承担 Shell ↔ Sidecar 的内部通信（那是 JSON-RPC 的事）
 
 具体接入设计不在本指南范围，参考 `modelcontextprotocol.io` 与 AOS 后续的 MCP 集成计划。
@@ -569,10 +567,10 @@ learn-claude-code 在 s05 的 skill 样例中提及 `mcp-builder` 这个 skill�
 
 产出：agent 具备领域化工作能力，主对话不被探索污染。
 
-### 阶段 E：Computer Use 工具化（AOS 自己的事）
+### 阶段 E：Computer Use 重写（AOS 自己的事）
 
-13. **把 AOSComputerUseKit 接入 tool dispatch**：tool schema 在 Sidecar 声明，handler 发 `computerUse.*` RPC 到 Shell，Shell 走 Accessibility + CGEvent。
-14. **权限 prompt**：tool 执行前通过 `ui.*` 请求用户确认，高敏感操作走人机回路。
+13. **基于 AOSComputerUseKit foundation 重新设计操作层**：先定义新的模块边界，再决定是否接入 Sidecar tool dispatch。
+14. **权限 prompt**：如果重新暴露 app 操作 tool，执行前通过 `ui.*` 请求用户确认，高敏感操作走人机回路。
 
 产出：agent 能操作真实 macOS app，读写闭环。
 

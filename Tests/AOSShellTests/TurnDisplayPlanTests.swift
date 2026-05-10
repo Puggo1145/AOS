@@ -9,7 +9,7 @@ struct TurnDisplayPlanTests {
     @Test("completed tool run before next reply collapses into one display segment")
     func completedToolRunBeforeReplyCollapses() {
         let t1 = tool(id: "A", name: "bash", status: .completed)
-        let t2 = tool(id: "B", name: "computer_use_click_at", status: .completed)
+        let t2 = tool(id: "B", name: "read", status: .completed)
         let reply = ReplySegment(text: "Finished.")
         let segments: [TurnSegment] = [
             .toolCall(id: "A"),
@@ -54,7 +54,7 @@ struct TurnDisplayPlanTests {
     @Test("completed tool run without a following reply remains expanded")
     func completedToolRunWithoutFollowingReplyDoesNotCollapse() {
         let t1 = tool(id: "A", name: "bash", status: .completed)
-        let t2 = tool(id: "B", name: "computer_use_click_at", status: .completed)
+        let t2 = tool(id: "B", name: "read", status: .completed)
         let segments: [TurnSegment] = [
             .toolCall(id: "A"),
             .thinking(ThinkingSegment(text: "checking", startedAt: Date())),
@@ -74,14 +74,14 @@ struct TurnDisplayPlanTests {
         let records = [
             tool(id: "A", name: "bash", status: .completed),
             tool(id: "B", name: "bash", status: .completed),
-            tool(id: "C", name: "computer_use_click_element", status: .completed),
-            tool(id: "D", name: "computer_use_click_at", status: .completed),
-            tool(id: "E", name: "computer_use_click_at", status: .completed),
-            tool(id: "F", name: "computer_use_type_text", status: .completed),
-            tool(id: "G", name: "computer_use_type_text", status: .completed)
+            tool(id: "C", name: "read", status: .completed),
+            tool(id: "D", name: "read", status: .completed),
+            tool(id: "E", name: "read", status: .completed),
+            tool(id: "F", name: "write", status: .completed),
+            tool(id: "G", name: "write", status: .completed)
         ]
 
-        #expect(ToolCallRunSummary.text(for: records) == "used 2 bash, clicked 3 times, typed 2 times")
+        #expect(ToolCallRunSummary.text(for: records) == "used 2 bash, read 3 files, wrote 2 files")
     }
 
     @Test("summary uses registered presenter grammar for custom tools")

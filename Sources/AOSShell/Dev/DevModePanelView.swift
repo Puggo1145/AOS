@@ -1,6 +1,6 @@
 import SwiftUI
-import AOSRPCSchema
 import AOSComputerUseKit
+import AOSRPCSchema
 import AOSOSSenseKit
 
 // MARK: - DevModePanelView
@@ -12,9 +12,8 @@ import AOSOSSenseKit
 struct DevModePanelView: View {
     let contextService: DevContextService
     let senseStore: SenseStore
+    let computerUseService: ComputerUseService
     var sessionStore: SessionStore?
-    var computerUseService: ComputerUseService?
-    var doctorService: ComputerUseDoctorService?
 
     @State private var selected: Section = .context
 
@@ -39,18 +38,7 @@ struct DevModePanelView: View {
             case .osSense:
                 DevOSSenseSectionView(senseStore: senseStore)
             case .computerUse:
-                if let computerUseService, let doctorService {
-                    DevComputerUseSectionView(
-                        service: computerUseService,
-                        doctorService: doctorService
-                    )
-                } else {
-                    ContentUnavailableView(
-                        "Computer Use unavailable",
-                        systemImage: "stethoscope",
-                        description: Text("Computer Use services were not wired into Dev Mode at boot.")
-                    )
-                }
+                DevComputerUseSectionView(service: computerUseService)
             }
         }
         .task {
@@ -64,7 +52,7 @@ struct DevModePanelView: View {
         switch section {
         case .context: return "doc.text"
         case .osSense: return "eye"
-        case .computerUse: return "stethoscope"
+        case .computerUse: return "macwindow"
         }
     }
 }

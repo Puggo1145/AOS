@@ -11,8 +11,7 @@ orchestration, provider auth, and the Shell RPC peer.
 ### Shell
 
 The Swift / SwiftUI parent process that hosts the Notch UI and macOS-native
-kits. Shell owns OS Sense capture and Computer Use execution; Sidecar requests
-those capabilities through JSON-RPC.
+kits. Shell owns OS Sense capture and the app/window/snapshot foundation.
 
 ### Agent Turn
 
@@ -28,11 +27,11 @@ assistant messages, tool results, compaction prefaces, cancellation repair
 markers, and screenshot pruning rules. It is the replay surface for later Agent
 Turns.
 
-### Computer Use Tool Surface
+### Computer Use Foundation
 
-The set of LLM-callable tools that wrap Shell-hosted `computerUse.*` methods.
-It translates model tool calls into background app operations while preserving
-the `(pid, windowId)` and `stateId` contracts.
+The Swift-only `AOSComputerUseKit` foundation for app enumeration, window
+enumeration, AX snapshot rendering, screenshot capture, and snapshot state.
+It is not exposed as an LLM-callable tool surface.
 
 ### RPC Method Catalog
 

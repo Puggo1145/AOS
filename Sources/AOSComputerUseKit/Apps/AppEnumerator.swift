@@ -4,9 +4,8 @@ import Foundation
 
 // MARK: - AppEnumerator
 //
-// Backs `computerUse.listApps`. Returns installed/launchable application
-// bundles from the user's standard app locations and overlays current
-// `NSRunningApplication` state for apps that can be operated immediately.
+// Returns installed/launchable application bundles from the user's standard
+// app locations and overlays current `NSRunningApplication` state.
 
 public enum AppEnumerator {
     public static func apps(mode: AppListMode) -> [AppInfo] {

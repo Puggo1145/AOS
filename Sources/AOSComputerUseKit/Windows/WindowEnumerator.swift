@@ -29,8 +29,7 @@ public enum WindowEnumerator {
         enumerate(options: [.excludeDesktopElements])
     }
 
-    /// Layer-0 (normal app-window) entries for `pid`. The wire
-    /// `computerUse.listWindows` result is built from this set.
+    /// Layer-0 (normal app-window) entries for `pid`.
     public static func appWindows(forPid pid: pid_t) -> [WindowInfo] {
         return allWindows().filter { $0.pid == pid && $0.layer == 0 }
     }

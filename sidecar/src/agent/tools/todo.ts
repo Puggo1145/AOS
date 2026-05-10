@@ -108,8 +108,7 @@ export function createTodoWriteTool(opts: {
 /// Register the todo tool against the global `toolRegistry`. Kept separate
 /// from `registerBuiltinTools` because the tool needs a handle to the
 /// SessionManager to resolve per-session state — and the builtin set is
-/// designed to be context-free. Mirrors `registerComputerUseTools` (also
-/// dispatcher-bound).
+/// designed to be context-free.
 export function registerTodoTool(sessionManager: SessionManager): void {
   toolRegistry.register(
     createTodoWriteTool({

@@ -16,11 +16,8 @@ import AOSRPCSchema
 //     the reader
 //   - per-method timeouts implemented via Task.sleep race
 //
-// This round, the only Bun→Shell Request is `rpc.hello`'s response (handled
-// via the request path); business Requests Bun→Shell (computerUse.*) arrive
-// in Wave 4. The symmetric request-handler dispatch path is implemented but
-// unused this round so Wave 4 can register handlers without a structural
-// change.
+// The symmetric request-handler dispatch path is available for Shell-hosted
+// services that need to answer Sidecar requests.
 
 public enum RPCClientError: Error, Sendable {
     /// `rpc.hello` returned with a MAJOR version that doesn't match aosProtocolVersion.
@@ -50,9 +47,7 @@ public typealias NotificationHandler = @Sendable (Data) async -> Void
 /// can decode `RPCRequest<P>` for whichever P it expects) and returns the
 /// already-encoded response/error line. Handlers are invoked on a detached
 /// Task so they don't block the reader; the wire layer writes the
-/// returned bytes back through the outbound queue. Per
-/// docs/designs/rpc-protocol.md §"computerUse.*" each `computerUse.*`
-/// method registers one handler here.
+/// returned bytes back through the outbound queue.
 public typealias RequestHandler = @Sendable (Data) async -> Data?
 
 /// Bridge for handlers that want to surface a typed `RPCError` on the
@@ -208,11 +203,9 @@ public final class RPCClient: @unchecked Sendable {
 
     // MARK: - Inbound request handler registry
     //
-    // Per docs/designs/rpc-protocol.md §"computerUse.*". Each typed handler
-    // decodes `RPCRequest<P>`, runs the kit operation, and projects the
-    // result back into `RPCResponse<R>`. Errors thrown by the closure
-    // become `RPCErrorResponse`s — the caller can map them onto application
-    // codes via `RPCErrorAdapter`.
+    // Each typed handler decodes `RPCRequest<P>`, runs the closure, and
+    // projects the result back into `RPCResponse<R>`. Errors thrown by the
+    // closure become `RPCErrorResponse`s.
     public func registerRequestHandler<P: Codable & Sendable & Equatable, R: Codable & Sendable & Equatable>(
         method: String,
         as paramsType: P.Type = P.self,
@@ -486,9 +479,8 @@ public final class RPCClient: @unchecked Sendable {
     /// boundary here so any new oversize source can't take down the channel.
     ///
     /// On overflow we substitute a `payloadTooLarge` error response keyed to
-    /// the same id so the sidecar continuation gets resolved (no hang) and
-    /// the agent treats the call as a recoverable failure (per
-    /// `isRecoverableComputerUseError` in `sidecar/.../computer-use.ts`).
+    /// the same id so the sidecar continuation gets resolved instead of
+    /// hanging.
     private static func guardedResponseLine<T: Encodable>(
         _ value: T,
         id: RPCId,
@@ -658,10 +650,9 @@ public final class RPCClient: @unchecked Sendable {
             }
             return
         }
-        // Try registered request handlers (computerUse.* live here). Each
-        // handler runs in this detached Task so concurrent inbound
-        // requests don't serialise behind one another — per
-        // docs/designs/rpc-protocol.md §"Dispatcher 并发模型".
+        // Try registered request handlers. Each handler runs in this detached
+        // Task so concurrent inbound requests don't serialise behind one
+        // another.
         let handler = handlerRegistry.withLock { $0.requests[method] }
         if let handler {
             if let response = await handler(line) {

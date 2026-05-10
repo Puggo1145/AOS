@@ -14,8 +14,8 @@
 //   - Direction enforcement per Namespace table:
 //       agent.*, settings.* — Shell→Bun only. Bun calling request("agent.*")
 //         is a programmer error.
-//       computerUse.*, ui.*  — Bun→Shell only. Inbound Request from Shell on
-//         these namespaces is rejected with MethodNotFound.
+//       ui.*  — Bun→Shell only. Inbound Request from Shell on this namespace
+//         is rejected with MethodNotFound.
 //       rpc.*               — bidirectional.
 //   - Outbound `request` keeps a pending map keyed by RPCId; resolved on
 //     response. `stop()` rejects all pending with DispatcherStopped.
@@ -255,8 +255,8 @@ export class Dispatcher {
   private dispatchRequest(req: RPCRequest<unknown>): void {
     const { id, method, params } = req;
 
-    // Direction enforcement: ui.* / computerUse.* are Bun→Shell only;
-    // receiving them as inbound Request is a misuse — reply MethodNotFound.
+    // Direction enforcement: ui.* is Bun→Shell only; receiving it as inbound
+    // Request is a misuse — reply MethodNotFound.
     const dir = directionOf(method);
     if (dir === "bunToShell") {
       this.replyError(id, RPCErrorCode.methodNotFound, `method '${method}' is Bun→Shell only`);
