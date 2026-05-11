@@ -44,6 +44,14 @@ let package = Package(
         .executable(
             name: "AOSComputerUseCLI",
             targets: ["AOSComputerUseCLI"]
+        ),
+        .executable(
+            name: "AOSCoordinateTarget",
+            targets: ["AOSCoordinateTarget"]
+        ),
+        .executable(
+            name: "AOSButtonTarget",
+            targets: ["AOSButtonTarget"]
         )
     ],
     dependencies: [
@@ -111,6 +119,14 @@ let package = Package(
             name: "AOSComputerUseCLI",
             dependencies: ["AOSComputerUseKit"],
             path: "Sources/AOSComputerUseCLI"
+        ),
+        .executableTarget(
+            name: "AOSCoordinateTarget",
+            path: "Sources/AOSCoordinateTarget"
+        ),
+        .executableTarget(
+            name: "AOSButtonTarget",
+            path: "Sources/AOSButtonTarget"
         ),
         .testTarget(
             name: "AOSComputerUseCLITests",

@@ -131,8 +131,7 @@ struct WindowFocusTests {
             },
             postEventRecord: { psn, bytes in
                 recorder.record(psn: psn, bytes: bytes)
-            },
-            isAccessibilityTrusted: { true }
+            }
         )
 
         try focuser.focusWindowWithoutRaising(pid: targetPid, windowId: targetWindowId)
@@ -164,24 +163,53 @@ struct WindowFocusTests {
         #expect(posts[2].bytes[0x3a] == 0x10)
     }
 
-    @Test("focuser fails fast without accessibility permission")
-    func failsFastWithoutAccessibility() {
+    @Test("mouse click focus posts only target focus without defocusing the front process")
+    func mouseClickFocusPostsOnlyTargetFocus() throws {
+        let targetPid: pid_t = pid_t.random(in: 1_000..<50_000)
+        let targetWindowId = CGWindowID.random(in: 1..<UInt32.max)
+        let targetPSN: SkyLightMouseClickFocuser.ProcessSerialNumber = [
+            UInt32.random(in: 1..<UInt32.max),
+            UInt32.random(in: 1..<UInt32.max),
+        ]
         let recorder = PostedEventRecorder()
-        let focuser = SkyLightWindowFocuser(
-            resolveProcessPSN: { _ in
-                Issue.record("PSN resolver must not run without AX permission")
-                return [0, 0]
+
+        let focuser = SkyLightMouseClickFocuser(
+            resolveProcessPSN: { pid in
+                #expect(pid == targetPid)
+                return targetPSN
             },
-            postEventRecord: { _, _ in
-                Issue.record("event poster must not run without AX permission")
-            },
-            isAccessibilityTrusted: { false }
+            postEventRecord: { psn, bytes in
+                recorder.record(psn: psn, bytes: bytes)
+            }
         )
 
-        #expect(throws: ComputerUseError.self) {
+        try focuser.prepareForMouseClick(pid: targetPid, windowId: targetWindowId)
+
+        let posts = recorder.posts
+        #expect(posts.count == 1)
+        #expect(posts[0].psn == targetPSN)
+        #expect(posts[0].bytes[0x08] == 0x0d)
+        #expect(posts[0].bytes[0x8a] == 0x01)
+        for post in posts {
+            #expect(post.bytes[0x3c] == UInt8(UInt32(targetWindowId) & 0xff))
+        }
+    }
+
+    @Test("focuser bubbles private SPI failures")
+    func bubblesPrivateSPIFailures() {
+        enum ProbeFailure: Error {
+            case postFailed
+        }
+        let focuser = SkyLightWindowFocuser(
+            resolveProcessPSN: { _ in [1, 2] },
+            postEventRecord: { _, _ in
+                throw ProbeFailure.postFailed
+            }
+        )
+
+        #expect(throws: ProbeFailure.postFailed) {
             try focuser.focusWindowWithoutRaising(pid: 123, windowId: 456)
         }
-        #expect(recorder.posts.isEmpty)
     }
 }
 

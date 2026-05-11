@@ -189,6 +189,33 @@ yabai 会用：
 
 对 AOS 来说，`kCPSUserGenerated` 的副作用过强；`kCPSNoWindows` 又不能完成目标窗口的后台输入激活。因此当前实现跳过它。
 
+## Mouse Click 前的 focus 准备
+
+`focusWindowWithoutRaise` 的三事件流程适合“让窗口进入可接收后台输入的 key/focused 状态”，但不能直接作为后台鼠标点击的前置步骤复用。实测发现：
+
+```text
+focus(target)
+keyWindow(target, begin)
+keyWindow(target, end)
+SLEventPostToPid(leftMouseDown at target)
+```
+
+会让 WindowServer 把第一颗真实 `leftMouseDown` 解释成对后台窗口的 click-to-activate，从而把目标窗口 raise 到前面。
+
+因此 `postLeftClick` 使用单独的 click-preparer，匹配 CUA 的 mouse path：
+
+```text
+_SLPSGetFrontProcess(previousPSN)
+GetProcessForPID(targetPid, targetPSN)
+SLPSPostEventRecordTo(previousPSN, focusEvent(targetWid, marker: defocus))
+SLPSPostEventRecordTo(targetPSN,   focusEvent(targetWid, marker: focus))
+SLEventPostToPid(mouseMoved at target)
+SLEventPostToPid(leftDown/up at offscreen -1,-1)
+SLEventPostToPid(leftDown/up at target)
+```
+
+注意这个 click-preparer 是 mouse-click 专用路径，不改变 `focusWindowWithoutRaise` 的公开语义：公开 focus 入口仍然不触碰 previous PSN，并且仍然投递 key-window begin/end。
+
 ## 风险与边界
 
 这是私有 API 路径，存在这些边界：
@@ -203,10 +230,12 @@ yabai 会用：
 
 AOS 当前用单元测试锁定两组 event record layout 以及投递行为：
 
-- `builds the SLPS focus event record layout`：focus event marker 固定为 `0x01`，永不构造 `0x02`。
+- `builds the SLPS focus event record layout`：公开 focus path 默认使用 marker `0x01`。
 - `builds the SLPS key-window event record layout`。
 - `focuses only the target PSN and never posts a defocus event`：注入 mock 的 `resolveProcessPSN` / `postEventRecord`，断言 focuser 只投递 3 条事件，并且每条事件的 PSN 都等于 target PSN，且不存在任何 `bytes[0x8a] == 0x02` 的 defocus 事件。该测试是“不 deactive 原窗口”这个行为的回归防线：一旦有人改回去发 defocus，它会立刻失败。
-- `focuser fails fast without accessibility permission`：缺权限时不会触发 PSN 解析或事件投递。
+- `mouse click focus matches CUA defocus/focus sequence and skips key-window records`：click-preparer 必须只投递 previous defocus + target focus 两条 focus event，不能投递 key-window begin/end。
+- `mouse poster primes offscreen before the target click`：鼠标事件序列必须是 target move、titlebar primer down/up、target down/up，并写入 Computer Use 成功路径中观测到的 raw SkyLight fields。
+- `focuser bubbles private SPI failures`：`SLPSPostEventRecordTo` 等私有 API 返回错误时直接向上抛出；当前 Codex runner 缺少对应 TCC 身份时会得到 `OSStatus 1002`。
 
 并覆盖：
 
@@ -220,4 +249,3 @@ AOS 当前用单元测试锁定两组 event record layout 以及投递行为：
 - 只发 focus event（无 defocus、无 key-window）后：后台 hover 生效，但红绿灯仍灰。
 - 补上 key-window begin/end 后：目标窗口成功 focus without raise。
 - 验证没有 raise、没有 Space follow，并且 **原前台窗口仍维持 active 状态**（visual chrome 不切回灰）。
-

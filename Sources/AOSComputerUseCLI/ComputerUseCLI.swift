@@ -2,6 +2,7 @@ import AOSComputerUseKit
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import Darwin
 import Foundation
 
 public enum ComputerUsePermission: String, Sendable, Hashable, CaseIterable {
@@ -111,6 +112,17 @@ public protocol ComputerUseCoreClient: Sendable {
     ) async throws -> AppStateBundle
     /// Focuses the pid/window pair without raising or reordering the window.
     func focusWindowWithoutRaise(pid: pid_t, windowId: CGWindowID) async throws -> WindowFocusResult
+    /// Posts a left click to the current center of the pid/window pair.
+    func postLeftClick(pid: pid_t, windowId: CGWindowID) async throws -> WindowClickResult
+    /// Posts a left click to an explicit screen-space point in the pid/window pair.
+    func postLeftClick(pid: pid_t, windowId: CGWindowID, point: CGPoint) async throws -> WindowClickResult
+    /// Posts a left click and traces live WindowServer order after each phase.
+    func tracePostLeftClick(
+        pid: pid_t,
+        windowId: CGWindowID,
+        skipFocus: Bool,
+        overridePoint: CGPoint?
+    ) async throws -> WindowClickTraceResult
 }
 
 public struct ComputerUseCoreAdapter: ComputerUseCoreClient {
@@ -145,6 +157,28 @@ public struct ComputerUseCoreAdapter: ComputerUseCoreClient {
     public func focusWindowWithoutRaise(pid: pid_t, windowId: CGWindowID) async throws -> WindowFocusResult {
         try await core.focusWindowWithoutRaise(pid: pid, windowId: windowId)
     }
+
+    public func postLeftClick(pid: pid_t, windowId: CGWindowID) async throws -> WindowClickResult {
+        try await core.postLeftClick(pid: pid, windowId: windowId)
+    }
+
+    public func postLeftClick(pid: pid_t, windowId: CGWindowID, point: CGPoint) async throws -> WindowClickResult {
+        try await core.postLeftClick(pid: pid, windowId: windowId, point: point)
+    }
+
+    public func tracePostLeftClick(
+        pid: pid_t,
+        windowId: CGWindowID,
+        skipFocus: Bool,
+        overridePoint: CGPoint?
+    ) async throws -> WindowClickTraceResult {
+        try await core.tracePostLeftClick(
+            pid: pid,
+            windowId: windowId,
+            skipFocus: skipFocus,
+            overridePoint: overridePoint
+        )
+    }
 }
 
 public struct ComputerUseCLIResult: Sendable, Equatable {
@@ -159,6 +193,275 @@ public struct ComputerUseCLIResult: Sendable, Equatable {
     }
 }
 
+public struct CoordinateTargetState: Sendable, Equatable, Codable {
+    public let pid: pid_t
+    public let windowId: CGWindowID
+    public let eventLogPath: String
+
+    public init(pid: pid_t, windowId: CGWindowID, eventLogPath: String) {
+        self.pid = pid
+        self.windowId = windowId
+        self.eventLogPath = eventLogPath
+    }
+}
+
+public struct ButtonTargetState: Sendable, Equatable, Codable {
+    public let pid: pid_t
+    public let windowId: CGWindowID
+    public let eventLogPath: String
+    public let buttonLocalPoint: CGPoint
+    public let buttonScreenPoint: CGPoint
+
+    public init(
+        pid: pid_t,
+        windowId: CGWindowID,
+        eventLogPath: String,
+        buttonLocalPoint: CGPoint,
+        buttonScreenPoint: CGPoint
+    ) {
+        self.pid = pid
+        self.windowId = windowId
+        self.eventLogPath = eventLogPath
+        self.buttonLocalPoint = buttonLocalPoint
+        self.buttonScreenPoint = buttonScreenPoint
+    }
+}
+
+public protocol CoordinateTargetClient: Sendable {
+    func open() async throws -> CoordinateTargetState
+    func current() async throws -> CoordinateTargetState
+}
+
+public protocol ButtonTargetClient: Sendable {
+    func open() async throws -> ButtonTargetState
+}
+
+public struct CoordinateTargetEvent: Sendable, Equatable, Codable {
+    public let timestamp: TimeInterval
+    public let type: String
+    public let x: Double
+    public let y: Double
+    public let screenX: Double
+    public let screenY: Double
+    public let windowNumber: Int
+
+    public init(
+        timestamp: TimeInterval,
+        type: String,
+        x: Double,
+        y: Double,
+        screenX: Double,
+        screenY: Double,
+        windowNumber: Int
+    ) {
+        self.timestamp = timestamp
+        self.type = type
+        self.x = x
+        self.y = y
+        self.screenX = screenX
+        self.screenY = screenY
+        self.windowNumber = windowNumber
+    }
+}
+
+public protocol CoordinateTargetEventLogClient: Sendable {
+    func byteOffset(path: String) throws -> UInt64
+    func events(path: String, after offset: UInt64) throws -> [CoordinateTargetEvent]
+}
+
+public struct LiveCoordinateTargetEventLogClient: CoordinateTargetEventLogClient {
+    public init() {}
+
+    public func byteOffset(path: String) throws -> UInt64 {
+        let attributes = try FileManager.default.attributesOfItem(atPath: path)
+        guard let size = attributes[.size] as? NSNumber else {
+            throw CoordinateTargetError("cannot read coordinate event log size at \(path)")
+        }
+        return size.uint64Value
+    }
+
+    public func events(path: String, after offset: UInt64) throws -> [CoordinateTargetEvent] {
+        let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
+        try handle.seek(toOffset: offset)
+        let data = try handle.readToEnd() ?? Data()
+        try handle.close()
+        guard !data.isEmpty else {
+            return []
+        }
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw CoordinateTargetError("coordinate event log is not UTF-8 at \(path)")
+        }
+        return try text
+            .split(separator: "\n")
+            .map { line in
+                let data = Data(line.utf8)
+                return try JSONDecoder().decode(CoordinateTargetEvent.self, from: data)
+            }
+    }
+}
+
+public struct LiveCoordinateTargetClient: CoordinateTargetClient {
+    private let stateURL: URL
+    private let eventLogURL: URL
+
+    public init() {
+        let runDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".aos", isDirectory: true)
+            .appendingPathComponent("run", isDirectory: true)
+        self.stateURL = runDir.appendingPathComponent("coordinate-target.json")
+        self.eventLogURL = runDir.appendingPathComponent("coordinate-target-events.jsonl")
+    }
+
+    public func open() async throws -> CoordinateTargetState {
+        try FileManager.default.createDirectory(
+            at: stateURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data().write(to: eventLogURL, options: .atomic)
+
+        let executableURL = try targetExecutableURL()
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = ["--events", eventLogURL.path]
+        try process.run()
+
+        let pid = process.processIdentifier
+        let window = try await waitForWindow(pid: pid)
+        let state = CoordinateTargetState(
+            pid: pid,
+            windowId: window.id,
+            eventLogPath: eventLogURL.path
+        )
+        try JSONEncoder().encode(state).write(to: stateURL, options: .atomic)
+        return state
+    }
+
+    public func current() async throws -> CoordinateTargetState {
+        let data = try Data(contentsOf: stateURL)
+        let state = try JSONDecoder().decode(CoordinateTargetState.self, from: data)
+        guard kill(state.pid, 0) == 0 else {
+            throw CoordinateTargetError("coordinate target pid \(state.pid) is not running")
+        }
+        return state
+    }
+
+    private func targetExecutableURL() throws -> URL {
+        if let override = ProcessInfo.processInfo.environment["AOS_COORDINATE_TARGET_PATH"],
+           !override.isEmpty {
+            let url = URL(fileURLWithPath: override)
+            guard FileManager.default.isExecutableFile(atPath: url.path) else {
+                throw CoordinateTargetError("AOS_COORDINATE_TARGET_PATH is not executable: \(url.path)")
+            }
+            return url
+        }
+
+        guard let cliURL = Bundle.main.executableURL else {
+            throw CoordinateTargetError("cannot resolve AOSComputerUseCLI executable path")
+        }
+        let url = cliURL.deletingLastPathComponent().appendingPathComponent("AOSCoordinateTarget")
+        guard FileManager.default.isExecutableFile(atPath: url.path) else {
+            throw CoordinateTargetError("coordinate target executable not found at \(url.path); run swift build")
+        }
+        return url
+    }
+
+    private func waitForWindow(pid: pid_t) async throws -> WindowInfo {
+        for _ in 0..<80 {
+            if let window = WindowEnumerator.appWindows(forPid: pid)
+                .filter({ $0.isOnScreen })
+                .max(by: { $0.zIndex < $1.zIndex }) {
+                return window
+            }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        throw CoordinateTargetError("coordinate target pid \(pid) did not publish an on-screen window")
+    }
+}
+
+public struct LiveButtonTargetClient: ButtonTargetClient {
+    private let eventLogURL: URL
+
+    public init() {
+        let runDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".aos", isDirectory: true)
+            .appendingPathComponent("run", isDirectory: true)
+        self.eventLogURL = runDir.appendingPathComponent("button-target-events.jsonl")
+    }
+
+    public func open() async throws -> ButtonTargetState {
+        try FileManager.default.createDirectory(
+            at: eventLogURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data().write(to: eventLogURL, options: .atomic)
+
+        let executableURL = try targetExecutableURL()
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = ["--events", eventLogURL.path]
+        try process.run()
+
+        let pid = process.processIdentifier
+        let window = try await waitForWindow(pid: pid)
+        let buttonLocalPoint = CGPoint(
+            x: window.bounds.width / 2,
+            y: window.bounds.height / 2
+        )
+        let buttonScreenPoint = CGPoint(
+            x: window.bounds.x + buttonLocalPoint.x,
+            y: window.bounds.y + buttonLocalPoint.y
+        )
+        return ButtonTargetState(
+            pid: pid,
+            windowId: window.id,
+            eventLogPath: eventLogURL.path,
+            buttonLocalPoint: buttonLocalPoint,
+            buttonScreenPoint: buttonScreenPoint
+        )
+    }
+
+    private func targetExecutableURL() throws -> URL {
+        if let override = ProcessInfo.processInfo.environment["AOS_BUTTON_TARGET_PATH"],
+           !override.isEmpty {
+            let url = URL(fileURLWithPath: override)
+            guard FileManager.default.isExecutableFile(atPath: url.path) else {
+                throw CoordinateTargetError("AOS_BUTTON_TARGET_PATH is not executable: \(url.path)")
+            }
+            return url
+        }
+
+        guard let cliURL = Bundle.main.executableURL else {
+            throw CoordinateTargetError("cannot resolve AOSComputerUseCLI executable path")
+        }
+        let url = cliURL.deletingLastPathComponent().appendingPathComponent("AOSButtonTarget")
+        guard FileManager.default.isExecutableFile(atPath: url.path) else {
+            throw CoordinateTargetError("button target executable not found at \(url.path); run swift build")
+        }
+        return url
+    }
+
+    private func waitForWindow(pid: pid_t) async throws -> WindowInfo {
+        for _ in 0..<80 {
+            if let window = WindowEnumerator.appWindows(forPid: pid)
+                .filter({ $0.isOnScreen })
+                .max(by: { $0.zIndex < $1.zIndex }) {
+                return window
+            }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        throw CoordinateTargetError("button target pid \(pid) did not publish an on-screen window")
+    }
+}
+
+private struct CoordinateTargetError: Error, CustomStringConvertible {
+    let message: String
+    var description: String { message }
+
+    init(_ message: String) {
+        self.message = message
+    }
+}
+
 public enum ComputerUseCLI {
     public static func helpText() throws -> String {
         """
@@ -166,20 +469,32 @@ public enum ComputerUseCLI {
           AOSComputerUseCLI --help
           AOSComputerUseCLI help
           AOSComputerUseCLI grant-permissions
+          AOSComputerUseCLI open
+          AOSComputerUseCLI open-button
+          AOSComputerUseCLI test --coor <x,y>
           AOSComputerUseCLI list-apps [--mode running|all]
           AOSComputerUseCLI list-windows --pid <pid>
           AOSComputerUseCLI get-app-state --pid <pid> --window-id <id> [--mode vision|ax] [--max-image-dimension <pixels>] [--screenshot-output <path>]
           AOSComputerUseCLI focus-window --pid <pid> --window-id <id>
+          AOSComputerUseCLI post-left-click --pid <pid> --window-id <id> [--coor <x,y>]
+          AOSComputerUseCLI trace-postLeftClick --pid <pid> --window-id <id> [--skip-focus] [--screen-x <x> --screen-y <y>]
 
         Options:
           --json          Emit machine-readable JSON instead of the default readable text.
 
         Commands:
           grant-permissions  Trigger macOS prompts and open System Settings for required permissions.
+          open            Open the coordinate click test target as a separate process.
+          open-button     Open the centered-button click test target as a separate process.
+          test            Post a background click to the coordinate target at --coor <x,y>.
           list-apps       List running apps by default, or all launchable apps with --mode all.
           list-windows    List layer-0 windows owned by a process id.
           get-app-state   Capture AX tree and/or screenshot for a specific app window.
           focus-window    Focus a specific app window without raising it.
+          post-left-click
+                          Post a background left click to the center, or a local --coor point, of a specific app window.
+          trace-postLeftClick
+                          Post a background left click and print z-order after each phase.
 
         Output:
           Successful commands write readable text to stdout by default.
@@ -190,7 +505,10 @@ public enum ComputerUseCLI {
     public static func run(
         arguments: [String],
         core: ComputerUseCoreClient,
-        permissions: ComputerUsePermissionClient = LiveComputerUsePermissionClient()
+        permissions: ComputerUsePermissionClient = LiveComputerUsePermissionClient(),
+        coordinateTarget: CoordinateTargetClient = LiveCoordinateTargetClient(),
+        buttonTarget: ButtonTargetClient = LiveButtonTargetClient(),
+        coordinateEventLog: CoordinateTargetEventLogClient = LiveCoordinateTargetEventLogClient()
     ) async throws -> ComputerUseCLIResult {
         do {
             let parsed = try ParsedCommand(arguments: arguments)
@@ -200,6 +518,21 @@ public enum ComputerUseCLI {
             case .grantPermissions:
                 let grant = try await permissions.request([.accessibility, .screenRecording])
                 return try success(GrantPermissionsOutput(grant), format: parsed.outputFormat)
+            case .openCoordinateTarget:
+                let state = try await coordinateTarget.open()
+                return try success(OpenCoordinateTargetOutput(state: state), format: parsed.outputFormat)
+            case .openButtonTarget:
+                let state = try await buttonTarget.open()
+                return try success(OpenButtonTargetOutput(state: state), format: parsed.outputFormat)
+            case .testCoordinateClick(let request):
+                let state = try await coordinateTarget.current()
+                let result = try await postCoordinateTestClick(
+                    request: request,
+                    state: state,
+                    core: core,
+                    coordinateEventLog: coordinateEventLog
+                )
+                return try success(CoordinateClickTestOutput(result: result), format: parsed.outputFormat)
             case .listApps(let mode):
                 let apps = try await core.listApps(mode: mode)
                 return try success(ListAppsOutput(mode: mode, apps: apps), format: parsed.outputFormat)
@@ -224,6 +557,17 @@ public enum ComputerUseCLI {
                     windowId: request.windowId
                 )
                 return try success(FocusWindowOutput(request: request, result: result), format: parsed.outputFormat)
+            case .postLeftClick(let request):
+                let result = try await postLeftClick(request: request, core: core)
+                return try success(LeftClickOutput(request: request, result: result), format: parsed.outputFormat)
+            case .tracePostLeftClick(let request):
+                let result = try await core.tracePostLeftClick(
+                    pid: request.pid,
+                    windowId: request.windowId,
+                    skipFocus: request.skipFocus,
+                    overridePoint: request.overridePoint
+                )
+                return try success(LeftClickTraceOutput(request: request, result: result), format: parsed.outputFormat)
             }
         } catch let error as UsageError {
             return ComputerUseCLIResult(stdout: "", stderr: error.message + "\n", exitCode: 64)
@@ -253,6 +597,86 @@ public enum ComputerUseCLI {
         }
         return ComputerUseCLIResult(stdout: text + "\n", stderr: "", exitCode: 0)
     }
+
+    private static func postCoordinateTestClick(
+        request: CoordinateClickTestRequest,
+        state: CoordinateTargetState,
+        core: ComputerUseCoreClient,
+        coordinateEventLog: CoordinateTargetEventLogClient
+    ) async throws -> CoordinateClickTestResult {
+        let windows = try await core.listWindows(pid: state.pid)
+        guard let window = windows.first(where: { $0.id == state.windowId }) else {
+            throw UsageError("coordinate target window \(state.windowId) for pid \(state.pid) is not available")
+        }
+        let eventLogOffset = try coordinateEventLog.byteOffset(path: state.eventLogPath)
+        let screenPoint = CGPoint(
+            x: window.bounds.x + request.coordinate.x,
+            y: window.bounds.y + request.coordinate.y
+        )
+        let click = try await core.postLeftClick(
+            pid: state.pid,
+            windowId: state.windowId,
+            point: screenPoint
+        )
+        let events = try await waitForCoordinateTargetEvents(
+            path: state.eventLogPath,
+            after: eventLogOffset,
+            coordinateEventLog: coordinateEventLog
+        )
+        guard !events.isEmpty else {
+            throw CoordinateTargetError(
+                "coordinate target recorded no mouse events after post; inspect \(state.eventLogPath)"
+            )
+        }
+        return CoordinateClickTestResult(
+            state: state,
+            localPoint: request.coordinate,
+            screenPoint: screenPoint,
+            click: click,
+            events: events
+        )
+    }
+
+    private static func postLeftClick(
+        request: LeftClickRequest,
+        core: ComputerUseCoreClient
+    ) async throws -> WindowClickResult {
+        guard let coordinate = request.coordinate else {
+            return try await core.postLeftClick(pid: request.pid, windowId: request.windowId)
+        }
+        let windows = try await core.listWindows(pid: request.pid)
+        guard let window = windows.first(where: { $0.id == request.windowId }) else {
+            throw UsageError("window \(request.windowId) for pid \(request.pid) is not available")
+        }
+        let screenPoint = CGPoint(
+            x: window.bounds.x + coordinate.x,
+            y: window.bounds.y + coordinate.y
+        )
+        return try await core.postLeftClick(
+            pid: request.pid,
+            windowId: request.windowId,
+            point: screenPoint
+        )
+    }
+
+    private static func waitForCoordinateTargetEvents(
+        path: String,
+        after offset: UInt64,
+        coordinateEventLog: CoordinateTargetEventLogClient
+    ) async throws -> [CoordinateTargetEvent] {
+        var latestEvents: [CoordinateTargetEvent] = []
+        for _ in 0..<20 {
+            let events = try coordinateEventLog.events(path: path, after: offset)
+            if events.contains(where: { $0.type.contains("mouseUp") || $0.type.contains("leftMouseUp") }) {
+                return events
+            }
+            if !events.isEmpty {
+                latestEvents = events
+            }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        return latestEvents
+    }
 }
 
 private struct ParsedCommand {
@@ -262,10 +686,15 @@ private struct ParsedCommand {
     enum Command {
         case help
         case grantPermissions
+        case openCoordinateTarget
+        case openButtonTarget
+        case testCoordinateClick(CoordinateClickTestRequest)
         case listApps(mode: AppListMode)
         case listWindows(pid: pid_t)
         case getAppState(AppStateRequest)
         case focusWindow(FocusWindowRequest)
+        case postLeftClick(LeftClickRequest)
+        case tracePostLeftClick(TraceLeftClickRequest)
     }
 
     init(arguments: [String]) throws {
@@ -287,6 +716,16 @@ private struct ParsedCommand {
         case "grant-permissions":
             try options.rejectUnused()
             command = .grantPermissions
+        case "open":
+            try options.rejectUnused()
+            command = .openCoordinateTarget
+        case "open-button":
+            try options.rejectUnused()
+            command = .openButtonTarget
+        case "test":
+            let coordinate = try options.requiredPoint("--coor")
+            try options.rejectUnused()
+            command = .testCoordinateClick(CoordinateClickTestRequest(coordinate: coordinate))
         case "list-apps":
             let mode = try options.optionalEnum("--mode", AppListMode.self) ?? .running
             try options.rejectUnused()
@@ -314,6 +753,34 @@ private struct ParsedCommand {
             let windowId = try options.requiredWindowID("--window-id")
             try options.rejectUnused()
             command = .focusWindow(FocusWindowRequest(pid: pid, windowId: windowId))
+        case "post-left-click":
+            let pid = try options.requiredPID("--pid")
+            let windowId = try options.requiredWindowID("--window-id")
+            let coordinate = try options.optionalPoint("--coor")
+            try options.rejectUnused()
+            command = .postLeftClick(LeftClickRequest(pid: pid, windowId: windowId, coordinate: coordinate))
+        case "trace-postLeftClick":
+            let pid = try options.requiredPID("--pid")
+            let windowId = try options.requiredWindowID("--window-id")
+            let skipFocus = try options.takeFlag("--skip-focus")
+            let screenX = try options.optionalDouble("--screen-x")
+            let screenY = try options.optionalDouble("--screen-y")
+            let overridePoint: CGPoint?
+            switch (screenX, screenY) {
+            case (.some(let x), .some(let y)):
+                overridePoint = CGPoint(x: x, y: y)
+            case (.none, .none):
+                overridePoint = nil
+            default:
+                throw UsageError("--screen-x and --screen-y must be provided together")
+            }
+            try options.rejectUnused()
+            command = .tracePostLeftClick(TraceLeftClickRequest(
+                pid: pid,
+                windowId: windowId,
+                skipFocus: skipFocus,
+                overridePoint: overridePoint
+            ))
         default:
             throw UsageError("unknown command \(first). Run AOSComputerUseCLI --help")
         }
@@ -359,6 +826,41 @@ private struct OptionCursor {
             throw UsageError("invalid value for \(name): \(value)")
         }
         return parsed
+    }
+
+    mutating func optionalDouble(_ name: String) throws -> Double? {
+        guard let value = try takeValue(name) else { return nil }
+        guard let parsed = Double(value) else {
+            throw UsageError("invalid value for \(name): \(value)")
+        }
+        return parsed
+    }
+
+    mutating func requiredPoint(_ name: String) throws -> CGPoint {
+        let raw = try requiredString(name)
+        return try parsePoint(raw, optionName: name)
+    }
+
+    mutating func optionalPoint(_ name: String) throws -> CGPoint? {
+        guard let raw = try takeValue(name) else {
+            return nil
+        }
+        return try parsePoint(raw, optionName: name)
+    }
+
+    private func parsePoint(_ raw: String, optionName: String) throws -> CGPoint {
+        let trimmed = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "()"))
+        let parts = trimmed
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard parts.count == 2,
+              let x = Double(parts[0]),
+              let y = Double(parts[1]) else {
+            throw UsageError("invalid value for \(optionName): \(raw); expected x,y")
+        }
+        return CGPoint(x: x, y: y)
     }
 
     mutating func optionalString(_ name: String) throws -> String? {
@@ -429,6 +931,31 @@ private struct FocusWindowRequest: Sendable {
     let windowId: CGWindowID
 }
 
+private struct LeftClickRequest: Sendable {
+    let pid: pid_t
+    let windowId: CGWindowID
+    let coordinate: CGPoint?
+}
+
+private struct TraceLeftClickRequest: Sendable {
+    let pid: pid_t
+    let windowId: CGWindowID
+    let skipFocus: Bool
+    let overridePoint: CGPoint?
+}
+
+private struct CoordinateClickTestRequest: Sendable {
+    let coordinate: CGPoint
+}
+
+private struct CoordinateClickTestResult: Sendable {
+    let state: CoordinateTargetState
+    let localPoint: CGPoint
+    let screenPoint: CGPoint
+    let click: WindowClickResult
+    let events: [CoordinateTargetEvent]
+}
+
 private struct GrantPermissionsOutput: Encodable, ReadableOutput {
     let command = "grant-permissions"
     let requested: [String]
@@ -455,6 +982,112 @@ private struct GrantPermissionsOutput: Encodable, ReadableOutput {
             lines.append(contentsOf: guidance.map { "- \($0)" })
         }
         return lines.joined(separator: "\n")
+    }
+}
+
+private struct OpenCoordinateTargetOutput: Encodable, ReadableOutput {
+    let command = "open"
+    let pid: pid_t
+    let windowId: CGWindowID
+    let eventLogPath: String
+
+    init(state: CoordinateTargetState) {
+        self.pid = state.pid
+        self.windowId = state.windowId
+        self.eventLogPath = state.eventLogPath
+    }
+
+    var readableText: String {
+        """
+        Coordinate target opened
+        - pid \(pid)
+        - window \(windowId)
+        - events \(eventLogPath)
+        """
+    }
+}
+
+private struct OpenButtonTargetOutput: Encodable, ReadableOutput {
+    let command = "open-button"
+    let pid: pid_t
+    let windowId: CGWindowID
+    let eventLogPath: String
+    let buttonLocalPoint: PointOutput
+    let buttonScreenPoint: PointOutput
+
+    init(state: ButtonTargetState) {
+        self.pid = state.pid
+        self.windowId = state.windowId
+        self.eventLogPath = state.eventLogPath
+        self.buttonLocalPoint = PointOutput(state.buttonLocalPoint)
+        self.buttonScreenPoint = PointOutput(state.buttonScreenPoint)
+    }
+
+    var readableText: String {
+        """
+        Button target opened
+        - pid \(pid)
+        - window \(windowId)
+        - button-local \(Int(buttonLocalPoint.x)),\(Int(buttonLocalPoint.y))
+        - button-screen \(Int(buttonScreenPoint.x)),\(Int(buttonScreenPoint.y))
+        - events \(eventLogPath)
+        """
+    }
+}
+
+private struct CoordinateClickTestOutput: Encodable, ReadableOutput {
+    let command = "test"
+    let pid: pid_t
+    let windowId: CGWindowID
+    let eventLogPath: String
+    let localPoint: PointOutput
+    let screenPoint: PointOutput
+    let recordedEvents: [CoordinateTargetEventOutput]
+
+    init(result: CoordinateClickTestResult) {
+        self.pid = result.state.pid
+        self.windowId = result.state.windowId
+        self.eventLogPath = result.state.eventLogPath
+        self.localPoint = PointOutput(result.localPoint)
+        self.screenPoint = PointOutput(result.screenPoint)
+        self.recordedEvents = result.events.map(CoordinateTargetEventOutput.init)
+    }
+
+    var readableText: String {
+        var lines = [
+            """
+        Posted coordinate test click
+        - target pid \(pid), window \(windowId)
+        - local \(Int(localPoint.x)),\(Int(localPoint.y))
+        - screen \(Int(screenPoint.x)),\(Int(screenPoint.y))
+        - events \(eventLogPath)
+        - recorded \(recordedEvents.count) event(s)
+        """,
+        ]
+        lines.append(contentsOf: recordedEvents.map { event in
+            "- \(event.type) local \(Int(event.x)),\(Int(event.y)) screen \(Int(event.screenX)),\(Int(event.screenY)) window \(event.windowNumber)"
+        })
+        return lines.joined(separator: "\n")
+    }
+}
+
+private struct CoordinateTargetEventOutput: Encodable {
+    let timestamp: TimeInterval
+    let type: String
+    let x: Double
+    let y: Double
+    let screenX: Double
+    let screenY: Double
+    let windowNumber: Int
+
+    init(_ event: CoordinateTargetEvent) {
+        self.timestamp = event.timestamp
+        self.type = event.type
+        self.x = event.x
+        self.y = event.y
+        self.screenX = event.screenX
+        self.screenY = event.screenY
+        self.windowNumber = event.windowNumber
     }
 }
 
@@ -615,6 +1248,126 @@ private struct FocusWindowOutput: Encodable, ReadableOutput {
 
     var readableText: String {
         "Focused window \(windowId) without raising it (pid \(pid))."
+    }
+}
+
+private struct LeftClickOutput: Encodable, ReadableOutput {
+    let command = "post-left-click"
+    let pid: pid_t
+    let windowId: CGWindowID
+    let point: PointOutput
+
+    init(request _: LeftClickRequest, result: WindowClickResult) {
+        self.pid = result.pid
+        self.windowId = result.windowId
+        self.point = PointOutput(result.point)
+    }
+
+    var readableText: String {
+        "Posted left click to window \(windowId) at \(Int(point.x)),\(Int(point.y)) (pid \(pid))."
+    }
+}
+
+private struct LeftClickTraceOutput: Encodable, ReadableOutput {
+    let command = "trace-postLeftClick"
+    let pid: pid_t
+    let windowId: CGWindowID
+    let skipFocus: Bool
+    let overridePoint: PointOutput?
+    let point: PointOutput
+    let samples: [WindowOrderSnapshotOutput]
+
+    init(request: TraceLeftClickRequest, result: WindowClickTraceResult) {
+        self.pid = result.pid
+        self.windowId = result.windowId
+        self.skipFocus = request.skipFocus
+        self.overridePoint = request.overridePoint.map(PointOutput.init)
+        self.point = PointOutput(result.point)
+        self.samples = result.samples.map(WindowOrderSnapshotOutput.init)
+    }
+
+    var readableText: String {
+        var lines = [
+            "Left Click Trace",
+            "Target: pid \(pid), window \(windowId), point \(Int(point.x)),\(Int(point.y))",
+            "Focus: \(skipFocus ? "skipped" : "prepared")",
+        ]
+        if let overridePoint {
+            lines.append("Override point: \(Int(overridePoint.x)),\(Int(overridePoint.y))")
+        }
+        for sample in samples {
+            let frontmost = sample.frontmostName ?? sample.frontmostBundleId ?? sample.frontmostPid.map { "pid \($0)" } ?? "unknown"
+            let target = sample.targetRank.map { "target rank \($0)" } ?? "target not visible"
+            let above = sample.windowsAboveTarget.map { ", above \($0)" } ?? ""
+            let overlapAbove = sample.overlappingWindowsAboveTarget.map { ", overlap-above \($0)" } ?? ""
+            let protectedCovered = sample.protectedOverlappingWindowsCoveredByTarget.map {
+                ", protected-covered \($0)"
+            } ?? ""
+            lines.append("- \(sample.stage): frontmost \(frontmost), \(target)\(above)\(overlapAbove)\(protectedCovered)")
+            if !sample.topWindows.isEmpty {
+                let compact = sample.topWindows.map { window in
+                    "#\(window.rank) \(window.owner)(pid \(window.pid), wid \(window.windowId))"
+                }.joined(separator: " | ")
+                lines.append("  top: \(compact)")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
+private struct WindowOrderSnapshotOutput: Encodable {
+    let stage: String
+    let frontmostPid: pid_t?
+    let frontmostBundleId: String?
+    let frontmostName: String?
+    let targetRank: Int?
+    let targetZIndex: Int?
+    let windowsAboveTarget: Int?
+    let overlappingWindowsAboveTarget: Int?
+    let protectedOverlappingWindowsCoveredByTarget: Int?
+    let topWindows: [WindowOrderEntryOutput]
+
+    init(_ snapshot: WindowOrderSnapshot) {
+        self.stage = snapshot.stage.rawValue
+        self.frontmostPid = snapshot.frontmostPid
+        self.frontmostBundleId = snapshot.frontmostBundleId
+        self.frontmostName = snapshot.frontmostName
+        self.targetRank = snapshot.targetRank
+        self.targetZIndex = snapshot.targetZIndex
+        self.windowsAboveTarget = snapshot.windowsAboveTarget
+        self.overlappingWindowsAboveTarget = snapshot.overlappingWindowsAboveTarget
+        self.protectedOverlappingWindowsCoveredByTarget = snapshot.protectedOverlappingWindowsCoveredByTarget
+        self.topWindows = snapshot.topWindows.map(WindowOrderEntryOutput.init)
+    }
+}
+
+private struct WindowOrderEntryOutput: Encodable {
+    let rank: Int
+    let windowId: CGWindowID
+    let pid: pid_t
+    let owner: String
+    let title: String
+    let bounds: BoundsOutput
+    let zIndex: Int
+
+    init(_ entry: WindowOrderEntry) {
+        self.rank = entry.rank
+        self.windowId = entry.windowId
+        self.pid = entry.pid
+        self.owner = entry.owner
+        self.title = entry.title
+        self.bounds = BoundsOutput(entry.bounds)
+        self.zIndex = entry.zIndex
+    }
+}
+
+private struct PointOutput: Encodable {
+    let x: Double
+    let y: Double
+
+    init(_ point: CGPoint) {
+        self.x = point.x
+        self.y = point.y
     }
 }
 

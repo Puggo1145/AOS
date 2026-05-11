@@ -42,22 +42,18 @@ struct SkyLightWindowFocuser: Sendable {
     typealias ProcessSerialNumber = [UInt32]
     typealias ResolveProcessPSN = @Sendable (pid_t) throws -> ProcessSerialNumber
     typealias PostEventRecord = @Sendable (ProcessSerialNumber, [UInt8]) throws -> Void
-    typealias AccessibilityTrustCheck = @Sendable () -> Bool
 
     private static let eventRecordSize = 0xf8
 
     private let resolveProcessPSN: ResolveProcessPSN
     private let postEventRecord: PostEventRecord
-    private let isAccessibilityTrusted: AccessibilityTrustCheck
 
     init(
         resolveProcessPSN: @escaping ResolveProcessPSN,
-        postEventRecord: @escaping PostEventRecord,
-        isAccessibilityTrusted: @escaping AccessibilityTrustCheck = { AXIsProcessTrusted() }
+        postEventRecord: @escaping PostEventRecord
     ) {
         self.resolveProcessPSN = resolveProcessPSN
         self.postEventRecord = postEventRecord
-        self.isAccessibilityTrusted = isAccessibilityTrusted
     }
 
     /// Production wiring backed by the private SkyLight / HIServices
@@ -71,12 +67,6 @@ struct SkyLightWindowFocuser: Sendable {
     }
 
     func focusWindowWithoutRaising(pid: pid_t, windowId: CGWindowID) throws {
-        guard isAccessibilityTrusted() else {
-            throw ComputerUseError.focusUnavailable(
-                "Accessibility permission is required to post focus events without raising"
-            )
-        }
-
         let targetPSN = try resolveProcessPSN(pid)
 
         try postEventRecord(targetPSN, Self.makeFocusEventBytes(windowId: windowId))
@@ -102,16 +92,25 @@ struct SkyLightWindowFocuser: Sendable {
         }
     }
 
-    /// SLPS focus event-record (always the `0x01` "focus" marker — we
-    /// deliberately never build the `0x02` "defocus" variant; see the
-    /// type-level doc comment for the rationale).
-    static func makeFocusEventBytes(windowId: CGWindowID) -> [UInt8] {
+    /// SLPS focus event-record. The public focus-without-raise path uses
+    /// only `.focus`; the click-specific preparer below uses `.defocus` to
+    /// match CUA's mouse-dispatch recipe without changing this focuser's
+    /// standalone behavior.
+    static func makeFocusEventBytes(
+        windowId: CGWindowID,
+        marker: FocusEventMarker = .focus
+    ) -> [UInt8] {
         var eventBytes = [UInt8](repeating: 0, count: eventRecordSize)
         eventBytes[0x04] = 0xf8
         eventBytes[0x08] = 0x0d
-        eventBytes[0x8a] = 0x01
+        eventBytes[0x8a] = marker.rawValue
         writeWindowId(windowId, into: &eventBytes)
         return eventBytes
+    }
+
+    enum FocusEventMarker: UInt8, Sendable {
+        case focus = 0x01
+        case defocus = 0x02
     }
 
     static func makeKeyWindowEventBytes(
@@ -139,24 +138,64 @@ struct SkyLightWindowFocuser: Sendable {
     }
 }
 
+/// Prepares a target window for pid-routed mouse dispatch without touching the
+/// user's current front process.
+struct SkyLightMouseClickFocuser: Sendable {
+    typealias ProcessSerialNumber = SkyLightWindowFocuser.ProcessSerialNumber
+    typealias ResolveProcessPSN = SkyLightWindowFocuser.ResolveProcessPSN
+    typealias PostEventRecord = SkyLightWindowFocuser.PostEventRecord
+
+    private let resolveProcessPSN: ResolveProcessPSN
+    private let postEventRecord: PostEventRecord
+
+    init(
+        resolveProcessPSN: @escaping ResolveProcessPSN,
+        postEventRecord: @escaping PostEventRecord
+    ) {
+        self.resolveProcessPSN = resolveProcessPSN
+        self.postEventRecord = postEventRecord
+    }
+
+    static func live() -> SkyLightMouseClickFocuser {
+        SkyLightMouseClickFocuser(
+            resolveProcessPSN: { pid in try SkyLightWindowFocuser.liveResolveProcessPSN(pid) },
+            postEventRecord: { psn, bytes in
+                try SkyLightWindowFocuser.livePostEventRecord(psn, bytes)
+            }
+        )
+    }
+
+    func prepareForMouseClick(pid: pid_t, windowId: CGWindowID) throws {
+        let targetPSN = try resolveProcessPSN(pid)
+        try postEventRecord(
+            targetPSN,
+            SkyLightWindowFocuser.makeFocusEventBytes(windowId: windowId, marker: .focus)
+        )
+    }
+}
+
 // MARK: - Live symbol bindings
 
 private typealias GetProcessForPID = @convention(c) (
     pid_t,
     UnsafeMutableRawPointer
 ) -> OSStatus
+private typealias GetFrontProcess = @convention(c) (
+    UnsafeMutableRawPointer
+) -> OSStatus
 private typealias PostEventRecordTo = @convention(c) (
     UnsafeRawPointer,
     UnsafePointer<UInt8>
 ) -> OSStatus
-
 private struct SkyLightSymbols {
+    let getFrontProcess: GetFrontProcess
     let getProcessForPID: GetProcessForPID
     let postEventRecordTo: PostEventRecordTo
 
     static func load() throws -> SkyLightSymbols {
         let handles = try PrivateFrameworkHandles.load()
         return SkyLightSymbols(
+            getFrontProcess: try handles.symbol("_SLPSGetFrontProcess"),
             getProcessForPID: try handles.symbol("GetProcessForPID"),
             postEventRecordTo: try handles.symbol("SLPSPostEventRecordTo")
         )
@@ -177,6 +216,18 @@ private extension SkyLightWindowFocuser {
             try assertStatus(
                 symbols.getProcessForPID(pid, rawBuffer.baseAddress!),
                 "GetProcessForPID failed for pid \(pid)"
+            )
+        }
+        return psn
+    }
+
+    static func liveResolveFrontProcessPSN() throws -> ProcessSerialNumber {
+        let symbols = try SkyLightSymbols.load()
+        var psn = ProcessSerialNumber(repeating: 0, count: 2)
+        try psn.withUnsafeMutableBytes { rawBuffer in
+            try assertStatus(
+                symbols.getFrontProcess(rawBuffer.baseAddress!),
+                "_SLPSGetFrontProcess failed"
             )
         }
         return psn
