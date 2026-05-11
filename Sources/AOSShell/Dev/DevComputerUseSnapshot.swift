@@ -45,15 +45,15 @@ struct DevComputerUseSnapshot {
 }
 
 struct DevComputerUseStateSnapshot {
-    let stateId: String?
+    let stateId: String
     let appName: String?
     let bundleId: String?
-    let elementCount: Int?
-    let treeMarkdown: String?
+    let elementCount: Int
+    let treeMarkdown: String
     let screenshot: DevComputerUseScreenshotSnapshot?
 
     init(bundle: AppStateBundle) {
-        self.stateId = bundle.stateId?.raw
+        self.stateId = bundle.stateId.raw
         self.appName = bundle.appName
         self.bundleId = bundle.bundleId
         self.elementCount = bundle.elementCount
@@ -66,11 +66,11 @@ struct DevComputerUseStateSnapshot {
     }
 
     init(
-        stateId: String?,
+        stateId: String,
         appName: String?,
         bundleId: String?,
-        elementCount: Int?,
-        treeMarkdown: String?,
+        elementCount: Int,
+        treeMarkdown: String,
         screenshot: DevComputerUseScreenshotSnapshot?
     ) {
         self.stateId = stateId
@@ -90,13 +90,7 @@ struct DevComputerUseStateSnapshot {
     }
 
     var axLine: String {
-        if let stateId, let elementCount {
-            return "state \(stateId), \(elementCount) element\(elementCount == 1 ? "" : "s")"
-        }
-        if let stateId {
-            return "state \(stateId)"
-        }
-        return "No AX snapshot"
+        "state \(stateId), \(elementCount) element\(elementCount == 1 ? "" : "s")"
     }
 }
 

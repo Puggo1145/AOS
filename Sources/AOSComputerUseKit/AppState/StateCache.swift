@@ -45,11 +45,11 @@ public actor StateCache {
     }
 
     /// The most recent screenshot coordinate space for `(pid, windowId)`.
-    /// Stored independently of any AX snapshot so vision-only flows
-    /// (`captureMode: .vision`) and pure coordinate clicks can still
-    /// convert the model's screenshot pixels through the same
-    /// ScreenCaptureKit window frame that produced the image. CGWindowList
-    /// bounds are not a safe substitute on mixed-display Retina setups.
+    /// Stored beside the AX snapshot so vision flows (`captureMode:
+    /// .vision`) and pure coordinate clicks can convert the model's
+    /// screenshot pixels through the same ScreenCaptureKit window frame
+    /// that produced the image. CGWindowList bounds are not a safe
+    /// substitute on mixed-display Retina setups.
     private struct ScreenshotRecord {
         let coordinateSpace: ScreenshotCoordinateSpace
         let recordedAt: Date

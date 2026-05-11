@@ -121,7 +121,7 @@ struct ComputerUseCLITests {
                 "get-app-state",
                 "--pid", "123",
                 "--window-id", "456",
-                "--mode", "som",
+                "--mode", "vision",
                 "--max-image-dimension", "1024"
             ],
             core: fake,
@@ -130,13 +130,43 @@ struct ComputerUseCLITests {
 
         #expect(await fake.requestedStatePID == 123)
         #expect(await fake.requestedStateWindowID == 456)
-        #expect(await fake.requestedCaptureMode == .som)
+        #expect(await fake.requestedCaptureMode == .vision)
         #expect(await fake.requestedMaxImageDimension == 1024)
         #expect(result.stdout.contains("App State"))
         #expect(result.stdout.contains("state_123"))
         #expect(result.stdout.contains("AX elements: 1"))
         #expect(result.stdout.contains("Screenshot: png 10x20"))
         #expect(result.exitCode == 0)
+    }
+
+    @Test("get-app-state vision mode still requires AX state in output")
+    func getAppStateVisionModeIncludesAXState() async throws {
+        let fake = FakeComputerUseCore()
+        await fake.setState(AppStateBundle(
+            stateId: StateID("state_vision"),
+            treeMarkdown: "[0] AXButton title=\"OK\"",
+            elementCount: 1,
+            screenshot: nil,
+            bundleId: "com.example.Terminal",
+            appName: "Terminal"
+        ))
+
+        let result = try await ComputerUseCLI.run(
+            arguments: [
+                "get-app-state",
+                "--pid", "123",
+                "--window-id", "456",
+                "--mode", "vision"
+            ],
+            core: fake,
+            permissions: FakePermissionClient()
+        )
+
+        #expect(result.stdout.contains("State ID: state_vision"))
+        #expect(result.stdout.contains("AX elements: 1"))
+        #expect(result.stdout.contains("AX Tree:"))
+        #expect(result.stdout.contains("[0] AXButton"))
+        #expect(!result.stdout.contains("AX elements: not captured"))
     }
 
     @Test("focus-window requires pid and window id")

@@ -11,7 +11,7 @@ import Foundation
 // All fields here are derived directly from `CGWindowListCopyWindowInfo`
 // — no AX involvement. That matters because we want `listWindows` to work
 // without Accessibility permission so the agent can at least enumerate
-// before falling back to vision-only `captureMode`.
+// before falling back to screenshot-backed `captureMode`.
 
 public struct WindowBounds: Sendable, Hashable {
     public let x: Double

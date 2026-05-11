@@ -38,18 +38,18 @@ struct DevComputerUseSnapshotTests {
     func emptyStateLines() {
         let snapshot = DevComputerUseSnapshot(apps: [], windows: [], state: nil)
         let state = DevComputerUseStateSnapshot(
-            stateId: nil,
+            stateId: "state-empty",
             appName: nil,
             bundleId: nil,
-            elementCount: nil,
-            treeMarkdown: nil,
+            elementCount: 0,
+            treeMarkdown: "",
             screenshot: nil
         )
 
         #expect(snapshot.appCountLine == "0 running apps")
         #expect(snapshot.windowCountLine == "0 windows")
         #expect(state.identityLine == "Unknown app")
-        #expect(state.axLine == "No AX snapshot")
+        #expect(state.axLine == "state state-empty, 0 elements")
     }
 
     @Test("state and screenshot summaries include ids, counts, and downscale metadata")

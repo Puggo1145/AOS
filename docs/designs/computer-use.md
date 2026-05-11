@@ -43,10 +43,9 @@ Sources/AOSComputerUseKit/
 - `listWindows(pid:) -> [WindowInfo]`
 - `getAppState(pid:windowId:captureMode:maxImageDimension:) -> AppStateBundle`
 
-`getAppState` 支持三种 capture mode：
+`getAppState` 支持两种 capture mode。AX tree 每次都会构建并返回：
 
-- `som`：AX tree + screenshot
-- `vision`：仅 screenshot
+- `vision`：AX tree + screenshot
 - `ax`：仅 AX tree
 
 该 API 是 in-process Swift API。当前没有 JSON-RPC schema、Sidecar tool schema 或 Shell handler 绑定它。Dev Mode 可以直接注入 `ComputerUseCore` 做本地 diagnostics，但该入口只允许查看 foundation 输出，不允许执行 app 操作。
@@ -67,7 +66,7 @@ AOSComputerUseCLI -> AOSComputerUseKit -> AOSAXSupport
 - `swift run AOSComputerUseCLI grant-permissions`
 - `swift run AOSComputerUseCLI list-apps [--mode running|all]`
 - `swift run AOSComputerUseCLI list-windows --pid <pid>`
-- `swift run AOSComputerUseCLI get-app-state --pid <pid> --window-id <id> [--mode som|vision|ax] [--max-image-dimension <pixels>] [--screenshot-output <path>]`
+- `swift run AOSComputerUseCLI get-app-state --pid <pid> --window-id <id> [--mode vision|ax] [--max-image-dimension <pixels>] [--screenshot-output <path>]`
 
 成功默认输出人类可读文本到 stdout。传 `--json` 时输出机器可读 JSON。错误输出到 stderr，并返回非 0 exit code。`get-app-state --json` 默认把 screenshot base64 放进 JSON；如果传 `--screenshot-output`，CLI 把截图写入指定路径，JSON 只返回截图 metadata 和 `outputPath`。
 

@@ -9,9 +9,9 @@ import Foundation
 // such window exists we fall back to layer-0 maximum-area (covers
 // hidden-launched / fully-minimized cases).
 //
-// `listWindows` (RPC) returns the layer-0 set; coordinate / capture paths
-// use the same selector internally so screenshot anchor and click anchor
-// always agree.
+// `listWindows` returns app-window candidates, not every layer-0 helper
+// surface WindowServer reports. Coordinate / capture paths use the same
+// selector internally so screenshot anchor and click anchor always agree.
 
 public enum WindowEnumerator {
 
@@ -29,9 +29,9 @@ public enum WindowEnumerator {
         enumerate(options: [.excludeDesktopElements])
     }
 
-    /// Layer-0 (normal app-window) entries for `pid`.
+    /// Layer-0 app-window candidates for `pid`.
     public static func appWindows(forPid pid: pid_t) -> [WindowInfo] {
-        return allWindows().filter { $0.pid == pid && $0.layer == 0 }
+        appWindows(forPid: pid, from: allWindows())
     }
 
     /// Pick the operable "frontmost" window for `pid` per the design's
@@ -43,7 +43,7 @@ public enum WindowEnumerator {
     ///
     /// Returns `nil` if `pid` has no layer-0 window at all.
     public static func selectFrontmostWindow(forPid pid: pid_t) -> WindowInfo? {
-        let layerZero = allWindows().filter { $0.pid == pid && $0.layer == 0 }
+        let layerZero = appWindows(forPid: pid)
         let visible = layerZero.filter {
             $0.isOnScreen && $0.bounds.width > 1 && $0.bounds.height > 1
         }
@@ -61,8 +61,23 @@ public enum WindowEnumerator {
 
     // MARK: - Internals
 
+    static func appWindows(forPid pid: pid_t, from windows: [WindowInfo]) -> [WindowInfo] {
+        windows.filter { window in
+            window.pid == pid
+                && window.layer == 0
+                && isAppWindowCandidate(window)
+        }
+    }
+
     private static func areaOf(_ bounds: WindowBounds) -> Double {
         return bounds.width * bounds.height
+    }
+
+    private static func isAppWindowCandidate(_ window: WindowInfo) -> Bool {
+        guard window.bounds.width >= 64, window.bounds.height >= 64 else {
+            return false
+        }
+        return true
     }
 
     private static func enumerate(options: CGWindowListOption) -> [WindowInfo] {

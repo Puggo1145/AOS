@@ -168,7 +168,7 @@ public enum ComputerUseCLI {
           AOSComputerUseCLI grant-permissions
           AOSComputerUseCLI list-apps [--mode running|all]
           AOSComputerUseCLI list-windows --pid <pid>
-          AOSComputerUseCLI get-app-state --pid <pid> --window-id <id> [--mode som|vision|ax] [--max-image-dimension <pixels>] [--screenshot-output <path>]
+          AOSComputerUseCLI get-app-state --pid <pid> --window-id <id> [--mode vision|ax] [--max-image-dimension <pixels>] [--screenshot-output <path>]
           AOSComputerUseCLI focus-window --pid <pid> --window-id <id>
 
         Options:
@@ -298,7 +298,7 @@ private struct ParsedCommand {
         case "get-app-state":
             let pid = try options.requiredPID("--pid")
             let windowId = try options.requiredWindowID("--window-id")
-            let captureMode = try options.optionalEnum("--mode", CaptureMode.self) ?? .som
+            let captureMode = try options.optionalEnum("--mode", CaptureMode.self) ?? .vision
             let maxImageDimension = try options.optionalInt("--max-image-dimension") ?? 0
             let screenshotOutput = try options.optionalString("--screenshot-output")
             try options.rejectUnused()
@@ -559,9 +559,9 @@ private struct AppStateOutput: Encodable, ReadableOutput {
     let maxImageDimension: Int
     let appName: String?
     let bundleId: String?
-    let stateId: String?
-    let treeMarkdown: String?
-    let elementCount: Int?
+    let stateId: String
+    let treeMarkdown: String
+    let elementCount: Int
     let screenshot: ScreenshotOutput?
 
     init(request: AppStateRequest, state: AppStateBundle) {
@@ -571,7 +571,7 @@ private struct AppStateOutput: Encodable, ReadableOutput {
         self.maxImageDimension = request.maxImageDimension
         self.appName = state.appName
         self.bundleId = state.bundleId
-        self.stateId = state.stateId?.raw
+        self.stateId = state.stateId.raw
         self.treeMarkdown = state.treeMarkdown
         self.elementCount = state.elementCount
         self.screenshot = state.screenshot.map {
@@ -583,14 +583,8 @@ private struct AppStateOutput: Encodable, ReadableOutput {
         var lines = ["App State"]
         let app = appName ?? bundleId ?? "pid \(pid)"
         lines.append("Target: \(app) pid \(pid), window \(windowId), mode \(mode)")
-        if let stateId {
-            lines.append("State ID: \(stateId)")
-        }
-        if let elementCount {
-            lines.append("AX elements: \(elementCount)")
-        } else {
-            lines.append("AX elements: not captured")
-        }
+        lines.append("State ID: \(stateId)")
+        lines.append("AX elements: \(elementCount)")
         if let screenshot {
             var shot = "Screenshot: \(screenshot.format) \(screenshot.width)x\(screenshot.height), \(screenshot.byteCount) bytes"
             if let outputPath = screenshot.outputPath {
@@ -600,7 +594,7 @@ private struct AppStateOutput: Encodable, ReadableOutput {
         } else {
             lines.append("Screenshot: not captured")
         }
-        if let treeMarkdown, !treeMarkdown.isEmpty {
+        if !treeMarkdown.isEmpty {
             lines.append("")
             lines.append("AX Tree:")
             lines.append(treeMarkdown)

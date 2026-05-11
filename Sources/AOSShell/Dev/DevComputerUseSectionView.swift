@@ -16,7 +16,7 @@ struct DevComputerUseSectionView: View {
     @State private var windows: [WindowInfo] = []
     @State private var selectedAppIdentity: String?
     @State private var selectedWindowId: CGWindowID?
-    @State private var captureMode: CaptureMode = .som
+    @State private var captureMode: CaptureMode = .vision
     @State private var maxImageDimension: Int = 1024
     @State private var stateSnapshot: DevComputerUseStateSnapshot?
     @State private var screenshotImage: NSImage?
@@ -204,11 +204,7 @@ struct DevComputerUseSectionView: View {
                                 .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
                         )
                 }
-                if let tree = state.treeMarkdown {
-                    codeBlock(tree, maxHeight: 360)
-                } else {
-                    emptyLine("No AX tree")
-                }
+                codeBlock(state.treeMarkdown, maxHeight: 360)
             }
         }
     }
@@ -346,5 +342,5 @@ struct DevComputerUseSectionView: View {
 }
 
 private extension CaptureMode {
-    static let devCases: [CaptureMode] = [.som, .vision, .ax]
+    static let devCases: [CaptureMode] = [.vision, .ax]
 }

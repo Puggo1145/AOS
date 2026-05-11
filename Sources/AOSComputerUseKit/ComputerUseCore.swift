@@ -11,17 +11,17 @@ import Foundation
 // ability to click, type, drag, or scroll.
 
 public struct AppStateBundle: Sendable {
-    public let stateId: StateID?
-    public let treeMarkdown: String?
-    public let elementCount: Int?
+    public let stateId: StateID
+    public let treeMarkdown: String
+    public let elementCount: Int
     public let screenshot: Screenshot?
     public let bundleId: String?
     public let appName: String?
 
     public init(
-        stateId: StateID?,
-        treeMarkdown: String?,
-        elementCount: Int?,
+        stateId: StateID,
+        treeMarkdown: String,
+        elementCount: Int,
         screenshot: Screenshot?,
         bundleId: String?,
         appName: String?
@@ -47,7 +47,6 @@ public struct WindowFocusResult: Sendable, Equatable {
 }
 
 public enum CaptureMode: String, Sendable, Equatable {
-    case som
     case vision
     case ax
 }
@@ -132,7 +131,7 @@ public actor ComputerUseCore {
     public func getAppState(
         pid: pid_t,
         windowId: CGWindowID,
-        captureMode: CaptureMode = .som,
+        captureMode: CaptureMode = .vision,
         maxImageDimension: Int = 0
     ) async throws -> AppStateBundle {
         try validateOwnership(pid: pid, windowId: windowId)
@@ -141,19 +140,11 @@ public actor ComputerUseCore {
         let bundleId = app?.bundleIdentifier
         let appName = app?.localizedName
 
-        var stateId: StateID?
-        var markdown: String?
-        var elementCount: Int?
-        if captureMode != .vision {
-            let result = try await snapshot.walk(pid: pid, windowId: windowId)
-            let id = await cache.store(pid: pid, windowId: windowId, elements: result.elements)
-            stateId = id
-            markdown = result.treeMarkdown
-            elementCount = result.elements.count
-        }
+        let result = try await snapshot.walk(pid: pid, windowId: windowId)
+        let stateId = await cache.store(pid: pid, windowId: windowId, elements: result.elements)
 
         var shot: Screenshot?
-        if captureMode != .ax {
+        if captureMode == .vision {
             shot = try await captureWithPayloadCap(
                 windowId: windowId,
                 initialMaxImageDimension: maxImageDimension
@@ -170,8 +161,8 @@ public actor ComputerUseCore {
 
         return AppStateBundle(
             stateId: stateId,
-            treeMarkdown: markdown,
-            elementCount: elementCount,
+            treeMarkdown: result.treeMarkdown,
+            elementCount: result.elements.count,
             screenshot: shot,
             bundleId: bundleId,
             appName: appName
