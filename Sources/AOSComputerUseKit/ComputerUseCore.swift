@@ -89,7 +89,7 @@ public actor ComputerUseCore {
 
     public init() {
         let webAccessibilityActivator = AXWebAccessibilityActivator()
-        let windowFocuser = SkyLightWindowFocuser()
+        let windowFocuser = SkyLightWindowFocuser.live()
         self.init(
             webAccessibilityActivator: webAccessibilityActivator,
             snapshot: AccessibilitySnapshot(webAccessibilityActivator: webAccessibilityActivator),
