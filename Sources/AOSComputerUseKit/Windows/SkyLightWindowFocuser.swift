@@ -31,6 +31,8 @@ import Darwin
 ///     against it. The previous window keeps its key/active state.
 ///   - Posts only the target-side `focus` event-record that the background
 ///     click path has proven sufficient for pid-routed mouse dispatch.
+///   - Uses an explicit target-side `defocus` event only when the click
+///     chain needs to deactivate the target window after dispatch has ended.
 ///   - Still deliberately omits `_SLPSSetFrontProcessWithOptions`,
 ///     `AXRaise`, and `SLSOrderWindow`.
 struct SkyLightWindowFocuser: Sendable {
@@ -68,9 +70,18 @@ struct SkyLightWindowFocuser: Sendable {
         try postEventRecord(targetPSN, Self.makeFocusEventBytes(windowId: windowId))
     }
 
+    func deactivateWindowWithoutRaising(pid: pid_t, windowId: CGWindowID) throws {
+        let targetPSN = try resolveProcessPSN(pid)
+        try postEventRecord(
+            targetPSN,
+            Self.makeFocusEventBytes(windowId: windowId, marker: .defocus)
+        )
+    }
+
     /// SLPS focus event-record. AOS only posts the target-side `.focus`
-    /// marker; posting `.defocus` to another PSN deactivates the user's
-    /// current window.
+    /// marker before input dispatch. `.defocus` is reserved for the target
+    /// window after background dispatch has completed; posting it to another
+    /// PSN deactivates the user's current window.
     static func makeFocusEventBytes(
         windowId: CGWindowID,
         marker: FocusEventMarker = .focus

@@ -59,97 +59,6 @@ public struct WindowClickResult: Sendable, Equatable {
     }
 }
 
-public enum WindowClickTraceStage: String, Sendable, Equatable {
-    case before
-    case afterFocus
-    case afterMouseMoved
-    case afterPrimerDown
-    case afterPrimerUp
-    case afterTargetDown
-    case afterTargetUp
-    case afterFocusRestore
-    case afterTargetUp250ms
-    case afterTargetUp1s
-    case afterTargetUp3s
-    case afterTargetUp10s
-}
-
-public struct WindowOrderEntry: Sendable, Equatable {
-    public let rank: Int
-    public let windowId: CGWindowID
-    public let pid: pid_t
-    public let owner: String
-    public let title: String
-    public let bounds: WindowBounds
-    public let zIndex: Int
-
-    public init(rank: Int, window: WindowInfo) {
-        self.rank = rank
-        self.windowId = window.id
-        self.pid = window.pid
-        self.owner = window.owner
-        self.title = window.title
-        self.bounds = window.bounds
-        self.zIndex = window.zIndex
-    }
-}
-
-public struct WindowOrderSnapshot: Sendable, Equatable {
-    public let stage: WindowClickTraceStage
-    public let frontmostPid: pid_t?
-    public let frontmostBundleId: String?
-    public let frontmostName: String?
-    public let targetRank: Int?
-    public let targetZIndex: Int?
-    public let windowsAboveTarget: Int?
-    public let overlappingWindowsAboveTarget: Int?
-    public let protectedOverlappingWindowsCoveredByTarget: Int?
-    public let topWindows: [WindowOrderEntry]
-
-    public init(
-        stage: WindowClickTraceStage,
-        frontmostPid: pid_t?,
-        frontmostBundleId: String?,
-        frontmostName: String?,
-        targetRank: Int?,
-        targetZIndex: Int?,
-        windowsAboveTarget: Int?,
-        overlappingWindowsAboveTarget: Int?,
-        protectedOverlappingWindowsCoveredByTarget: Int?,
-        topWindows: [WindowOrderEntry]
-    ) {
-        self.stage = stage
-        self.frontmostPid = frontmostPid
-        self.frontmostBundleId = frontmostBundleId
-        self.frontmostName = frontmostName
-        self.targetRank = targetRank
-        self.targetZIndex = targetZIndex
-        self.windowsAboveTarget = windowsAboveTarget
-        self.overlappingWindowsAboveTarget = overlappingWindowsAboveTarget
-        self.protectedOverlappingWindowsCoveredByTarget = protectedOverlappingWindowsCoveredByTarget
-        self.topWindows = topWindows
-    }
-}
-
-public struct WindowClickTraceResult: Sendable, Equatable {
-    public let pid: pid_t
-    public let windowId: CGWindowID
-    public let point: CGPoint
-    public let samples: [WindowOrderSnapshot]
-
-    public init(
-        pid: pid_t,
-        windowId: CGWindowID,
-        point: CGPoint,
-        samples: [WindowOrderSnapshot]
-    ) {
-        self.pid = pid
-        self.windowId = windowId
-        self.point = point
-        self.samples = samples
-    }
-}
-
 public enum CaptureMode: String, Sendable, Equatable {
     case vision
     case ax
@@ -194,6 +103,7 @@ public actor ComputerUseCore {
     private let visibleWindowsLookup: @Sendable () -> [WindowInfo]
     private let frontmostWindowLookup: @Sendable () -> WindowInfo?
     private let focusWindowWithoutRaising: @Sendable (pid_t, CGWindowID) async throws -> Void
+    private let deactivateWindowWithoutRaising: @Sendable (pid_t, CGWindowID) async throws -> Void
     private let raiseWindowWithoutActivating: @Sendable (WindowInfo) async throws -> Void
     private let orderRepairDelays: [UInt64]
     private let sleepForOrderRepair: @Sendable (UInt64) async throws -> Void
@@ -227,6 +137,9 @@ public actor ComputerUseCore {
             focusWindowWithoutRaising: { pid, windowId in
                 try windowFocuser.focusWindowWithoutRaising(pid: pid, windowId: windowId)
             },
+            deactivateWindowWithoutRaising: { pid, windowId in
+                try windowFocuser.deactivateWindowWithoutRaising(pid: pid, windowId: windowId)
+            },
             raiseWindowWithoutActivating: { window in
                 try windowRaiser.raise(window)
             },
@@ -255,6 +168,7 @@ public actor ComputerUseCore {
         visibleWindowsLookup: @escaping @Sendable () -> [WindowInfo] = { [] },
         frontmostWindowLookup: @escaping @Sendable () -> WindowInfo? = { nil },
         focusWindowWithoutRaising: @escaping @Sendable (pid_t, CGWindowID) async throws -> Void,
+        deactivateWindowWithoutRaising: @escaping @Sendable (pid_t, CGWindowID) async throws -> Void,
         raiseWindowWithoutActivating: @escaping @Sendable (WindowInfo) async throws -> Void = { _ in },
         orderRepairDelays: [UInt64] = [],
         sleepForOrderRepair: @escaping @Sendable (UInt64) async throws -> Void = { _ in },
@@ -277,6 +191,7 @@ public actor ComputerUseCore {
         self.visibleWindowsLookup = visibleWindowsLookup
         self.frontmostWindowLookup = frontmostWindowLookup
         self.focusWindowWithoutRaising = focusWindowWithoutRaising
+        self.deactivateWindowWithoutRaising = deactivateWindowWithoutRaising
         self.raiseWindowWithoutActivating = raiseWindowWithoutActivating
         self.orderRepairDelays = orderRepairDelays
         self.sleepForOrderRepair = sleepForOrderRepair
@@ -372,78 +287,12 @@ public actor ComputerUseCore {
             originalFrontWindow: originalFrontWindow,
             targetWindowId: windowId
         )
-        return WindowClickResult(pid: pid, windowId: windowId, point: point)
-    }
-
-    /// Runs the same click path as `postLeftClick`, recording WindowServer
-    /// front-to-back order after every dispatch phase. This is a diagnostic
-    /// hook for proving no-raise behavior against the live compositor.
-    public func tracePostLeftClick(
-        pid: pid_t,
-        windowId: CGWindowID,
-        skipFocus: Bool = false,
-        overridePoint: CGPoint? = nil
-    ) async throws -> WindowClickTraceResult {
-        let window = try validateOwnership(pid: pid, windowId: windowId)
-        let point = overridePoint ?? CGPoint(
-            x: window.bounds.x + window.bounds.width / 2,
-            y: window.bounds.y + window.bounds.height / 2
-        )
-        let recorder = WindowClickTraceRecorder(targetWindowId: windowId)
-        let originalFrontWindow = frontmostWindowLookup()
-        let orderGuardian = try makeWindowOrderGuardian(targetWindowId: windowId)
-
-        recorder.record(.before)
-        if !skipFocus {
-            try await focusWindowWithoutRaising(pid, windowId)
-        }
-        recorder.record(.afterFocus)
-        try await Task.sleep(nanoseconds: 5_000_000)
-        try await postLeftClickEvent(pid, windowId, point, window.bounds) { postStage in
-            recorder.record(WindowClickTraceStage(postStage))
-        }
-        try await restoreOriginalFrontWindow(originalFrontWindow, targetWindowId: windowId)
-        try await repairWindowOrderOnce(
-            orderGuardian,
-            originalFrontWindow: originalFrontWindow,
-            targetWindowId: windowId
-        )
-        recorder.record(.afterFocusRestore)
-        try await repairWindowOrderDuring(
-            250_000_000,
-            orderGuardian,
-            originalFrontWindow: originalFrontWindow,
-            targetWindowId: windowId
-        )
-        recorder.record(.afterTargetUp250ms)
-        try await repairWindowOrderDuring(
-            750_000_000,
-            orderGuardian,
-            originalFrontWindow: originalFrontWindow,
-            targetWindowId: windowId
-        )
-        recorder.record(.afterTargetUp1s)
-        try await repairWindowOrderDuring(
-            2_000_000_000,
-            orderGuardian,
-            originalFrontWindow: originalFrontWindow,
-            targetWindowId: windowId
-        )
-        recorder.record(.afterTargetUp3s)
-        try await Task.sleep(nanoseconds: 7_000_000_000)
-        try await repairWindowOrderOnce(
-            orderGuardian,
-            originalFrontWindow: originalFrontWindow,
-            targetWindowId: windowId
-        )
-        recorder.record(.afterTargetUp10s)
-
-        return WindowClickTraceResult(
+        try await deactivateTargetWindowIfNeeded(
             pid: pid,
             windowId: windowId,
-            point: point,
-            samples: recorder.snapshots
+            originalFrontWindow: originalFrontWindow
         )
+        return WindowClickResult(pid: pid, windowId: windowId, point: point)
     }
 
     @discardableResult
@@ -465,6 +314,17 @@ public actor ComputerUseCore {
             return
         }
         try await focusWindowWithoutRaising(originalFrontWindow.pid, originalFrontWindow.id)
+    }
+
+    private func deactivateTargetWindowIfNeeded(
+        pid: pid_t,
+        windowId: CGWindowID,
+        originalFrontWindow: WindowInfo?
+    ) async throws {
+        guard originalFrontWindow?.id != windowId else {
+            return
+        }
+        try await deactivateWindowWithoutRaising(pid, windowId)
     }
 
     private func makeWindowOrderGuardian(targetWindowId: CGWindowID) throws -> WindowOrderGuardian? {
@@ -596,131 +456,6 @@ private extension ComputerUseCore {
                 && window.layer == 0
                 && window.bounds.width >= 64
                 && window.bounds.height >= 64
-        }
-    }
-}
-
-private extension WindowClickTraceStage {
-    init(_ postStage: MouseClickPostStage) {
-        switch postStage {
-        case .afterMouseMoved:
-            self = .afterMouseMoved
-        case .afterTargetDown:
-            self = .afterTargetDown
-        case .afterTargetUp:
-            self = .afterTargetUp
-        }
-    }
-}
-
-private final class WindowClickTraceRecorder: @unchecked Sendable {
-    private let targetWindowId: CGWindowID
-    private let lock = NSLock()
-    private var recordedSnapshots: [WindowOrderSnapshot] = []
-    private var protectedOverlappingWindowIds: Set<CGWindowID>?
-
-    init(targetWindowId: CGWindowID) {
-        self.targetWindowId = targetWindowId
-    }
-
-    var snapshots: [WindowOrderSnapshot] {
-        lock.lock()
-        defer { lock.unlock() }
-        return recordedSnapshots
-    }
-
-    func record(_ stage: WindowClickTraceStage) {
-        let snapshot = capture(stage: stage)
-        lock.lock()
-        recordedSnapshots.append(snapshot)
-        lock.unlock()
-    }
-
-    private func capture(stage: WindowClickTraceStage) -> WindowOrderSnapshot {
-        let frontmost = NSWorkspace.shared.frontmostApplication
-        let orderedWindows = WindowEnumerator.visibleWindows()
-            .filter { window in
-                window.layer == 0
-                    && window.bounds.width >= 64
-                    && window.bounds.height >= 64
-            }
-        let targetIndex = orderedWindows.firstIndex(where: { $0.id == targetWindowId })
-        let targetWindow = targetIndex.map { orderedWindows[$0] }
-        let overlappingWindowIndexes = Self.overlappingWindowIndexes(
-            orderedWindows: orderedWindows,
-            targetIndex: targetIndex,
-            targetWindow: targetWindow
-        )
-        let overlappingWindowsAboveTarget = targetIndex.map { targetIndex in
-            overlappingWindowIndexes.filter { $0 < targetIndex }.count
-        }
-        let protectedCoveredCount = protectedCoveredOverlaps(
-            stage: stage,
-            orderedWindows: orderedWindows,
-            targetIndex: targetIndex,
-            overlappingWindowIndexes: overlappingWindowIndexes
-        )
-        let topWindows = orderedWindows.prefix(12).enumerated().map { index, window in
-            WindowOrderEntry(rank: index + 1, window: window)
-        }
-
-        return WindowOrderSnapshot(
-            stage: stage,
-            frontmostPid: frontmost.map(\.processIdentifier),
-            frontmostBundleId: frontmost?.bundleIdentifier,
-            frontmostName: frontmost?.localizedName,
-            targetRank: targetIndex.map { $0 + 1 },
-            targetZIndex: targetWindow?.zIndex,
-            windowsAboveTarget: targetIndex,
-            overlappingWindowsAboveTarget: overlappingWindowsAboveTarget,
-            protectedOverlappingWindowsCoveredByTarget: protectedCoveredCount,
-            topWindows: topWindows
-        )
-    }
-
-    private func protectedCoveredOverlaps(
-        stage: WindowClickTraceStage,
-        orderedWindows: [WindowInfo],
-        targetIndex: Int?,
-        overlappingWindowIndexes: [Int]
-    ) -> Int? {
-        guard let targetIndex else {
-            return nil
-        }
-
-        lock.lock()
-        if protectedOverlappingWindowIds == nil, stage == .before {
-            protectedOverlappingWindowIds = Set(
-                overlappingWindowIndexes
-                    .filter { $0 < targetIndex }
-                    .map { orderedWindows[$0].id }
-            )
-        }
-        let protectedIds = protectedOverlappingWindowIds
-        lock.unlock()
-
-        guard let protectedIds else {
-            return nil
-        }
-        return orderedWindows.enumerated().filter { index, window in
-            protectedIds.contains(window.id) && index > targetIndex
-        }.count
-    }
-
-    private static func overlappingWindowIndexes(
-        orderedWindows: [WindowInfo],
-        targetIndex: Int?,
-        targetWindow: WindowInfo?
-    ) -> [Int] {
-        guard let targetIndex, let targetWindow else {
-            return []
-        }
-        return orderedWindows.enumerated().compactMap { index, window in
-            guard index != targetIndex,
-                  WindowOrderGuardian.visuallyCompetes(window, with: targetWindow) else {
-                return nil
-            }
-            return index
         }
     }
 }

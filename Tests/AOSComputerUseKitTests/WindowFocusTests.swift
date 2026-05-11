@@ -25,6 +25,8 @@ struct WindowFocusTests {
             },
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.record(pid: pid, windowId: windowId)
+            },
+            deactivateWindowWithoutRaising: { _, _ in
             }
         )
 
@@ -53,6 +55,8 @@ struct WindowFocusTests {
             },
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.record(pid: pid, windowId: windowId)
+            },
+            deactivateWindowWithoutRaising: { _, _ in
             }
         )
 
@@ -73,11 +77,41 @@ struct WindowFocusTests {
         #expect(bytes[0x3d] == 0x03)
         #expect(bytes[0x3e] == 0x02)
         #expect(bytes[0x3f] == 0x01)
-        // Always the "focus" marker (0x01); we never build the "defocus" (0x02)
-        // variant since AOS no longer touches the previous front PSN.
+        // The default record is the "focus" marker (0x01). Target defocus is
+        // an explicit cleanup call, not the standard focus path.
         #expect(bytes[0x8a] == 0x01)
         #expect(bytes[0x3a] == 0x00)
         #expect(bytes[0x20] == 0x00)
+    }
+
+    @Test("deactivates only the target PSN with one target-side defocus event")
+    func deactivatesOnlyTargetPSNWithOneTargetSideDefocusEvent() throws {
+        let targetPid: pid_t = pid_t.random(in: 1_000..<50_000)
+        let targetWindowId = CGWindowID.random(in: 1..<UInt32.max)
+        let targetPSN: SkyLightWindowFocuser.ProcessSerialNumber = [
+            UInt32.random(in: 1..<UInt32.max),
+            UInt32.random(in: 1..<UInt32.max),
+        ]
+        let recorder = PostedEventRecorder()
+
+        let focuser = SkyLightWindowFocuser(
+            resolveProcessPSN: { pid in
+                #expect(pid == targetPid)
+                return targetPSN
+            },
+            postEventRecord: { psn, bytes in
+                recorder.record(psn: psn, bytes: bytes)
+            }
+        )
+
+        try focuser.deactivateWindowWithoutRaising(pid: targetPid, windowId: targetWindowId)
+
+        let posts = recorder.posts
+        #expect(posts.count == 1)
+        #expect(posts[0].psn == targetPSN)
+        #expect(posts[0].bytes[0x08] == 0x0d)
+        #expect(posts[0].bytes[0x8a] == 0x02)
+        #expect(posts[0].bytes[0x3c] == UInt8(UInt32(targetWindowId) & 0xff))
     }
 
     /// Regression: the focuser must never touch the previously-focused

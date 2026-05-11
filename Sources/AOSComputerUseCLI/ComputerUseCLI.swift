@@ -114,13 +114,6 @@ public protocol ComputerUseCoreClient: Sendable {
     func focusWindowWithoutRaise(pid: pid_t, windowId: CGWindowID) async throws -> WindowFocusResult
     /// Posts a left click to an explicit screen-space point in the pid/window pair.
     func postLeftClick(pid: pid_t, windowId: CGWindowID, point: CGPoint) async throws -> WindowClickResult
-    /// Posts a left click and traces live WindowServer order after each phase.
-    func tracePostLeftClick(
-        pid: pid_t,
-        windowId: CGWindowID,
-        skipFocus: Bool,
-        overridePoint: CGPoint?
-    ) async throws -> WindowClickTraceResult
 }
 
 public struct ComputerUseCoreAdapter: ComputerUseCoreClient {
@@ -160,19 +153,6 @@ public struct ComputerUseCoreAdapter: ComputerUseCoreClient {
         try await core.postLeftClick(pid: pid, windowId: windowId, point: point)
     }
 
-    public func tracePostLeftClick(
-        pid: pid_t,
-        windowId: CGWindowID,
-        skipFocus: Bool,
-        overridePoint: CGPoint?
-    ) async throws -> WindowClickTraceResult {
-        try await core.tracePostLeftClick(
-            pid: pid,
-            windowId: windowId,
-            skipFocus: skipFocus,
-            overridePoint: overridePoint
-        )
-    }
 }
 
 public struct ComputerUseCLIResult: Sendable, Equatable {
@@ -294,7 +274,6 @@ public enum ComputerUseCLI {
           AOSComputerUseCLI get-app-state --pid <pid> --window-id <id> [--mode vision|ax] [--max-image-dimension <pixels>] [--screenshot-output <path>]
           AOSComputerUseCLI focus-window --pid <pid> --window-id <id>
           AOSComputerUseCLI post-left-click --pid <pid> --window-id <id> --coor <x,y>
-          AOSComputerUseCLI trace-postLeftClick --pid <pid> --window-id <id> [--skip-focus] [--screen-x <x> --screen-y <y>]
 
         Options:
           --json          Emit machine-readable JSON instead of the default readable text.
@@ -308,8 +287,6 @@ public enum ComputerUseCLI {
           focus-window    Focus a specific app window without raising it.
           post-left-click
                           Post a background left click to a local --coor point of a specific app window.
-          trace-postLeftClick
-                          Post a background left click and print z-order after each phase.
 
         Output:
           Successful commands write readable text to stdout by default.
@@ -361,14 +338,6 @@ public enum ComputerUseCLI {
             case .postLeftClick(let request):
                 let result = try await postLeftClick(request: request, core: core)
                 return try success(LeftClickOutput(request: request, result: result), format: parsed.outputFormat)
-            case .tracePostLeftClick(let request):
-                let result = try await core.tracePostLeftClick(
-                    pid: request.pid,
-                    windowId: request.windowId,
-                    skipFocus: request.skipFocus,
-                    overridePoint: request.overridePoint
-                )
-                return try success(LeftClickTraceOutput(request: request, result: result), format: parsed.outputFormat)
             }
         } catch let error as UsageError {
             return ComputerUseCLIResult(stdout: "", stderr: error.message + "\n", exitCode: 64)
@@ -433,7 +402,6 @@ private struct ParsedCommand {
         case getAppState(AppStateRequest)
         case focusWindow(FocusWindowRequest)
         case postLeftClick(LeftClickRequest)
-        case tracePostLeftClick(TraceLeftClickRequest)
     }
 
     init(arguments: [String]) throws {
@@ -491,28 +459,6 @@ private struct ParsedCommand {
             let coordinate = try options.requiredPoint("--coor")
             try options.rejectUnused()
             command = .postLeftClick(LeftClickRequest(pid: pid, windowId: windowId, coordinate: coordinate))
-        case "trace-postLeftClick":
-            let pid = try options.requiredPID("--pid")
-            let windowId = try options.requiredWindowID("--window-id")
-            let skipFocus = try options.takeFlag("--skip-focus")
-            let screenX = try options.optionalDouble("--screen-x")
-            let screenY = try options.optionalDouble("--screen-y")
-            let overridePoint: CGPoint?
-            switch (screenX, screenY) {
-            case (.some(let x), .some(let y)):
-                overridePoint = CGPoint(x: x, y: y)
-            case (.none, .none):
-                overridePoint = nil
-            default:
-                throw UsageError("--screen-x and --screen-y must be provided together")
-            }
-            try options.rejectUnused()
-            command = .tracePostLeftClick(TraceLeftClickRequest(
-                pid: pid,
-                windowId: windowId,
-                skipFocus: skipFocus,
-                overridePoint: overridePoint
-            ))
         default:
             throw UsageError("unknown command \(first). Run AOSComputerUseCLI --help")
         }
@@ -667,13 +613,6 @@ private struct LeftClickRequest: Sendable {
     let pid: pid_t
     let windowId: CGWindowID
     let coordinate: CGPoint
-}
-
-private struct TraceLeftClickRequest: Sendable {
-    let pid: pid_t
-    let windowId: CGWindowID
-    let skipFocus: Bool
-    let overridePoint: CGPoint?
 }
 
 private struct GrantPermissionsOutput: Encodable, ReadableOutput {
@@ -901,99 +840,6 @@ private struct LeftClickOutput: Encodable, ReadableOutput {
 
     var readableText: String {
         "Posted left click to window \(windowId) at \(Int(point.x)),\(Int(point.y)) (pid \(pid))."
-    }
-}
-
-private struct LeftClickTraceOutput: Encodable, ReadableOutput {
-    let command = "trace-postLeftClick"
-    let pid: pid_t
-    let windowId: CGWindowID
-    let skipFocus: Bool
-    let overridePoint: PointOutput?
-    let point: PointOutput
-    let samples: [WindowOrderSnapshotOutput]
-
-    init(request: TraceLeftClickRequest, result: WindowClickTraceResult) {
-        self.pid = result.pid
-        self.windowId = result.windowId
-        self.skipFocus = request.skipFocus
-        self.overridePoint = request.overridePoint.map(PointOutput.init)
-        self.point = PointOutput(result.point)
-        self.samples = result.samples.map(WindowOrderSnapshotOutput.init)
-    }
-
-    var readableText: String {
-        var lines = [
-            "Left Click Trace",
-            "Target: pid \(pid), window \(windowId), point \(Int(point.x)),\(Int(point.y))",
-            "Focus: \(skipFocus ? "skipped" : "prepared")",
-        ]
-        if let overridePoint {
-            lines.append("Override point: \(Int(overridePoint.x)),\(Int(overridePoint.y))")
-        }
-        for sample in samples {
-            let frontmost = sample.frontmostName ?? sample.frontmostBundleId ?? sample.frontmostPid.map { "pid \($0)" } ?? "unknown"
-            let target = sample.targetRank.map { "target rank \($0)" } ?? "target not visible"
-            let above = sample.windowsAboveTarget.map { ", above \($0)" } ?? ""
-            let overlapAbove = sample.overlappingWindowsAboveTarget.map { ", overlap-above \($0)" } ?? ""
-            let protectedCovered = sample.protectedOverlappingWindowsCoveredByTarget.map {
-                ", protected-covered \($0)"
-            } ?? ""
-            lines.append("- \(sample.stage): frontmost \(frontmost), \(target)\(above)\(overlapAbove)\(protectedCovered)")
-            if !sample.topWindows.isEmpty {
-                let compact = sample.topWindows.map { window in
-                    "#\(window.rank) \(window.owner)(pid \(window.pid), wid \(window.windowId))"
-                }.joined(separator: " | ")
-                lines.append("  top: \(compact)")
-            }
-        }
-        return lines.joined(separator: "\n")
-    }
-}
-
-private struct WindowOrderSnapshotOutput: Encodable {
-    let stage: String
-    let frontmostPid: pid_t?
-    let frontmostBundleId: String?
-    let frontmostName: String?
-    let targetRank: Int?
-    let targetZIndex: Int?
-    let windowsAboveTarget: Int?
-    let overlappingWindowsAboveTarget: Int?
-    let protectedOverlappingWindowsCoveredByTarget: Int?
-    let topWindows: [WindowOrderEntryOutput]
-
-    init(_ snapshot: WindowOrderSnapshot) {
-        self.stage = snapshot.stage.rawValue
-        self.frontmostPid = snapshot.frontmostPid
-        self.frontmostBundleId = snapshot.frontmostBundleId
-        self.frontmostName = snapshot.frontmostName
-        self.targetRank = snapshot.targetRank
-        self.targetZIndex = snapshot.targetZIndex
-        self.windowsAboveTarget = snapshot.windowsAboveTarget
-        self.overlappingWindowsAboveTarget = snapshot.overlappingWindowsAboveTarget
-        self.protectedOverlappingWindowsCoveredByTarget = snapshot.protectedOverlappingWindowsCoveredByTarget
-        self.topWindows = snapshot.topWindows.map(WindowOrderEntryOutput.init)
-    }
-}
-
-private struct WindowOrderEntryOutput: Encodable {
-    let rank: Int
-    let windowId: CGWindowID
-    let pid: pid_t
-    let owner: String
-    let title: String
-    let bounds: BoundsOutput
-    let zIndex: Int
-
-    init(_ entry: WindowOrderEntry) {
-        self.rank = entry.rank
-        self.windowId = entry.windowId
-        self.pid = entry.pid
-        self.owner = entry.owner
-        self.title = entry.title
-        self.bounds = BoundsOutput(entry.bounds)
-        self.zIndex = entry.zIndex
     }
 }
 

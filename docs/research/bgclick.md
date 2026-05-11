@@ -44,8 +44,8 @@ SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: focus))
 - 不再向用户当前 front process 发送 defocus event。早期 CUA/yabai 风格
   `front defocus + target focus` 能帮助某些 mouse dispatch，但会让用户当前窗口
   出现 deactive / refocus 闪动。
-- 当前 click 链路不再有单独的 `SkyLightMouseClickFocuser`。`post-left-click` 和
-  `trace-postLeftClick` 都先走这条标准 focus-without-raise 路径。
+- 当前 click 链路不再有单独的 `SkyLightMouseClickFocuser`。`post-left-click`
+  先走这条标准 focus-without-raise 路径。
 - 当前 standard target-side focus 已在多个 App 上验证：目标能进入输入路由状态，
   同时用户 frontmost app 保持不变。
 
@@ -151,20 +151,46 @@ window:   300ms
 Codex 是常驻进程，能在观察到 order change 后开始 5ms retry。AOS CLI 是短命命令，
 只能从点击前/点击后开始轮询，所以 guard window 放宽到 300ms。
 
+### 5. Target Deactivate After Dispatch
+
+文件：
+
+- `Sources/AOSComputerUseKit/Windows/SkyLightWindowFocuser.swift`
+- `Sources/AOSComputerUseKit/ComputerUseCore.swift`
+
+pid-scoped mouse event 投放后，目标窗口可能停留在“后台 active/key”的状态。这个状态
+不会改变 `NSWorkspace.frontmostApplication`，但如果下一次继续对这个 active target 投放
+鼠标事件，WindowServer / AppKit 可能瞬间把它补偿 raise 到前台，造成闪动。
+
+因此 `postLeftClick` 在完整投放链路收口时执行 target-side deactive：
+
+```text
+SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: defocus))
+```
+
+关键点：
+
+- 只对目标 pid/window 发 `.defocus`，不对用户原前台窗口发 defocus。
+- 先恢复原 front window focus，并完成 order repair guard，再 deactive target。
+- 如果目标窗口本来就是点击前的前台 active 窗口，则跳过 deactive；正常前台点击不应被降为 inactive。
+- deactive 不负责 z-order repair，只撤掉目标窗口残留的 active/key 状态，避免下一次后台投放触发 raise 闪动。
+
 ## Why This Works
 
-这条链路把三个问题拆开处理：
+这条链路把四个问题拆开处理：
 
 1. **Input routing**：standard target-side `SLPSPostEventRecordTo` focus/key-window records
    让目标 AppKit 窗口相信自己可接收输入。
 2. **Event delivery**：pid-scoped `CGEvent.postToPid` 把鼠标事件送进目标进程，不碰全局 HID cursor。
 3. **Visual order preservation**：`WindowOrderGuardian + AXRaise` 把点击造成的 delayed raise 副作用压回去。
+4. **Active-state cleanup**：target-side defocus 撤掉后台目标残留的 active/key 状态，避免下一次投放被系统补偿 raise。
 
 因此用户看到的效果是：
 
 - 当前使用的窗口始终 frontmost。
 - 目标后台窗口可以响应鼠标点击。
 - 目标窗口不会停留在被 raise 到前面的状态。
+- 目标后台窗口不会在点击链路结束后继续保持 active/key 状态。
 - 在已验证的 AppKit apps 上没有可见 flicker。
 
 ## CLI Surface
@@ -207,6 +233,7 @@ background click core path。
 
 - `SkyLightWindowFocuser`
   - standard target-side focus/key-window records for mouse routing and explicit focus.
+  - target-side defocus record for post-dispatch background active cleanup.
 
 - `MouseEventPoster`
   - create/stamp/post pid-scoped move/down/up events.
@@ -220,7 +247,7 @@ background click core path。
   - perform `AXRaise` on protected windows.
 
 - `ComputerUseCore.postLeftClick`
-  - orchestrates focus, event post, immediate repair, delayed guard.
+  - orchestrates focus, event post, immediate repair, delayed guard, target deactive cleanup.
 
 - `AOSComputerUseCLI`
   - exposes `post-left-click` and `open-coor-test`.

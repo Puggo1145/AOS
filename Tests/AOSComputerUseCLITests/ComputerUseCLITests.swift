@@ -17,7 +17,7 @@ struct ComputerUseCLITests {
         #expect(output.contains("open-coor-test"))
         #expect(!output.contains("open-button"))
         #expect(output.contains("post-left-click"))
-        #expect(output.contains("trace-postLeftClick"))
+        #expect(!output.contains("trace-postLeftClick"))
         #expect(output.contains("grant-permissions"))
         #expect(output.contains("--help"))
     }
@@ -271,8 +271,8 @@ struct ComputerUseCLITests {
         #expect(result.exitCode == 0)
     }
 
-    @Test("trace-postLeftClick requires pid and window id")
-    func tracePostLeftClickRequiresPidAndWindowID() async throws {
+    @Test("trace-postLeftClick command is not accepted")
+    func tracePostLeftClickCommandIsNotAccepted() async throws {
         let fake = FakeComputerUseCore()
 
         let result = try await ComputerUseCLI.run(
@@ -281,14 +281,10 @@ struct ComputerUseCLITests {
             permissions: FakePermissionClient()
         )
 
-        #expect(await fake.requestedTraceLeftClickPID == 123)
-        #expect(await fake.requestedTraceLeftClickWindowID == 456)
-        #expect(await fake.requestedTraceLeftClickSkipFocus == true)
-        #expect(result.stdout.contains("Left Click Trace"))
-        #expect(result.stdout.contains("Focus: skipped"))
-        #expect(result.stdout.contains("afterTargetUp"))
-        #expect(result.stderr.isEmpty)
-        #expect(result.exitCode == 0)
+        #expect(await fake.requestedLeftClickPID == nil)
+        #expect(result.stdout.isEmpty)
+        #expect(result.stderr.contains("unknown command trace-postLeftClick"))
+        #expect(result.exitCode == 64)
     }
 
     @Test("json flag keeps machine-readable output")
@@ -379,10 +375,6 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
     private(set) var requestedLeftClickPID: pid_t?
     private(set) var requestedLeftClickWindowID: CGWindowID?
     private(set) var requestedLeftClickPoint: CGPoint?
-    private(set) var requestedTraceLeftClickPID: pid_t?
-    private(set) var requestedTraceLeftClickWindowID: CGWindowID?
-    private(set) var requestedTraceLeftClickSkipFocus: Bool?
-    private(set) var requestedTraceLeftClickOverridePoint: CGPoint?
 
     func setApps(_ apps: [AppInfo]) {
         self.apps = apps
@@ -432,46 +424,4 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
         return WindowClickResult(pid: pid, windowId: windowId, point: point)
     }
 
-    func tracePostLeftClick(
-        pid: pid_t,
-        windowId: CGWindowID,
-        skipFocus: Bool,
-        overridePoint: CGPoint?
-    ) async throws -> WindowClickTraceResult {
-        requestedTraceLeftClickPID = pid
-        requestedTraceLeftClickWindowID = windowId
-        requestedTraceLeftClickSkipFocus = skipFocus
-        requestedTraceLeftClickOverridePoint = overridePoint
-        return WindowClickTraceResult(
-            pid: pid,
-            windowId: windowId,
-            point: CGPoint(x: 10, y: 20),
-            samples: [
-                WindowOrderSnapshot(
-                    stage: .before,
-                    frontmostPid: 999,
-                    frontmostBundleId: "com.example.Front",
-                    frontmostName: "Front",
-                    targetRank: 3,
-                    targetZIndex: 7,
-                    windowsAboveTarget: 2,
-                    overlappingWindowsAboveTarget: 1,
-                    protectedOverlappingWindowsCoveredByTarget: 0,
-                    topWindows: []
-                ),
-                WindowOrderSnapshot(
-                    stage: .afterTargetUp,
-                    frontmostPid: 999,
-                    frontmostBundleId: "com.example.Front",
-                    frontmostName: "Front",
-                    targetRank: 3,
-                    targetZIndex: 7,
-                    windowsAboveTarget: 2,
-                    overlappingWindowsAboveTarget: 1,
-                    protectedOverlappingWindowsCoveredByTarget: 0,
-                    topWindows: []
-                ),
-            ]
-        )
-    }
 }

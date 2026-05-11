@@ -26,6 +26,8 @@ struct WindowClickTests {
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.recordFocus(pid: pid, windowId: windowId)
             },
+            deactivateWindowWithoutRaising: { _, _ in
+            },
             postLeftClick: { pid, windowId, point, windowBounds, _ in
                 await recorder.recordClick(
                     pid: pid,
@@ -71,6 +73,8 @@ struct WindowClickTests {
             },
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.recordFocus(pid: pid, windowId: windowId)
+            },
+            deactivateWindowWithoutRaising: { _, _ in
             },
             postLeftClick: { pid, windowId, point, windowBounds, _ in
                 await recorder.recordClick(
@@ -118,6 +122,8 @@ struct WindowClickTests {
             },
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.recordFocus(pid: pid, windowId: windowId)
+            },
+            deactivateWindowWithoutRaising: { _, _ in
             },
             postLeftClick: { pid, windowId, point, windowBounds, _ in
                 await recorder.recordClick(
@@ -186,6 +192,8 @@ struct WindowClickTests {
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.recordFocus(pid: pid, windowId: windowId)
             },
+            deactivateWindowWithoutRaising: { _, _ in
+            },
             postLeftClick: { pid, windowId, point, windowBounds, _ in
                 await recorder.recordClick(
                     pid: pid,
@@ -207,6 +215,89 @@ struct WindowClickTests {
                 windowBounds: WindowBounds(x: 10, y: 20, width: 300, height: 100)
             ),
             .focus(pid: 777, windowId: 789),
+        ])
+    }
+
+    @Test("deactivates the target window after completing the background click chain")
+    func deactivatesTargetWindowAfterCompletingBackgroundClickChain() async throws {
+        let recorder = ClickChainRecorder()
+        let target = Self.window(id: 456, pid: 123, owner: "Calculator", zIndex: 2)
+        let front = Self.window(id: 789, pid: 777, owner: "Ghostty", zIndex: 3)
+        let core = ComputerUseCore(
+            windowLookup: { windowId in
+                [target, front].first { $0.id == windowId }
+            },
+            frontmostWindowLookup: {
+                front
+            },
+            focusWindowWithoutRaising: { pid, windowId in
+                await recorder.recordFocus(pid: pid, windowId: windowId)
+            },
+            deactivateWindowWithoutRaising: { pid, windowId in
+                await recorder.recordDeactivate(pid: pid, windowId: windowId)
+            },
+            postLeftClick: { pid, windowId, point, windowBounds, _ in
+                await recorder.recordClick(
+                    pid: pid,
+                    windowId: windowId,
+                    point: point,
+                    windowBounds: windowBounds
+                )
+            }
+        )
+
+        _ = try await core.postLeftClick(pid: 123, windowId: 456, point: CGPoint(x: 150, y: 50))
+
+        #expect(await recorder.events == [
+            .focus(pid: 123, windowId: 456),
+            .click(
+                pid: 123,
+                windowId: 456,
+                point: CGPoint(x: 150, y: 50),
+                windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
+            ),
+            .focus(pid: 777, windowId: 789),
+            .deactivate(pid: 123, windowId: 456),
+        ])
+    }
+
+    @Test("does not deactivate the target window when it was already the original front window")
+    func doesNotDeactivateOriginalFrontTargetWindow() async throws {
+        let recorder = ClickChainRecorder()
+        let target = Self.window(id: 456, pid: 123, owner: "Calculator", zIndex: 3)
+        let core = ComputerUseCore(
+            windowLookup: { windowId in
+                windowId == target.id ? target : nil
+            },
+            frontmostWindowLookup: {
+                target
+            },
+            focusWindowWithoutRaising: { pid, windowId in
+                await recorder.recordFocus(pid: pid, windowId: windowId)
+            },
+            deactivateWindowWithoutRaising: { pid, windowId in
+                await recorder.recordDeactivate(pid: pid, windowId: windowId)
+            },
+            postLeftClick: { pid, windowId, point, windowBounds, _ in
+                await recorder.recordClick(
+                    pid: pid,
+                    windowId: windowId,
+                    point: point,
+                    windowBounds: windowBounds
+                )
+            }
+        )
+
+        _ = try await core.postLeftClick(pid: 123, windowId: 456, point: CGPoint(x: 150, y: 50))
+
+        #expect(await recorder.events == [
+            .focus(pid: 123, windowId: 456),
+            .click(
+                pid: 123,
+                windowId: 456,
+                point: CGPoint(x: 150, y: 50),
+                windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
+            ),
         ])
     }
 
@@ -236,6 +327,8 @@ struct WindowClickTests {
             },
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.recordFocus(pid: pid, windowId: windowId)
+            },
+            deactivateWindowWithoutRaising: { _, _ in
             },
             raiseWindowWithoutActivating: { window in
                 await recorder.recordRaise(pid: window.pid, windowId: window.id)
@@ -291,6 +384,8 @@ struct WindowClickTests {
             },
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.recordFocus(pid: pid, windowId: windowId)
+            },
+            deactivateWindowWithoutRaising: { _, _ in
             },
             raiseWindowWithoutActivating: { window in
                 await recorder.recordRaise(pid: window.pid, windowId: window.id)
@@ -349,6 +444,8 @@ struct WindowClickTests {
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.recordFocus(pid: pid, windowId: windowId)
             },
+            deactivateWindowWithoutRaising: { _, _ in
+            },
             raiseWindowWithoutActivating: { window in
                 await recorder.recordRaise(pid: window.pid, windowId: window.id)
             },
@@ -404,6 +501,8 @@ struct WindowClickTests {
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.recordFocus(pid: pid, windowId: windowId)
             },
+            deactivateWindowWithoutRaising: { _, _ in
+            },
             raiseWindowWithoutActivating: { window in
                 await recorder.recordRaise(pid: window.pid, windowId: window.id)
             },
@@ -454,6 +553,8 @@ struct WindowClickTests {
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.recordFocus(pid: pid, windowId: windowId)
             },
+            deactivateWindowWithoutRaising: { _, _ in
+            },
             raiseWindowWithoutActivating: { window in
                 await recorder.recordRaise(pid: window.pid, windowId: window.id)
             },
@@ -500,6 +601,8 @@ struct WindowClickTests {
             },
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.recordFocus(pid: pid, windowId: windowId)
+            },
+            deactivateWindowWithoutRaising: { _, _ in
             },
             postLeftClick: { pid, windowId, point, windowBounds, _ in
                 await recorder.recordClick(
@@ -640,11 +743,16 @@ private actor ClickChainRecorder {
     func recordRaise(pid: pid_t, windowId: CGWindowID) {
         recordedEvents.append(.raise(pid: pid, windowId: windowId))
     }
+
+    func recordDeactivate(pid: pid_t, windowId: CGWindowID) {
+        recordedEvents.append(.deactivate(pid: pid, windowId: windowId))
+    }
 }
 
 private enum ClickChainEvent: Equatable {
     case focus(pid: pid_t, windowId: CGWindowID)
     case raise(pid: pid_t, windowId: CGWindowID)
+    case deactivate(pid: pid_t, windowId: CGWindowID)
     case click(pid: pid_t, windowId: CGWindowID, point: CGPoint, windowBounds: WindowBounds)
 }
 
