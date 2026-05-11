@@ -80,42 +80,11 @@ struct WindowFocusTests {
         #expect(bytes[0x20] == 0x00)
     }
 
-    @Test("builds the SLPS key-window event record layout")
-    func buildsSLPSKeyWindowEventRecordLayout() {
-        let beginBytes = SkyLightWindowFocuser.makeKeyWindowEventBytes(
-            windowId: 0x0102_0304,
-            phase: .begin
-        )
-        let endBytes = SkyLightWindowFocuser.makeKeyWindowEventBytes(
-            windowId: 0x0102_0304,
-            phase: .end
-        )
-
-        #expect(beginBytes.count == 0xf8)
-        #expect(beginBytes[0x04] == 0xf8)
-        #expect(beginBytes[0x08] == 0x01)
-        #expect(beginBytes[0x3a] == 0x10)
-        #expect(beginBytes[0x3c] == 0x04)
-        #expect(beginBytes[0x3d] == 0x03)
-        #expect(beginBytes[0x3e] == 0x02)
-        #expect(beginBytes[0x3f] == 0x01)
-        for offset in 0x20..<0x30 {
-            #expect(beginBytes[offset] == 0xff)
-        }
-
-        #expect(endBytes[0x08] == 0x02)
-        #expect(endBytes[0x3a] == 0x10)
-        #expect(endBytes[0x3c] == 0x04)
-        #expect(endBytes[0x3d] == 0x03)
-        #expect(endBytes[0x3e] == 0x02)
-        #expect(endBytes[0x3f] == 0x01)
-    }
-
     /// Regression: the focuser must never touch the previously-focused
     /// process. Posting a defocus event (or any event) to a non-target PSN
     /// is what used to flip the user's prior window into a deactive state.
-    @Test("focuses only the target PSN and never posts a defocus event")
-    func focusesOnlyTargetPSNAndPostsNoDefocusEvent() throws {
+    @Test("focuses only the target PSN with one target-side focus event")
+    func focusesOnlyTargetPSNWithOneTargetSideFocusEvent() throws {
         let targetPid: pid_t = pid_t.random(in: 1_000..<50_000)
         let targetWindowId = CGWindowID.random(in: 1..<UInt32.max)
         let targetPSN: SkyLightWindowFocuser.ProcessSerialNumber = [
@@ -138,10 +107,9 @@ struct WindowFocusTests {
 
         let posts = recorder.posts
 
-        // Exactly three events: focus, key-window begin, key-window end —
-        // and every single one of them must target the target PSN. No
+        // Exactly one target-side focus event. No key-window activation and no
         // events should ever be addressed to a previous front PSN.
-        #expect(posts.count == 3)
+        #expect(posts.count == 1)
         for post in posts {
             #expect(post.psn == targetPSN)
         }
@@ -153,41 +121,6 @@ struct WindowFocusTests {
         #expect(focusEvents.count == 1)
         #expect(focusEvents.first?.bytes[0x8a] == 0x01)
         #expect(focusEvents.contains(where: { $0.bytes[0x8a] == 0x02 }) == false)
-
-        // Sanity: the three events come out in the documented order
-        // (focus → key-window begin → key-window end).
-        #expect(posts[0].bytes[0x08] == 0x0d) // focus
-        #expect(posts[1].bytes[0x08] == 0x01) // key-window begin
-        #expect(posts[2].bytes[0x08] == 0x02) // key-window end
-        #expect(posts[1].bytes[0x3a] == 0x10)
-        #expect(posts[2].bytes[0x3a] == 0x10)
-    }
-
-    @Test("mouse click focus posts only target focus without defocusing the front process")
-    func mouseClickFocusPostsOnlyTargetFocus() throws {
-        let targetPid: pid_t = pid_t.random(in: 1_000..<50_000)
-        let targetWindowId = CGWindowID.random(in: 1..<UInt32.max)
-        let targetPSN: SkyLightMouseClickFocuser.ProcessSerialNumber = [
-            UInt32.random(in: 1..<UInt32.max),
-            UInt32.random(in: 1..<UInt32.max),
-        ]
-        let recorder = PostedEventRecorder()
-
-        let focuser = SkyLightMouseClickFocuser(
-            resolveProcessPSN: { pid in
-                #expect(pid == targetPid)
-                return targetPSN
-            },
-            postEventRecord: { psn, bytes in
-                recorder.record(psn: psn, bytes: bytes)
-            }
-        )
-
-        try focuser.prepareForMouseClick(pid: targetPid, windowId: targetWindowId)
-
-        let posts = recorder.posts
-        #expect(posts.count == 1)
-        #expect(posts[0].psn == targetPSN)
         #expect(posts[0].bytes[0x08] == 0x0d)
         #expect(posts[0].bytes[0x8a] == 0x01)
         for post in posts {

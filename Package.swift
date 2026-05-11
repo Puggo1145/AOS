@@ -48,10 +48,6 @@ let package = Package(
         .executable(
             name: "AOSCoordinateTarget",
             targets: ["AOSCoordinateTarget"]
-        ),
-        .executable(
-            name: "AOSButtonTarget",
-            targets: ["AOSButtonTarget"]
         )
     ],
     dependencies: [
@@ -123,10 +119,6 @@ let package = Package(
         .executableTarget(
             name: "AOSCoordinateTarget",
             path: "Sources/AOSCoordinateTarget"
-        ),
-        .executableTarget(
-            name: "AOSButtonTarget",
-            path: "Sources/AOSButtonTarget"
         ),
         .testTarget(
             name: "AOSComputerUseCLITests",

@@ -194,7 +194,6 @@ public actor ComputerUseCore {
     private let visibleWindowsLookup: @Sendable () -> [WindowInfo]
     private let frontmostWindowLookup: @Sendable () -> WindowInfo?
     private let focusWindowWithoutRaising: @Sendable (pid_t, CGWindowID) async throws -> Void
-    private let prepareWindowForMouseClick: @Sendable (pid_t, CGWindowID) async throws -> Void
     private let raiseWindowWithoutActivating: @Sendable (WindowInfo) async throws -> Void
     private let orderRepairDelays: [UInt64]
     private let sleepForOrderRepair: @Sendable (UInt64) async throws -> Void
@@ -209,7 +208,6 @@ public actor ComputerUseCore {
     public init() {
         let webAccessibilityActivator = AXWebAccessibilityActivator()
         let windowFocuser = SkyLightWindowFocuser.live()
-        let mouseClickFocuser = SkyLightMouseClickFocuser.live()
         let mousePoster = MouseEventPoster.live()
         let windowRaiser = AXWindowRaiser.live()
         self.init(
@@ -228,9 +226,6 @@ public actor ComputerUseCore {
             },
             focusWindowWithoutRaising: { pid, windowId in
                 try windowFocuser.focusWindowWithoutRaising(pid: pid, windowId: windowId)
-            },
-            prepareWindowForMouseClick: { pid, windowId in
-                try mouseClickFocuser.prepareForMouseClick(pid: pid, windowId: windowId)
             },
             raiseWindowWithoutActivating: { window in
                 try windowRaiser.raise(window)
@@ -260,9 +255,6 @@ public actor ComputerUseCore {
         visibleWindowsLookup: @escaping @Sendable () -> [WindowInfo] = { [] },
         frontmostWindowLookup: @escaping @Sendable () -> WindowInfo? = { nil },
         focusWindowWithoutRaising: @escaping @Sendable (pid_t, CGWindowID) async throws -> Void,
-        prepareWindowForMouseClick: @escaping @Sendable (pid_t, CGWindowID) async throws -> Void = { _, _ in
-            throw ComputerUseError.clickUnavailable("mouse click focus preparer is not configured")
-        },
         raiseWindowWithoutActivating: @escaping @Sendable (WindowInfo) async throws -> Void = { _ in },
         orderRepairDelays: [UInt64] = [],
         sleepForOrderRepair: @escaping @Sendable (UInt64) async throws -> Void = { _ in },
@@ -285,7 +277,6 @@ public actor ComputerUseCore {
         self.visibleWindowsLookup = visibleWindowsLookup
         self.frontmostWindowLookup = frontmostWindowLookup
         self.focusWindowWithoutRaising = focusWindowWithoutRaising
-        self.prepareWindowForMouseClick = prepareWindowForMouseClick
         self.raiseWindowWithoutActivating = raiseWindowWithoutActivating
         self.orderRepairDelays = orderRepairDelays
         self.sleepForOrderRepair = sleepForOrderRepair
@@ -351,23 +342,8 @@ public actor ComputerUseCore {
         return WindowFocusResult(pid: pid, windowId: windowId)
     }
 
-    /// Posts a background left-click to the current center of `windowId`
-    /// after first preparing that window for pid-routed input.
-    public func postLeftClick(
-        pid: pid_t,
-        windowId: CGWindowID
-    ) async throws -> WindowClickResult {
-        let window = try validateOwnership(pid: pid, windowId: windowId)
-        let point = CGPoint(
-            x: window.bounds.x + window.bounds.width / 2,
-            y: window.bounds.y + window.bounds.height / 2
-        )
-        return try await postLeftClick(pid: pid, windowId: windowId, point: point)
-    }
-
     /// Posts a background left-click to an explicit screen-space point inside
-    /// `windowId`, using the same non-raising focus and order-guardian path as
-    /// the center-click helper.
+    /// `windowId`, using the standard non-raising focus and order-guardian path.
     public func postLeftClick(
         pid: pid_t,
         windowId: CGWindowID,
@@ -381,7 +357,7 @@ public actor ComputerUseCore {
         }
         let originalFrontWindow = frontmostWindowLookup()
         let orderGuardian = try makeWindowOrderGuardian(targetWindowId: windowId)
-        try await prepareWindowForMouseClick(pid, windowId)
+        try await focusWindowWithoutRaising(pid, windowId)
         try await Task.sleep(nanoseconds: 5_000_000)
         try await postLeftClickEvent(pid, windowId, point, window.bounds) { [self] _ in
             try await self.repairWindowOrderOnce(
@@ -419,7 +395,7 @@ public actor ComputerUseCore {
 
         recorder.record(.before)
         if !skipFocus {
-            try await prepareWindowForMouseClick(pid, windowId)
+            try await focusWindowWithoutRaising(pid, windowId)
         }
         recorder.record(.afterFocus)
         try await Task.sleep(nanoseconds: 5_000_000)

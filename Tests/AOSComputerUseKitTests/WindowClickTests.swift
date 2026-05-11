@@ -6,8 +6,8 @@ import Testing
 
 @Suite("ComputerUseCore coordinate left click")
 struct WindowClickTests {
-    @Test("focuses the target then posts a left click at the window center")
-    func focusesThenClicksWindowCenter() async throws {
+    @Test("focuses the target then posts a left click at an explicit screen point")
+    func focusesThenClicksExplicitScreenPoint() async throws {
         let recorder = ClickChainRecorder()
         let core = ComputerUseCore(
             windowLookup: { windowId in
@@ -26,9 +26,6 @@ struct WindowClickTests {
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.recordFocus(pid: pid, windowId: windowId)
             },
-            prepareWindowForMouseClick: { pid, windowId in
-                await recorder.recordMouseFocus(pid: pid, windowId: windowId)
-            },
             postLeftClick: { pid, windowId, point, windowBounds, _ in
                 await recorder.recordClick(
                     pid: pid,
@@ -39,13 +36,13 @@ struct WindowClickTests {
             }
         )
 
-        let result = try await core.postLeftClick(pid: 123, windowId: 456)
+        let result = try await core.postLeftClick(pid: 123, windowId: 456, point: CGPoint(x: 160, y: 70))
 
         #expect(result.pid == 123)
         #expect(result.windowId == 456)
         #expect(result.point == CGPoint(x: 160, y: 70))
         #expect(await recorder.events == [
-            .mouseFocus(pid: 123, windowId: 456),
+            .focus(pid: 123, windowId: 456),
             .click(
                 pid: 123,
                 windowId: 456,
@@ -75,9 +72,6 @@ struct WindowClickTests {
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.recordFocus(pid: pid, windowId: windowId)
             },
-            prepareWindowForMouseClick: { pid, windowId in
-                await recorder.recordMouseFocus(pid: pid, windowId: windowId)
-            },
             postLeftClick: { pid, windowId, point, windowBounds, _ in
                 await recorder.recordClick(
                     pid: pid,
@@ -96,7 +90,7 @@ struct WindowClickTests {
 
         #expect(result.point == CGPoint(x: 32, y: 54))
         #expect(await recorder.events == [
-            .mouseFocus(pid: 123, windowId: 456),
+            .focus(pid: 123, windowId: 456),
             .click(
                 pid: 123,
                 windowId: 456,
@@ -124,9 +118,6 @@ struct WindowClickTests {
             },
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.recordFocus(pid: pid, windowId: windowId)
-            },
-            prepareWindowForMouseClick: { pid, windowId in
-                await recorder.recordMouseFocus(pid: pid, windowId: windowId)
             },
             postLeftClick: { pid, windowId, point, windowBounds, _ in
                 await recorder.recordClick(
@@ -195,9 +186,6 @@ struct WindowClickTests {
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.recordFocus(pid: pid, windowId: windowId)
             },
-            prepareWindowForMouseClick: { pid, windowId in
-                await recorder.recordMouseFocus(pid: pid, windowId: windowId)
-            },
             postLeftClick: { pid, windowId, point, windowBounds, _ in
                 await recorder.recordClick(
                     pid: pid,
@@ -208,10 +196,10 @@ struct WindowClickTests {
             }
         )
 
-        _ = try await core.postLeftClick(pid: 123, windowId: 456)
+        _ = try await core.postLeftClick(pid: 123, windowId: 456, point: CGPoint(x: 160, y: 70))
 
         #expect(await recorder.events == [
-            .mouseFocus(pid: 123, windowId: 456),
+            .focus(pid: 123, windowId: 456),
             .click(
                 pid: 123,
                 windowId: 456,
@@ -249,9 +237,6 @@ struct WindowClickTests {
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.recordFocus(pid: pid, windowId: windowId)
             },
-            prepareWindowForMouseClick: { pid, windowId in
-                await recorder.recordMouseFocus(pid: pid, windowId: windowId)
-            },
             raiseWindowWithoutActivating: { window in
                 await recorder.recordRaise(pid: window.pid, windowId: window.id)
             },
@@ -267,10 +252,10 @@ struct WindowClickTests {
             }
         )
 
-        _ = try await core.postLeftClick(pid: 30, windowId: 300)
+        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
 
         #expect(await recorder.events == [
-            .mouseFocus(pid: 30, windowId: 300),
+            .focus(pid: 30, windowId: 300),
             .click(
                 pid: 30,
                 windowId: 300,
@@ -307,9 +292,6 @@ struct WindowClickTests {
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.recordFocus(pid: pid, windowId: windowId)
             },
-            prepareWindowForMouseClick: { pid, windowId in
-                await recorder.recordMouseFocus(pid: pid, windowId: windowId)
-            },
             raiseWindowWithoutActivating: { window in
                 await recorder.recordRaise(pid: window.pid, windowId: window.id)
             },
@@ -326,10 +308,10 @@ struct WindowClickTests {
             }
         )
 
-        _ = try await core.postLeftClick(pid: 30, windowId: 300)
+        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
 
         #expect(await recorder.events == [
-            .mouseFocus(pid: 30, windowId: 300),
+            .focus(pid: 30, windowId: 300),
             .click(
                 pid: 30,
                 windowId: 300,
@@ -367,9 +349,6 @@ struct WindowClickTests {
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.recordFocus(pid: pid, windowId: windowId)
             },
-            prepareWindowForMouseClick: { pid, windowId in
-                await recorder.recordMouseFocus(pid: pid, windowId: windowId)
-            },
             raiseWindowWithoutActivating: { window in
                 await recorder.recordRaise(pid: window.pid, windowId: window.id)
             },
@@ -385,7 +364,7 @@ struct WindowClickTests {
             }
         )
 
-        _ = try await core.postLeftClick(pid: 30, windowId: 300)
+        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
 
         #expect(await recorder.events.filter {
             if case .raise = $0 { return true }
@@ -425,9 +404,6 @@ struct WindowClickTests {
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.recordFocus(pid: pid, windowId: windowId)
             },
-            prepareWindowForMouseClick: { pid, windowId in
-                await recorder.recordMouseFocus(pid: pid, windowId: windowId)
-            },
             raiseWindowWithoutActivating: { window in
                 await recorder.recordRaise(pid: window.pid, windowId: window.id)
             },
@@ -443,7 +419,7 @@ struct WindowClickTests {
             }
         )
 
-        _ = try await core.postLeftClick(pid: 30, windowId: 300)
+        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
 
         #expect(await recorder.events.filter {
             if case .raise = $0 { return true }
@@ -478,9 +454,6 @@ struct WindowClickTests {
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.recordFocus(pid: pid, windowId: windowId)
             },
-            prepareWindowForMouseClick: { pid, windowId in
-                await recorder.recordMouseFocus(pid: pid, windowId: windowId)
-            },
             raiseWindowWithoutActivating: { window in
                 await recorder.recordRaise(pid: window.pid, windowId: window.id)
             },
@@ -496,7 +469,7 @@ struct WindowClickTests {
             }
         )
 
-        _ = try await core.postLeftClick(pid: 30, windowId: 300)
+        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
 
         #expect(await recorder.events.filter {
             if case .raise = $0 { return true }
@@ -528,9 +501,6 @@ struct WindowClickTests {
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.recordFocus(pid: pid, windowId: windowId)
             },
-            prepareWindowForMouseClick: { pid, windowId in
-                await recorder.recordMouseFocus(pid: pid, windowId: windowId)
-            },
             postLeftClick: { pid, windowId, point, windowBounds, _ in
                 await recorder.recordClick(
                     pid: pid,
@@ -542,7 +512,7 @@ struct WindowClickTests {
         )
 
         await #expect(throws: ComputerUseError.self) {
-            try await core.postLeftClick(pid: 123, windowId: 456)
+            try await core.postLeftClick(pid: 123, windowId: 456, point: CGPoint(x: 160, y: 70))
         }
         #expect(await recorder.events.isEmpty)
     }
@@ -653,10 +623,6 @@ private actor ClickChainRecorder {
         recordedEvents.append(.focus(pid: pid, windowId: windowId))
     }
 
-    func recordMouseFocus(pid: pid_t, windowId: CGWindowID) {
-        recordedEvents.append(.mouseFocus(pid: pid, windowId: windowId))
-    }
-
     func recordClick(
         pid: pid_t,
         windowId: CGWindowID,
@@ -678,7 +644,6 @@ private actor ClickChainRecorder {
 
 private enum ClickChainEvent: Equatable {
     case focus(pid: pid_t, windowId: CGWindowID)
-    case mouseFocus(pid: pid_t, windowId: CGWindowID)
     case raise(pid: pid_t, windowId: CGWindowID)
     case click(pid: pid_t, windowId: CGWindowID, point: CGPoint, windowBounds: WindowBounds)
 }

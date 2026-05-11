@@ -14,9 +14,8 @@ struct ComputerUseCLITests {
         #expect(output.contains("list-windows"))
         #expect(output.contains("get-app-state"))
         #expect(output.contains("focus-window"))
-        #expect(output.contains("open"))
-        #expect(output.contains("open-button"))
-        #expect(output.contains("test --coor"))
+        #expect(output.contains("open-coor-test"))
+        #expect(!output.contains("open-button"))
         #expect(output.contains("post-left-click"))
         #expect(output.contains("trace-postLeftClick"))
         #expect(output.contains("grant-permissions"))
@@ -191,8 +190,8 @@ struct ComputerUseCLITests {
         #expect(result.exitCode == 0)
     }
 
-    @Test("post-left-click requires pid and window id")
-    func postLeftClickRequiresPidAndWindowID() async throws {
+    @Test("post-left-click requires a local coordinate")
+    func postLeftClickRequiresLocalCoordinate() async throws {
         let fake = FakeComputerUseCore()
 
         let result = try await ComputerUseCLI.run(
@@ -201,11 +200,10 @@ struct ComputerUseCLITests {
             permissions: FakePermissionClient()
         )
 
-        #expect(await fake.requestedLeftClickPID == 123)
-        #expect(await fake.requestedLeftClickWindowID == 456)
-        #expect(result.stdout.contains("Posted left click to window 456"))
-        #expect(result.stderr.isEmpty)
-        #expect(result.exitCode == 0)
+        #expect(await fake.requestedLeftClickPID == nil)
+        #expect(await fake.requestedLeftClickWindowID == nil)
+        #expect(result.stderr.contains("missing required option --coor"))
+        #expect(result.exitCode != 0)
     }
 
     @Test("post-left-click accepts a local coordinate")
@@ -215,7 +213,7 @@ struct ComputerUseCLITests {
             WindowInfo(
                 id: 456,
                 pid: 123,
-                owner: "AOSButtonTarget",
+                owner: "AOSCoordinateTarget",
                 title: "AOS Button Reliability Target",
                 bounds: WindowBounds(x: 50, y: 70, width: 520, height: 360),
                 zIndex: 1,
@@ -255,129 +253,22 @@ struct ComputerUseCLITests {
         #expect(result.exitCode == 64)
     }
 
-    @Test("open starts the coordinate target")
-    func openStartsCoordinateTarget() async throws {
-        let target = FakeCoordinateTargetClient()
+    @Test("open-coor-test starts the coordinate target")
+    func openCoorTestStartsCoordinateTarget() async throws {
+        let target = FakeCoorTestTargetClient()
 
         let result = try await ComputerUseCLI.run(
-            arguments: ["open"],
+            arguments: ["open-coor-test"],
             core: FakeComputerUseCore(),
             permissions: FakePermissionClient(),
-            coordinateTarget: target
+            coorTestTarget: target
         )
 
         #expect(await target.opened == true)
-        #expect(result.stdout.contains("Coordinate target opened"))
+        #expect(result.stdout.contains("Coordinate click test target opened"))
         #expect(result.stdout.contains("pid 777"))
         #expect(result.stdout.contains("window 888"))
         #expect(result.exitCode == 0)
-    }
-
-    @Test("open-button starts the centered button target")
-    func openButtonStartsCenteredButtonTarget() async throws {
-        let target = FakeButtonTargetClient()
-
-        let result = try await ComputerUseCLI.run(
-            arguments: ["open-button"],
-            core: FakeComputerUseCore(),
-            permissions: FakePermissionClient(),
-            buttonTarget: target
-        )
-
-        #expect(await target.opened == true)
-        #expect(result.stdout.contains("Button target opened"))
-        #expect(result.stdout.contains("pid 1777"))
-        #expect(result.stdout.contains("window 1888"))
-        #expect(result.stdout.contains("button-local 260,180"))
-        #expect(result.exitCode == 0)
-    }
-
-    @Test("test posts a coordinate click through the core click path")
-    func testPostsCoordinateClickThroughCoreClickPath() async throws {
-        let fake = FakeComputerUseCore()
-        await fake.setWindows([
-            WindowInfo(
-                id: 888,
-                pid: 777,
-                owner: "AOSCoordinateTarget",
-                title: "AOS Coordinate Reliability Target",
-                bounds: WindowBounds(x: 100, y: 200, width: 720, height: 480),
-                zIndex: 1,
-                isOnScreen: true,
-                layer: 0
-            )
-        ])
-        let target = FakeCoordinateTargetClient()
-        let eventLog = FakeCoordinateTargetEventLogClient(eventsAfterPost: [
-            CoordinateTargetEvent(
-                timestamp: 1,
-                type: "localMonitor:leftMouseDown",
-                x: 20,
-                y: 30,
-                screenX: 120,
-                screenY: 230,
-                windowNumber: 888
-            ),
-            CoordinateTargetEvent(
-                timestamp: 2,
-                type: "mouseUp",
-                x: 20,
-                y: 30,
-                screenX: 120,
-                screenY: 230,
-                windowNumber: 888
-            ),
-        ])
-
-        let result = try await ComputerUseCLI.run(
-            arguments: ["test", "--coor", "20,30"],
-            core: fake,
-            permissions: FakePermissionClient(),
-            coordinateTarget: target,
-            coordinateEventLog: eventLog
-        )
-
-        #expect(await fake.requestedWindowPID == 777)
-        #expect(await fake.requestedLeftClickPID == 777)
-        #expect(await fake.requestedLeftClickWindowID == 888)
-        #expect(await fake.requestedLeftClickPoint == CGPoint(x: 120, y: 230))
-        #expect(result.stdout.contains("Posted coordinate test click"))
-        #expect(result.stdout.contains("local 20,30"))
-        #expect(result.stdout.contains("screen 120,230"))
-        #expect(result.stdout.contains("recorded 2 event(s)"))
-        #expect(result.stdout.contains("localMonitor:leftMouseDown"))
-        #expect(result.stdout.contains("mouseUp"))
-        #expect(result.exitCode == 0)
-    }
-
-    @Test("test fails when the coordinate target records no event")
-    func testFailsWhenCoordinateTargetRecordsNoEvent() async throws {
-        let fake = FakeComputerUseCore()
-        await fake.setWindows([
-            WindowInfo(
-                id: 888,
-                pid: 777,
-                owner: "AOSCoordinateTarget",
-                title: "AOS Coordinate Reliability Target",
-                bounds: WindowBounds(x: 100, y: 200, width: 720, height: 480),
-                zIndex: 1,
-                isOnScreen: true,
-                layer: 0
-            )
-        ])
-
-        let result = try await ComputerUseCLI.run(
-            arguments: ["test", "--coor", "20,30"],
-            core: fake,
-            permissions: FakePermissionClient(),
-            coordinateTarget: FakeCoordinateTargetClient(),
-            coordinateEventLog: FakeCoordinateTargetEventLogClient(eventsAfterPost: [])
-        )
-
-        #expect(await fake.requestedLeftClickPoint == CGPoint(x: 120, y: 230))
-        #expect(result.exitCode == 1)
-        #expect(result.stdout.isEmpty)
-        #expect(result.stderr.contains("coordinate target recorded no mouse events after post"))
     }
 
     @Test("trace-postLeftClick requires pid and window id")
@@ -458,49 +349,17 @@ private actor FakePermissionClient: ComputerUsePermissionClient {
     }
 }
 
-private actor FakeCoordinateTargetClient: CoordinateTargetClient {
+private actor FakeCoorTestTargetClient: CoorTestTargetClient {
     private(set) var opened = false
-    var state = CoordinateTargetState(
+    var state = CoorTestTargetState(
         pid: 777,
         windowId: 888,
         eventLogPath: "/tmp/aos-coordinate-events.jsonl"
     )
 
-    func open() async throws -> CoordinateTargetState {
+    func open() async throws -> CoorTestTargetState {
         opened = true
         return state
-    }
-
-    func current() async throws -> CoordinateTargetState {
-        state
-    }
-}
-
-private actor FakeButtonTargetClient: ButtonTargetClient {
-    private(set) var opened = false
-    var state = ButtonTargetState(
-        pid: 1777,
-        windowId: 1888,
-        eventLogPath: "/tmp/aos-button-events.jsonl",
-        buttonLocalPoint: CGPoint(x: 260, y: 180),
-        buttonScreenPoint: CGPoint(x: 310, y: 250)
-    )
-
-    func open() async throws -> ButtonTargetState {
-        opened = true
-        return state
-    }
-}
-
-private struct FakeCoordinateTargetEventLogClient: CoordinateTargetEventLogClient {
-    let eventsAfterPost: [CoordinateTargetEvent]
-
-    func byteOffset(path: String) throws -> UInt64 {
-        0
-    }
-
-    func events(path: String, after offset: UInt64) throws -> [CoordinateTargetEvent] {
-        eventsAfterPost
     }
 }
 
@@ -564,12 +423,6 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
         requestedFocusPID = pid
         requestedFocusWindowID = windowId
         return WindowFocusResult(pid: pid, windowId: windowId)
-    }
-
-    func postLeftClick(pid: pid_t, windowId: CGWindowID) async throws -> WindowClickResult {
-        requestedLeftClickPID = pid
-        requestedLeftClickWindowID = windowId
-        return WindowClickResult(pid: pid, windowId: windowId, point: CGPoint(x: 10, y: 20))
     }
 
     func postLeftClick(pid: pid_t, windowId: CGWindowID, point: CGPoint) async throws -> WindowClickResult {
