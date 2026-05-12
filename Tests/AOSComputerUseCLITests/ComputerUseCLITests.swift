@@ -17,8 +17,11 @@ struct ComputerUseCLITests {
         #expect(output.contains("open-coor-test"))
         #expect(!output.contains("open-button"))
         #expect(output.contains("post-left-click"))
+        #expect(output.contains("measure-left-click-window-order"))
         #expect(!output.contains("target-down-window-local-offscreen"))
         #expect(!output.contains("target-up-window-local-offscreen"))
+        #expect(output.contains("observe-window-order"))
+        #expect(output.contains("observe-mouse-events"))
         #expect(output.contains("post-cursor"))
         #expect(!output.contains("trace-postLeftClick"))
         #expect(output.contains("grant-permissions"))
@@ -315,8 +318,8 @@ struct ComputerUseCLITests {
         #expect(result.exitCode == 0)
     }
 
-    @Test("removed trace experiment options are rejected")
-    func removedTraceExperimentOptionsAreRejected() async throws {
+    @Test("removed trace options are rejected")
+    func removedTraceOptionsAreRejected() async throws {
         let fake = FakeComputerUseCore()
         await fake.setWindows([
             WindowInfo(
@@ -348,6 +351,333 @@ struct ComputerUseCLITests {
         #expect(result.stdout.isEmpty)
         #expect(result.stderr.contains("unknown option --trace-mouse-sequence"))
         #expect(result.exitCode == 64)
+    }
+
+    @Test("observe-window-order samples target order without posting input")
+    func observeWindowOrderSamplesTargetOrderWithoutPostingInput() async throws {
+        let fake = FakeComputerUseCore()
+        let observer = FakeWindowOrderObservationClient(samples: [
+            WindowOrderObservationSample(
+                elapsedNanoseconds: 0,
+                frontmostPID: 999,
+                frontmostBundleIdentifier: "com.example.Front",
+                frontmostWindowId: 111,
+                targetIsActive: false,
+                targetRank: 2,
+                protectedCoveredCount: 0,
+                originalFrontmostIsActive: true
+            ),
+            WindowOrderObservationSample(
+                elapsedNanoseconds: 5_000_000,
+                frontmostPID: 999,
+                frontmostBundleIdentifier: "com.example.Front",
+                frontmostWindowId: 111,
+                targetIsActive: true,
+                targetRank: 1,
+                protectedCoveredCount: 1,
+                originalFrontmostIsActive: false
+            ),
+            WindowOrderObservationSample(
+                elapsedNanoseconds: 17_000_000,
+                frontmostPID: 999,
+                frontmostBundleIdentifier: "com.example.Front",
+                frontmostWindowId: 111,
+                targetIsActive: false,
+                targetRank: 2,
+                protectedCoveredCount: 0,
+                originalFrontmostIsActive: true
+            ),
+            WindowOrderObservationSample(
+                elapsedNanoseconds: 20_000_000,
+                frontmostPID: 999,
+                frontmostBundleIdentifier: "com.example.Front",
+                frontmostWindowId: 111,
+                targetIsActive: false,
+                targetRank: 3,
+                protectedCoveredCount: 0,
+                originalFrontmostIsActive: true
+            ),
+        ])
+
+        let result = try await ComputerUseCLI.run(
+            arguments: [
+                "observe-window-order",
+                "--pid", "123",
+                "--window-id", "456",
+                "--duration-ms", "20",
+                "--interval-ms", "5",
+            ],
+            core: fake,
+            permissions: FakePermissionClient(),
+            windowOrderObserver: observer
+        )
+
+        #expect(await observer.requested == WindowOrderObservationRequest(
+            pid: 123,
+            windowId: 456,
+            durationMilliseconds: 20,
+            intervalMilliseconds: 5
+        ))
+        #expect(await fake.requestedLeftClickPID == nil)
+        #expect(await fake.requestedLeftClickTracePID == nil)
+        #expect(result.stdout.contains("Window order observation"))
+        #expect(result.stdout.contains("rank-changed true"))
+        #expect(result.stdout.contains("max protected-covered 1"))
+        #expect(result.stdout.contains("active total 12ms, max-contiguous 12ms"))
+        #expect(result.stdout.contains("rank1 total 12ms, max-contiguous 12ms"))
+        #expect(result.stdout.contains("protected-covered total 12ms, max-contiguous 12ms"))
+        #expect(result.stdout.contains("protected-covered 60hz frames approx 1"))
+        #expect(result.stdout.contains("5ms: frontmost pid 999"))
+        #expect(result.stdout.contains("original-front active false"))
+        #expect(result.stderr.isEmpty)
+        #expect(result.exitCode == 0)
+    }
+
+    @Test("observe-window-order JSON exposes duration metrics")
+    func observeWindowOrderJSONExposesDurationMetrics() async throws {
+        let observer = FakeWindowOrderObservationClient(samples: [
+            WindowOrderObservationSample(
+                elapsedNanoseconds: 0,
+                frontmostPID: 999,
+                frontmostBundleIdentifier: "com.example.Front",
+                frontmostWindowId: 111,
+                targetIsActive: false,
+                targetRank: 2,
+                protectedCoveredCount: 0,
+                originalFrontmostIsActive: true
+            ),
+            WindowOrderObservationSample(
+                elapsedNanoseconds: 5_000_000,
+                frontmostPID: 999,
+                frontmostBundleIdentifier: "com.example.Front",
+                frontmostWindowId: 111,
+                targetIsActive: true,
+                targetRank: 1,
+                protectedCoveredCount: 1,
+                originalFrontmostIsActive: false
+            ),
+            WindowOrderObservationSample(
+                elapsedNanoseconds: 17_000_000,
+                frontmostPID: 999,
+                frontmostBundleIdentifier: "com.example.Front",
+                frontmostWindowId: 111,
+                targetIsActive: false,
+                targetRank: 2,
+                protectedCoveredCount: 0,
+                originalFrontmostIsActive: true
+            ),
+        ])
+
+        let result = try await ComputerUseCLI.run(
+            arguments: [
+                "observe-window-order",
+                "--pid", "123",
+                "--window-id", "456",
+                "--duration-ms", "20",
+                "--interval-ms", "5",
+                "--json",
+            ],
+            core: FakeComputerUseCore(),
+            permissions: FakePermissionClient(),
+            windowOrderObserver: observer
+        )
+
+        #expect(result.stdout.contains("\"protectedCoveredTotalMilliseconds\":12"))
+        #expect(result.stdout.contains("\"protectedCoveredMaxContiguousMilliseconds\":12"))
+        #expect(result.stdout.contains("\"protectedCoveredApproximate60HzFrames\":1"))
+        #expect(result.stdout.contains("\"targetRankOneTotalMilliseconds\":12"))
+        #expect(result.stderr.isEmpty)
+        #expect(result.exitCode == 0)
+    }
+
+    @Test("measure-left-click-window-order repeats clicks and summarizes visual risk")
+    func measureLeftClickWindowOrderRepeatsClicksAndSummarizesVisualRisk() async throws {
+        let fake = FakeComputerUseCore()
+        await fake.setWindows([
+            WindowInfo(
+                id: 456,
+                pid: 123,
+                owner: "Google Chrome",
+                title: "Measured Target",
+                bounds: WindowBounds(x: 50, y: 70, width: 520, height: 360),
+                zIndex: 1,
+                isOnScreen: true,
+                layer: 0
+            )
+        ])
+        let observer = FakeWindowOrderObservationClient(sampleBatches: [
+            [
+                WindowOrderObservationSample(
+                    elapsedNanoseconds: 0,
+                    frontmostPID: 999,
+                    frontmostBundleIdentifier: "com.example.Front",
+                    frontmostWindowId: 111,
+                    targetIsActive: false,
+                    targetRank: 2,
+                    protectedCoveredCount: 0,
+                    originalFrontmostIsActive: true
+                ),
+                WindowOrderObservationSample(
+                    elapsedNanoseconds: 5_000_000,
+                    frontmostPID: 999,
+                    frontmostBundleIdentifier: "com.example.Front",
+                    frontmostWindowId: 111,
+                    targetIsActive: true,
+                    targetRank: 1,
+                    protectedCoveredCount: 1,
+                    originalFrontmostIsActive: false
+                ),
+                WindowOrderObservationSample(
+                    elapsedNanoseconds: 17_000_000,
+                    frontmostPID: 999,
+                    frontmostBundleIdentifier: "com.example.Front",
+                    frontmostWindowId: 111,
+                    targetIsActive: false,
+                    targetRank: 2,
+                    protectedCoveredCount: 0,
+                    originalFrontmostIsActive: true
+                ),
+            ],
+            [
+                WindowOrderObservationSample(
+                    elapsedNanoseconds: 0,
+                    frontmostPID: 999,
+                    frontmostBundleIdentifier: "com.example.Front",
+                    frontmostWindowId: 111,
+                    targetIsActive: false,
+                    targetRank: 2,
+                    protectedCoveredCount: 0,
+                    originalFrontmostIsActive: true
+                ),
+                WindowOrderObservationSample(
+                    elapsedNanoseconds: 20_000_000,
+                    frontmostPID: 999,
+                    frontmostBundleIdentifier: "com.example.Front",
+                    frontmostWindowId: 111,
+                    targetIsActive: false,
+                    targetRank: 2,
+                    protectedCoveredCount: 0,
+                    originalFrontmostIsActive: true
+                ),
+            ],
+        ])
+
+        let result = try await ComputerUseCLI.run(
+            arguments: [
+                "measure-left-click-window-order",
+                "--pid", "123",
+                "--window-id", "456",
+                "--coor", "10,20",
+                "--runs", "2",
+                "--duration-ms", "20",
+                "--interval-ms", "5",
+                "--pre-click-delay-ms", "0",
+                "--between-runs-ms", "0",
+            ],
+            core: fake,
+            permissions: FakePermissionClient(),
+            windowOrderObserver: observer
+        )
+
+        #expect(await fake.requestedLeftClickCount == 2)
+        #expect(await fake.requestedWindowPID == 123)
+        #expect(await fake.requestedLeftClickPoint == CGPoint(x: 60, y: 90))
+        #expect(await observer.requests == [
+            WindowOrderObservationRequest(
+                pid: 123,
+                windowId: 456,
+                durationMilliseconds: 20,
+                intervalMilliseconds: 5
+            ),
+            WindowOrderObservationRequest(
+                pid: 123,
+                windowId: 456,
+                durationMilliseconds: 20,
+                intervalMilliseconds: 5
+            ),
+        ])
+        #expect(result.stdout.contains("Left click window order measurement"))
+        #expect(result.stdout.contains("Runs: 2, protected-covered-observed 1/2"))
+        #expect(result.stdout.contains("max protected-covered contiguous 12ms"))
+        #expect(result.stdout.contains("Run 1: active 12ms, rank1 12ms, protected-covered 12ms, frames 1"))
+        #expect(result.stdout.contains("Run 2: active 0ms, rank1 0ms, protected-covered 0ms, frames 0"))
+        #expect(result.stderr.isEmpty)
+        #expect(result.exitCode == 0)
+    }
+
+    @Test("observe-window-order rejects zero interval")
+    func observeWindowOrderRejectsZeroInterval() async throws {
+        let result = try await ComputerUseCLI.run(
+            arguments: [
+                "observe-window-order",
+                "--pid", "123",
+                "--window-id", "456",
+                "--interval-ms", "0",
+            ],
+            core: FakeComputerUseCore(),
+            permissions: FakePermissionClient(),
+            windowOrderObserver: FakeWindowOrderObservationClient(samples: [])
+        )
+
+        #expect(result.stdout.isEmpty)
+        #expect(result.stderr.contains("invalid value for --interval-ms: 0"))
+        #expect(result.exitCode == 64)
+    }
+
+    @Test("observe-mouse-events records mouse event fields for Codex comparison")
+    func observeMouseEventsRecordsMouseEventFields() async throws {
+        let observer = FakeMouseEventObservationClient(samples: [
+            MouseEventObservationSample(
+                tapLocation: .hid,
+                elapsedNanoseconds: 2_000_000,
+                typeRawValue: UInt32(CGEventType.leftMouseDown.rawValue),
+                typeName: "leftMouseDown",
+                location: CGPoint(x: 90, y: 343),
+                sourcePID: 777,
+                targetPID: 123,
+                buttonNumber: 0,
+                clickState: 1,
+                subtype: 3,
+                windowUnderMousePointer: 456,
+                windowUnderMousePointerThatCanHandleThisEvent: 456,
+                rawField0: 3,
+                rawField40: 123,
+                rawField51: 456,
+                rawField58: 99,
+                rawField91: 456,
+                rawField92: 456,
+                matchesRequestedTarget: true
+            ),
+        ])
+
+        let result = try await ComputerUseCLI.run(
+            arguments: [
+                "observe-mouse-events",
+                "--pid", "123",
+                "--window-id", "456",
+                "--duration-ms", "20",
+                "--tap-location", "all",
+            ],
+            core: FakeComputerUseCore(),
+            permissions: FakePermissionClient(),
+            mouseEventObserver: observer
+        )
+
+        #expect(await observer.requested == MouseEventObservationRequest(
+            pid: 123,
+            windowId: 456,
+            durationMilliseconds: 20,
+            tapLocation: .all
+        ))
+        #expect(result.stdout.contains("Mouse event observation"))
+        #expect(result.stdout.contains("Target: pid 123, window 456"))
+        #expect(result.stdout.contains("Taps: all"))
+        #expect(result.stdout.contains("2ms: hid leftMouseDown loc 90,343"))
+        #expect(result.stdout.contains("source-pid 777 target-pid 123"))
+        #expect(result.stdout.contains("window-under 456 can-handle 456"))
+        #expect(result.stdout.contains("raw[0]=3 raw[40]=123 raw[51]=456 raw[58]=99 raw[91]=456 raw[92]=456"))
+        #expect(result.stderr.isEmpty)
+        #expect(result.exitCode == 0)
     }
 
     @Test("post-cursor accepts explicit target and posts click at adjusted local coordinate")
@@ -600,6 +930,44 @@ private actor FakePostCursorOverlay: PostCursorOverlay {
     }
 }
 
+private actor FakeWindowOrderObservationClient: WindowOrderObservationClient {
+    private var sampleBatches: [[WindowOrderObservationSample]]
+    private(set) var requested: WindowOrderObservationRequest?
+    private(set) var requests: [WindowOrderObservationRequest] = []
+
+    init(samples: [WindowOrderObservationSample]) {
+        self.sampleBatches = [samples]
+    }
+
+    init(sampleBatches: [[WindowOrderObservationSample]]) {
+        self.sampleBatches = sampleBatches
+    }
+
+    func observe(_ request: WindowOrderObservationRequest) async throws -> [WindowOrderObservationSample] {
+        self.requested = request
+        self.requests.append(request)
+        guard !sampleBatches.isEmpty else {
+            Issue.record("FakeWindowOrderObservationClient exhausted sample batches")
+            return []
+        }
+        return sampleBatches.removeFirst()
+    }
+}
+
+private actor FakeMouseEventObservationClient: MouseEventObservationClient {
+    private let samples: [MouseEventObservationSample]
+    private(set) var requested: MouseEventObservationRequest?
+
+    init(samples: [MouseEventObservationSample]) {
+        self.samples = samples
+    }
+
+    func observe(_ request: MouseEventObservationRequest) async throws -> [MouseEventObservationSample] {
+        self.requested = request
+        return samples
+    }
+}
+
 private actor FakeComputerUseCore: ComputerUseCoreClient {
     var apps: [AppInfo] = []
     var windows: [WindowInfo] = []
@@ -616,6 +984,7 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
     private(set) var requestedLeftClickPID: pid_t?
     private(set) var requestedLeftClickWindowID: CGWindowID?
     private(set) var requestedLeftClickPoint: CGPoint?
+    private(set) var requestedLeftClickCount = 0
     private(set) var requestedLeftClickTracePID: pid_t?
     private(set) var requestedLeftClickTraceWindowID: CGWindowID?
     private(set) var requestedLeftClickTracePoint: CGPoint?
@@ -670,6 +1039,7 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
         requestedLeftClickPID = pid
         requestedLeftClickWindowID = windowId
         requestedLeftClickPoint = point
+        requestedLeftClickCount += 1
         return WindowClickResult(pid: pid, windowId: windowId, point: point)
     }
 

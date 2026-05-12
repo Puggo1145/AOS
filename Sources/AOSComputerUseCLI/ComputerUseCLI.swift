@@ -143,6 +143,385 @@ public protocol PostCursorOverlay: Sendable {
     func hide() async
 }
 
+public struct WindowOrderObservationRequest: Sendable, Equatable {
+    public let pid: pid_t
+    public let windowId: CGWindowID
+    public let durationMilliseconds: Int
+    public let intervalMilliseconds: Int
+
+    public init(
+        pid: pid_t,
+        windowId: CGWindowID,
+        durationMilliseconds: Int,
+        intervalMilliseconds: Int
+    ) {
+        self.pid = pid
+        self.windowId = windowId
+        self.durationMilliseconds = durationMilliseconds
+        self.intervalMilliseconds = intervalMilliseconds
+    }
+}
+
+public protocol WindowOrderObservationClient: Sendable {
+    func observe(_ request: WindowOrderObservationRequest) async throws -> [WindowOrderObservationSample]
+}
+
+public enum MouseEventTapLocation: String, Sendable, Equatable, Encodable {
+    case hid
+    case session
+    case annotated
+    case all
+
+    fileprivate var observedLocations: [MouseEventTapLocation] {
+        switch self {
+        case .hid, .session, .annotated:
+            return [self]
+        case .all:
+            return [.hid, .session, .annotated]
+        }
+    }
+
+    fileprivate var cgEventTapLocation: CGEventTapLocation {
+        switch self {
+        case .hid:
+            return .cghidEventTap
+        case .session:
+            return .cgSessionEventTap
+        case .annotated:
+            return .cgAnnotatedSessionEventTap
+        case .all:
+            preconditionFailure("all is not a concrete CGEvent tap location")
+        }
+    }
+}
+
+public struct MouseEventObservationRequest: Sendable, Equatable {
+    public let pid: pid_t?
+    public let windowId: CGWindowID?
+    public let durationMilliseconds: Int
+    public let tapLocation: MouseEventTapLocation
+
+    public init(
+        pid: pid_t?,
+        windowId: CGWindowID?,
+        durationMilliseconds: Int,
+        tapLocation: MouseEventTapLocation = .all
+    ) {
+        self.pid = pid
+        self.windowId = windowId
+        self.durationMilliseconds = durationMilliseconds
+        self.tapLocation = tapLocation
+    }
+}
+
+public struct MouseEventObservationSample: Sendable, Equatable, Encodable {
+    public let tapLocation: MouseEventTapLocation
+    public let elapsedNanoseconds: UInt64
+    public let typeRawValue: UInt32
+    public let typeName: String
+    public let location: CGPoint
+    public let sourcePID: pid_t
+    public let targetPID: pid_t
+    public let buttonNumber: Int64
+    public let clickState: Int64
+    public let subtype: Int64
+    public let windowUnderMousePointer: Int64
+    public let windowUnderMousePointerThatCanHandleThisEvent: Int64
+    public let rawField0: Int64
+    public let rawField40: Int64
+    public let rawField51: Int64
+    public let rawField58: Int64
+    public let rawField91: Int64
+    public let rawField92: Int64
+    public let matchesRequestedTarget: Bool
+
+    public init(
+        tapLocation: MouseEventTapLocation,
+        elapsedNanoseconds: UInt64,
+        typeRawValue: UInt32,
+        typeName: String,
+        location: CGPoint,
+        sourcePID: pid_t,
+        targetPID: pid_t,
+        buttonNumber: Int64,
+        clickState: Int64,
+        subtype: Int64,
+        windowUnderMousePointer: Int64,
+        windowUnderMousePointerThatCanHandleThisEvent: Int64,
+        rawField0: Int64,
+        rawField40: Int64,
+        rawField51: Int64,
+        rawField58: Int64,
+        rawField91: Int64,
+        rawField92: Int64,
+        matchesRequestedTarget: Bool
+    ) {
+        self.tapLocation = tapLocation
+        self.elapsedNanoseconds = elapsedNanoseconds
+        self.typeRawValue = typeRawValue
+        self.typeName = typeName
+        self.location = location
+        self.sourcePID = sourcePID
+        self.targetPID = targetPID
+        self.buttonNumber = buttonNumber
+        self.clickState = clickState
+        self.subtype = subtype
+        self.windowUnderMousePointer = windowUnderMousePointer
+        self.windowUnderMousePointerThatCanHandleThisEvent = windowUnderMousePointerThatCanHandleThisEvent
+        self.rawField0 = rawField0
+        self.rawField40 = rawField40
+        self.rawField51 = rawField51
+        self.rawField58 = rawField58
+        self.rawField91 = rawField91
+        self.rawField92 = rawField92
+        self.matchesRequestedTarget = matchesRequestedTarget
+    }
+}
+
+public protocol MouseEventObservationClient: Sendable {
+    func observe(_ request: MouseEventObservationRequest) async throws -> [MouseEventObservationSample]
+}
+
+public struct LiveWindowOrderObservationClient: WindowOrderObservationClient {
+    public init() {}
+
+    public func observe(_ request: WindowOrderObservationRequest) async throws -> [WindowOrderObservationSample] {
+        let probe = try WindowOrderProbe.live(targetPID: request.pid, targetWindowId: request.windowId)
+        let durationNanoseconds = UInt64(request.durationMilliseconds) * 1_000_000
+        let intervalNanoseconds = UInt64(request.intervalMilliseconds) * 1_000_000
+        let start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        var samples: [WindowOrderObservationSample] = []
+
+        while true {
+            let now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+            let elapsed = now >= start ? now - start : 0
+            samples.append(probe.sample(elapsedNanoseconds: elapsed))
+            if elapsed >= durationNanoseconds {
+                return samples
+            }
+            try await Task.sleep(nanoseconds: intervalNanoseconds)
+        }
+    }
+}
+
+public struct LiveMouseEventObservationClient: MouseEventObservationClient {
+    public init() {}
+
+    public func observe(_ request: MouseEventObservationRequest) async throws -> [MouseEventObservationSample] {
+        try MouseEventTapRecorder(request: request).observe()
+    }
+}
+
+/// Listen-only mouse event tap used to compare AOS and Codex event stamps.
+/// It deliberately records raw fields instead of interpreting them so browser
+/// delivery diagnostics can fail loudly when the event path changes.
+private final class MouseEventTapRecorder {
+    private static let observedTypes: [CGEventType] = [
+        .leftMouseDown,
+        .leftMouseUp,
+        .rightMouseDown,
+        .rightMouseUp,
+        .mouseMoved,
+        .leftMouseDragged,
+        .rightMouseDragged,
+        .otherMouseDown,
+        .otherMouseUp,
+        .otherMouseDragged,
+        .scrollWheel,
+    ]
+
+    private let request: MouseEventObservationRequest
+    private let startNanoseconds = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+    private let lock = NSLock()
+    private var samples: [MouseEventObservationSample] = []
+
+    init(request: MouseEventObservationRequest) {
+        self.request = request
+    }
+
+    func observe() throws -> [MouseEventObservationSample] {
+        let mask = Self.observedTypes.reduce(CGEventMask(0)) { partial, type in
+            partial | (CGEventMask(1) << CGEventMask(type.rawValue))
+        }
+        let activeTaps = try request.tapLocation.observedLocations.map { location in
+            try makeTap(location: location, mask: mask)
+        }
+
+        let runLoop = CFRunLoopGetCurrent()
+        for activeTap in activeTaps {
+            CFRunLoopAddSource(runLoop, activeTap.source, .commonModes)
+            CGEvent.tapEnable(tap: activeTap.tap, enable: true)
+        }
+        defer {
+            for activeTap in activeTaps {
+                CGEvent.tapEnable(tap: activeTap.tap, enable: false)
+                CFRunLoopRemoveSource(runLoop, activeTap.source, .commonModes)
+                activeTap.context.release()
+            }
+        }
+
+        runLoopUntilDeadline()
+
+        lock.lock()
+        defer { lock.unlock() }
+        return samples
+    }
+
+    private func makeTap(location: MouseEventTapLocation, mask: CGEventMask) throws -> ActiveMouseEventTap {
+        let context = Unmanaged.passRetained(MouseEventTapContext(recorder: self, tapLocation: location))
+        guard let tap = CGEvent.tapCreate(
+            tap: location.cgEventTapLocation,
+            place: .headInsertEventTap,
+            options: .listenOnly,
+            eventsOfInterest: mask,
+            callback: Self.callback,
+            userInfo: context.toOpaque()
+        ) else {
+            context.release()
+            throw MouseEventObservationError(
+                "failed to create \(location.rawValue) mouse event tap; grant Accessibility/Input Monitoring to the terminal running AOSComputerUseCLI"
+            )
+        }
+
+        guard let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
+            context.release()
+            throw MouseEventObservationError("failed to create run loop source for \(location.rawValue) mouse event tap")
+        }
+
+        return ActiveMouseEventTap(tap: tap, source: source, context: context)
+    }
+
+    private func runLoopUntilDeadline() {
+        let duration = TimeInterval(request.durationMilliseconds) / 1_000
+        let deadline = Date().addingTimeInterval(duration)
+        while true {
+            let remaining = deadline.timeIntervalSinceNow
+            if remaining <= 0 {
+                return
+            }
+            CFRunLoopRunInMode(.defaultMode, min(remaining, 0.05), false)
+        }
+    }
+
+    private func record(tapLocation: MouseEventTapLocation, type: CGEventType, event: CGEvent) {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            return
+        }
+
+        let sample = makeSample(tapLocation: tapLocation, type: type, event: event)
+        lock.lock()
+        samples.append(sample)
+        lock.unlock()
+    }
+
+    private func makeSample(tapLocation: MouseEventTapLocation, type: CGEventType, event: CGEvent) -> MouseEventObservationSample {
+        let sourcePID = pid_t(event.getIntegerValueField(.eventSourceUnixProcessID))
+        let targetPID = pid_t(event.getIntegerValueField(.eventTargetUnixProcessID))
+        let windowUnderMousePointer = event.getIntegerValueField(.mouseEventWindowUnderMousePointer)
+        let windowUnderMousePointerThatCanHandleThisEvent = event.getIntegerValueField(
+            .mouseEventWindowUnderMousePointerThatCanHandleThisEvent
+        )
+        let rawField0 = Self.rawField(event, 0)
+        let rawField40 = Self.rawField(event, 40)
+        let rawField51 = Self.rawField(event, 51)
+        let rawField58 = Self.rawField(event, 58)
+        let rawField91 = Self.rawField(event, 91)
+        let rawField92 = Self.rawField(event, 92)
+        let elapsed = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - startNanoseconds
+        let matchesPID = request.pid.map {
+            sourcePID == $0 || targetPID == $0 || rawField40 == Int64($0)
+        } ?? true
+        let matchesWindow = request.windowId.map {
+            let rawWindowID = Int64($0)
+            return windowUnderMousePointer == rawWindowID
+                || windowUnderMousePointerThatCanHandleThisEvent == rawWindowID
+                || rawField51 == rawWindowID
+                || rawField91 == rawWindowID
+                || rawField92 == rawWindowID
+        } ?? true
+
+        return MouseEventObservationSample(
+            tapLocation: tapLocation,
+            elapsedNanoseconds: elapsed,
+            typeRawValue: UInt32(type.rawValue),
+            typeName: Self.name(for: type),
+            location: event.location,
+            sourcePID: sourcePID,
+            targetPID: targetPID,
+            buttonNumber: event.getIntegerValueField(.mouseEventButtonNumber),
+            clickState: event.getIntegerValueField(.mouseEventClickState),
+            subtype: event.getIntegerValueField(.mouseEventSubtype),
+            windowUnderMousePointer: windowUnderMousePointer,
+            windowUnderMousePointerThatCanHandleThisEvent: windowUnderMousePointerThatCanHandleThisEvent,
+            rawField0: rawField0,
+            rawField40: rawField40,
+            rawField51: rawField51,
+            rawField58: rawField58,
+            rawField91: rawField91,
+            rawField92: rawField92,
+            matchesRequestedTarget: matchesPID && matchesWindow
+        )
+    }
+
+    private static let callback: CGEventTapCallBack = { _, type, event, refcon in
+        guard let refcon else {
+            return Unmanaged.passUnretained(event)
+        }
+        let context = Unmanaged<MouseEventTapContext>.fromOpaque(refcon).takeUnretainedValue()
+        context.recorder.record(tapLocation: context.tapLocation, type: type, event: event)
+        return Unmanaged.passUnretained(event)
+    }
+
+    private static func rawField(_ event: CGEvent, _ field: UInt32) -> Int64 {
+        guard let eventField = CGEventField(rawValue: field) else {
+            preconditionFailure("invalid CGEventField raw value \(field)")
+        }
+        return event.getIntegerValueField(eventField)
+    }
+
+    private static func name(for type: CGEventType) -> String {
+        switch type {
+        case .leftMouseDown: return "leftMouseDown"
+        case .leftMouseUp: return "leftMouseUp"
+        case .rightMouseDown: return "rightMouseDown"
+        case .rightMouseUp: return "rightMouseUp"
+        case .mouseMoved: return "mouseMoved"
+        case .leftMouseDragged: return "leftMouseDragged"
+        case .rightMouseDragged: return "rightMouseDragged"
+        case .otherMouseDown: return "otherMouseDown"
+        case .otherMouseUp: return "otherMouseUp"
+        case .otherMouseDragged: return "otherMouseDragged"
+        case .scrollWheel: return "scrollWheel"
+        default: return "event-\(type.rawValue)"
+        }
+    }
+}
+
+private struct ActiveMouseEventTap {
+    let tap: CFMachPort
+    let source: CFRunLoopSource
+    let context: Unmanaged<MouseEventTapContext>
+}
+
+private final class MouseEventTapContext {
+    let recorder: MouseEventTapRecorder
+    let tapLocation: MouseEventTapLocation
+
+    init(recorder: MouseEventTapRecorder, tapLocation: MouseEventTapLocation) {
+        self.recorder = recorder
+        self.tapLocation = tapLocation
+    }
+}
+
+private struct MouseEventObservationError: Error, CustomStringConvertible {
+    let message: String
+    var description: String { message }
+
+    init(_ message: String) {
+        self.message = message
+    }
+}
+
 public struct ComputerUseCoreAdapter: ComputerUseCoreClient {
     private let core: ComputerUseCore
 
@@ -312,6 +691,9 @@ public enum ComputerUseCLI {
           AOSComputerUseCLI get-app-state --pid <pid> --window-id <id> [--mode vision|ax] [--max-image-dimension <pixels>] [--screenshot-output <path>]
           AOSComputerUseCLI focus-window --pid <pid> --window-id <id>
           AOSComputerUseCLI post-left-click --pid <pid> --window-id <id> --coor <x,y> [--trace]
+          AOSComputerUseCLI measure-left-click-window-order --pid <pid> --window-id <id> --coor <x,y> [--runs <count>] [--duration-ms <ms>] [--interval-ms <ms>] [--pre-click-delay-ms <ms>] [--between-runs-ms <ms>]
+          AOSComputerUseCLI observe-window-order --pid <pid> --window-id <id> [--duration-ms <ms>] [--interval-ms <ms>]
+          AOSComputerUseCLI observe-mouse-events [--pid <pid>] [--window-id <id>] [--duration-ms <ms>] [--tap-location hid|session|annotated|all]
           AOSComputerUseCLI post-cursor [--pid <pid>] [--window-id <id>] [--coor <x,y>]
 
         Options:
@@ -327,6 +709,12 @@ public enum ComputerUseCLI {
           post-left-click
                           Post a background left click to a local --coor point of a specific app window.
                           Use --trace to write per-stage click diagnostics to stderr.
+          measure-left-click-window-order
+                          Repeat a background click while measuring active/rank/protected-covered durations.
+          observe-window-order
+                          Passively sample frontmost app, target rank, and protected-covered count.
+          observe-mouse-events
+                          Passively capture mouse CGEvent fields for comparing event delivery paths.
           post-cursor
                           Open an interactive test cursor. Arrow keys move it, A posts a left click, B exits.
 
@@ -342,7 +730,9 @@ public enum ComputerUseCLI {
         permissions: ComputerUsePermissionClient = LiveComputerUsePermissionClient(),
         coorTestTarget: CoorTestTargetClient = LiveCoorTestTargetClient(),
         postCursorIO: PostCursorIO = LivePostCursorIO(),
-        postCursorOverlay: PostCursorOverlay = LivePostCursorOverlay()
+        postCursorOverlay: PostCursorOverlay = LivePostCursorOverlay(),
+        windowOrderObserver: WindowOrderObservationClient = LiveWindowOrderObservationClient(),
+        mouseEventObserver: MouseEventObservationClient = LiveMouseEventObservationClient()
     ) async throws -> ComputerUseCLIResult {
         do {
             let parsed = try ParsedCommand(arguments: arguments)
@@ -394,6 +784,28 @@ public enum ComputerUseCLI {
                 }
                 let result = try await postLeftClick(request: request, core: core)
                 return try success(LeftClickOutput(request: request, result: result), format: parsed.outputFormat)
+            case .measureLeftClickWindowOrder(let request):
+                let runs = try await measureLeftClickWindowOrder(
+                    request: request,
+                    core: core,
+                    windowOrderObserver: windowOrderObserver
+                )
+                return try success(
+                    LeftClickWindowOrderMeasurementOutput(request: request, runs: runs),
+                    format: parsed.outputFormat
+                )
+            case .observeWindowOrder(let request):
+                let samples = try await windowOrderObserver.observe(request)
+                return try success(
+                    WindowOrderObservationOutput(request: request, samples: samples),
+                    format: parsed.outputFormat
+                )
+            case .observeMouseEvents(let request):
+                let samples = try await mouseEventObserver.observe(request)
+                return try success(
+                    MouseEventObservationOutput(request: request, samples: samples),
+                    format: parsed.outputFormat
+                )
             case .postCursor(let request):
                 let result = try await runPostCursor(
                     request: request,
@@ -444,6 +856,57 @@ public enum ComputerUseCLI {
         )
     }
 
+    private static func measureLeftClickWindowOrder(
+        request: LeftClickWindowOrderMeasurementRequest,
+        core: ComputerUseCoreClient,
+        windowOrderObserver: WindowOrderObservationClient
+    ) async throws -> [LeftClickWindowOrderMeasurementRun] {
+        let screenPoint = try await leftClickScreenPoint(
+            pid: request.pid,
+            windowId: request.windowId,
+            coordinate: request.coordinate,
+            core: core
+        )
+        var runs: [LeftClickWindowOrderMeasurementRun] = []
+        for runIndex in 1...request.runs {
+            let orderRequest = WindowOrderObservationRequest(
+                pid: request.pid,
+                windowId: request.windowId,
+                durationMilliseconds: request.durationMilliseconds,
+                intervalMilliseconds: request.intervalMilliseconds
+            )
+            async let observedSamples = windowOrderObserver.observe(orderRequest)
+            await Task.yield()
+            try await sleep(milliseconds: request.preClickDelayMilliseconds)
+            let click = try await core.postLeftClick(
+                pid: request.pid,
+                windowId: request.windowId,
+                point: screenPoint
+            )
+            let samples = try await observedSamples
+            runs.append(LeftClickWindowOrderMeasurementRun(
+                run: runIndex,
+                click: click,
+                statistics: WindowOrderObservationStatistics(
+                    samples: samples,
+                    durationNanoseconds: UInt64(request.durationMilliseconds) * 1_000_000
+                ),
+                sampleCount: samples.count
+            ))
+            if runIndex < request.runs {
+                try await sleep(milliseconds: request.betweenRunsMilliseconds)
+            }
+        }
+        return runs
+    }
+
+    private static func sleep(milliseconds: Int) async throws {
+        guard milliseconds > 0 else {
+            return
+        }
+        try await Task.sleep(nanoseconds: UInt64(milliseconds) * 1_000_000)
+    }
+
     private static func postLeftClickTrace(
         request: LeftClickRequest,
         core: ComputerUseCoreClient
@@ -460,13 +923,27 @@ public enum ComputerUseCLI {
         request: LeftClickRequest,
         core: ComputerUseCoreClient
     ) async throws -> CGPoint {
-        let windows = try await core.listWindows(pid: request.pid)
-        guard let window = windows.first(where: { $0.id == request.windowId }) else {
-            throw UsageError("window \(request.windowId) for pid \(request.pid) is not available")
+        try await leftClickScreenPoint(
+            pid: request.pid,
+            windowId: request.windowId,
+            coordinate: request.coordinate,
+            core: core
+        )
+    }
+
+    private static func leftClickScreenPoint(
+        pid: pid_t,
+        windowId: CGWindowID,
+        coordinate: CGPoint,
+        core: ComputerUseCoreClient
+    ) async throws -> CGPoint {
+        let windows = try await core.listWindows(pid: pid)
+        guard let window = windows.first(where: { $0.id == windowId }) else {
+            throw UsageError("window \(windowId) for pid \(pid) is not available")
         }
         return CGPoint(
-            x: window.bounds.x + request.coordinate.x,
-            y: window.bounds.y + request.coordinate.y
+            x: window.bounds.x + coordinate.x,
+            y: window.bounds.y + coordinate.y
         )
     }
 
@@ -631,6 +1108,9 @@ private struct ParsedCommand {
         case getAppState(AppStateRequest)
         case focusWindow(FocusWindowRequest)
         case postLeftClick(LeftClickRequest)
+        case measureLeftClickWindowOrder(LeftClickWindowOrderMeasurementRequest)
+        case observeWindowOrder(WindowOrderObservationRequest)
+        case observeMouseEvents(MouseEventObservationRequest)
         case postCursor(PostCursorRequest)
     }
 
@@ -694,6 +1174,50 @@ private struct ParsedCommand {
                 windowId: windowId,
                 coordinate: coordinate,
                 trace: trace
+            ))
+        case "measure-left-click-window-order":
+            let pid = try options.requiredPID("--pid")
+            let windowId = try options.requiredWindowID("--window-id")
+            let coordinate = try options.requiredPoint("--coor")
+            let runs = try options.optionalPositiveInt("--runs") ?? 10
+            let durationMilliseconds = try options.optionalPositiveInt("--duration-ms") ?? 8_000
+            let intervalMilliseconds = try options.optionalPositiveInt("--interval-ms") ?? 1
+            let preClickDelayMilliseconds = try options.optionalInt("--pre-click-delay-ms") ?? 2_000
+            let betweenRunsMilliseconds = try options.optionalInt("--between-runs-ms") ?? 300
+            try options.rejectUnused()
+            command = .measureLeftClickWindowOrder(LeftClickWindowOrderMeasurementRequest(
+                pid: pid,
+                windowId: windowId,
+                coordinate: coordinate,
+                runs: runs,
+                durationMilliseconds: durationMilliseconds,
+                intervalMilliseconds: intervalMilliseconds,
+                preClickDelayMilliseconds: preClickDelayMilliseconds,
+                betweenRunsMilliseconds: betweenRunsMilliseconds
+            ))
+        case "observe-window-order":
+            let pid = try options.requiredPID("--pid")
+            let windowId = try options.requiredWindowID("--window-id")
+            let durationMilliseconds = try options.optionalPositiveInt("--duration-ms") ?? 5_000
+            let intervalMilliseconds = try options.optionalPositiveInt("--interval-ms") ?? 5
+            try options.rejectUnused()
+            command = .observeWindowOrder(WindowOrderObservationRequest(
+                pid: pid,
+                windowId: windowId,
+                durationMilliseconds: durationMilliseconds,
+                intervalMilliseconds: intervalMilliseconds
+            ))
+        case "observe-mouse-events":
+            let pid = try options.optionalPID("--pid")
+            let windowId = try options.optionalWindowID("--window-id")
+            let durationMilliseconds = try options.optionalPositiveInt("--duration-ms") ?? 5_000
+            let tapLocation = try options.optionalEnum("--tap-location", MouseEventTapLocation.self) ?? .all
+            try options.rejectUnused()
+            command = .observeMouseEvents(MouseEventObservationRequest(
+                pid: pid,
+                windowId: windowId,
+                durationMilliseconds: durationMilliseconds,
+                tapLocation: tapLocation
             ))
         case "post-cursor":
             let pid = try options.optionalPID("--pid")
@@ -759,6 +1283,14 @@ private struct OptionCursor {
     mutating func optionalInt(_ name: String) throws -> Int? {
         guard let value = try takeValue(name) else { return nil }
         guard let parsed = Int(value), parsed >= 0 else {
+            throw UsageError("invalid value for \(name): \(value)")
+        }
+        return parsed
+    }
+
+    mutating func optionalPositiveInt(_ name: String) throws -> Int? {
+        guard let value = try takeValue(name) else { return nil }
+        guard let parsed = Int(value), parsed > 0 else {
             throw UsageError("invalid value for \(name): \(value)")
         }
         return parsed
@@ -872,6 +1404,17 @@ private struct LeftClickRequest: Sendable {
     let windowId: CGWindowID
     let coordinate: CGPoint
     let trace: Bool
+}
+
+private struct LeftClickWindowOrderMeasurementRequest: Sendable {
+    let pid: pid_t
+    let windowId: CGWindowID
+    let coordinate: CGPoint
+    let runs: Int
+    let durationMilliseconds: Int
+    let intervalMilliseconds: Int
+    let preClickDelayMilliseconds: Int
+    let betweenRunsMilliseconds: Int
 }
 
 private struct PostCursorRequest: Sendable {
@@ -1135,6 +1678,349 @@ private struct ClickTraceOutput: ReadableOutput {
         let attempt = snapshot.repairAttempt.map { ", attempt \($0)" } ?? ""
         let repaired = snapshot.repaired.map { ", repaired \($0)" } ?? ""
         return "\(snapshot.stage.rawValue): frontmost \(frontmost)\(bundle)\(window), target active \(snapshot.targetIsActive), target rank \(rank), protected-covered \(covered)\(elapsed)\(attempt)\(repaired)"
+    }
+}
+
+private struct LeftClickWindowOrderMeasurementOutput: Encodable, ReadableOutput {
+    let command = "measure-left-click-window-order"
+    let pid: pid_t
+    let windowId: CGWindowID
+    let coordinate: PointOutput
+    let runsRequested: Int
+    let durationMilliseconds: Int
+    let intervalMilliseconds: Int
+    let preClickDelayMilliseconds: Int
+    let betweenRunsMilliseconds: Int
+    let protectedCoveredObservedRuns: Int
+    let maxActiveContiguousMilliseconds: UInt64
+    let maxRankOneContiguousMilliseconds: UInt64
+    let maxProtectedCoveredContiguousMilliseconds: UInt64
+    let runResults: [LeftClickWindowOrderMeasurementRun]
+
+    init(request: LeftClickWindowOrderMeasurementRequest, runs: [LeftClickWindowOrderMeasurementRun]) {
+        self.pid = request.pid
+        self.windowId = request.windowId
+        self.coordinate = PointOutput(request.coordinate)
+        self.runsRequested = request.runs
+        self.durationMilliseconds = request.durationMilliseconds
+        self.intervalMilliseconds = request.intervalMilliseconds
+        self.preClickDelayMilliseconds = request.preClickDelayMilliseconds
+        self.betweenRunsMilliseconds = request.betweenRunsMilliseconds
+        self.protectedCoveredObservedRuns = runs.filter(\.protectedCoveredObserved).count
+        self.maxActiveContiguousMilliseconds = runs.map(\.targetActiveMaxContiguousMilliseconds).max() ?? 0
+        self.maxRankOneContiguousMilliseconds = runs.map(\.targetRankOneMaxContiguousMilliseconds).max() ?? 0
+        self.maxProtectedCoveredContiguousMilliseconds = runs
+            .map(\.protectedCoveredMaxContiguousMilliseconds)
+            .max() ?? 0
+        self.runResults = runs
+    }
+
+    var readableText: String {
+        var lines = [
+            "Left click window order measurement",
+            "Target: pid \(pid), window \(windowId), coor \(Int(coordinate.x)),\(Int(coordinate.y))",
+            "Runs: \(runResults.count), protected-covered-observed \(protectedCoveredObservedRuns)/\(runResults.count)",
+            "Summary: max active contiguous \(maxActiveContiguousMilliseconds)ms, max rank1 contiguous \(maxRankOneContiguousMilliseconds)ms, max protected-covered contiguous \(maxProtectedCoveredContiguousMilliseconds)ms",
+            "",
+            "Run details:",
+        ]
+        lines.append(contentsOf: runResults.map(\.readableText))
+        return lines.joined(separator: "\n")
+    }
+}
+
+private struct LeftClickWindowOrderMeasurementRun: Encodable {
+    let run: Int
+    let clickedPoint: PointOutput
+    let sampleCount: Int
+    let targetActiveTotalMilliseconds: UInt64
+    let targetActiveMaxContiguousMilliseconds: UInt64
+    let targetRankOneTotalMilliseconds: UInt64
+    let targetRankOneMaxContiguousMilliseconds: UInt64
+    let protectedCoveredTotalMilliseconds: UInt64
+    let protectedCoveredMaxContiguousMilliseconds: UInt64
+    let protectedCoveredApproximate60HzFrames: UInt64
+    let protectedCoveredObserved: Bool
+
+    init(
+        run: Int,
+        click: WindowClickResult,
+        statistics: WindowOrderObservationStatistics,
+        sampleCount: Int
+    ) {
+        self.run = run
+        self.clickedPoint = PointOutput(click.point)
+        self.sampleCount = sampleCount
+        self.targetActiveTotalMilliseconds = statistics.targetActive.totalMilliseconds
+        self.targetActiveMaxContiguousMilliseconds = statistics.targetActive.maxContiguousMilliseconds
+        self.targetRankOneTotalMilliseconds = statistics.targetRankOne.totalMilliseconds
+        self.targetRankOneMaxContiguousMilliseconds = statistics.targetRankOne.maxContiguousMilliseconds
+        self.protectedCoveredTotalMilliseconds = statistics.protectedCovered.totalMilliseconds
+        self.protectedCoveredMaxContiguousMilliseconds = statistics.protectedCovered.maxContiguousMilliseconds
+        self.protectedCoveredApproximate60HzFrames = statistics.protectedCovered.approximate60HzFrames
+        self.protectedCoveredObserved = statistics.protectedCovered.totalNanoseconds > 0
+    }
+
+    var readableText: String {
+        "Run \(run): active \(targetActiveTotalMilliseconds)ms, rank1 \(targetRankOneTotalMilliseconds)ms, protected-covered \(protectedCoveredTotalMilliseconds)ms, frames \(protectedCoveredApproximate60HzFrames), samples \(sampleCount)"
+    }
+}
+
+private struct WindowOrderObservationOutput: Encodable, ReadableOutput {
+    let command = "observe-window-order"
+    let pid: pid_t
+    let windowId: CGWindowID
+    let durationMilliseconds: Int
+    let intervalMilliseconds: Int
+    let sampleCount: Int
+    let transitionCount: Int
+    let targetRankChanged: Bool
+    let targetBecameActive: Bool
+    let maxProtectedCoveredCount: Int?
+    let targetActiveTotalMilliseconds: UInt64
+    let targetActiveMaxContiguousMilliseconds: UInt64
+    let targetRankOneTotalMilliseconds: UInt64
+    let targetRankOneMaxContiguousMilliseconds: UInt64
+    let protectedCoveredTotalMilliseconds: UInt64
+    let protectedCoveredMaxContiguousMilliseconds: UInt64
+    let protectedCoveredApproximate60HzFrames: UInt64
+    let samples: [WindowOrderObservationSample]
+
+    init(request: WindowOrderObservationRequest, samples: [WindowOrderObservationSample]) {
+        let statistics = WindowOrderObservationStatistics(
+            samples: samples,
+            durationNanoseconds: UInt64(request.durationMilliseconds) * 1_000_000
+        )
+        self.pid = request.pid
+        self.windowId = request.windowId
+        self.durationMilliseconds = request.durationMilliseconds
+        self.intervalMilliseconds = request.intervalMilliseconds
+        self.sampleCount = samples.count
+        self.transitionCount = Self.transitions(samples).count
+        self.targetRankChanged = Self.rankChanged(samples)
+        self.targetBecameActive = samples.contains(where: \.targetIsActive)
+        self.maxProtectedCoveredCount = samples.compactMap(\.protectedCoveredCount).max()
+        self.samples = samples
+        self.targetActiveTotalMilliseconds = statistics.targetActive.totalMilliseconds
+        self.targetActiveMaxContiguousMilliseconds = statistics.targetActive.maxContiguousMilliseconds
+        self.targetRankOneTotalMilliseconds = statistics.targetRankOne.totalMilliseconds
+        self.targetRankOneMaxContiguousMilliseconds = statistics.targetRankOne.maxContiguousMilliseconds
+        self.protectedCoveredTotalMilliseconds = statistics.protectedCovered.totalMilliseconds
+        self.protectedCoveredMaxContiguousMilliseconds = statistics.protectedCovered.maxContiguousMilliseconds
+        self.protectedCoveredApproximate60HzFrames = statistics.protectedCovered.approximate60HzFrames
+    }
+
+    var readableText: String {
+        var lines = [
+            "Window order observation",
+            "Target: pid \(pid), window \(windowId)",
+            "Duration: \(durationMilliseconds)ms, interval: \(intervalMilliseconds)ms, samples: \(sampleCount)",
+            "Summary: rank-changed \(targetRankChanged), target-active-observed \(targetBecameActive), max protected-covered \(maxProtectedCoveredCount.map(String.init) ?? "nil")",
+            "Durations: active total \(targetActiveTotalMilliseconds)ms, max-contiguous \(targetActiveMaxContiguousMilliseconds)ms",
+            "Durations: rank1 total \(targetRankOneTotalMilliseconds)ms, max-contiguous \(targetRankOneMaxContiguousMilliseconds)ms",
+            "Durations: protected-covered total \(protectedCoveredTotalMilliseconds)ms, max-contiguous \(protectedCoveredMaxContiguousMilliseconds)ms",
+            "Durations: protected-covered 60hz frames approx \(protectedCoveredApproximate60HzFrames)",
+            "",
+            "Timeline changes:",
+        ]
+        lines.append(contentsOf: Self.transitions(samples).map(Self.line))
+        return lines.joined(separator: "\n")
+    }
+
+    private static func rankChanged(_ samples: [WindowOrderObservationSample]) -> Bool {
+        let ranks = samples.compactMap(\.targetRank)
+        guard let first = ranks.first else {
+            return false
+        }
+        return ranks.contains { $0 != first }
+    }
+
+    private static func transitions(
+        _ samples: [WindowOrderObservationSample]
+    ) -> [WindowOrderObservationSample] {
+        var previous: WindowOrderObservationState?
+        return samples.filter { sample in
+            let state = WindowOrderObservationState(sample)
+            defer { previous = state }
+            return state != previous
+        }
+    }
+
+    private static func line(_ sample: WindowOrderObservationSample) -> String {
+        let elapsed = sample.elapsedNanoseconds / 1_000_000
+        let frontmost = sample.frontmostPID.map { "pid \($0)" } ?? "pid nil"
+        let bundle = sample.frontmostBundleIdentifier.map { " bundle \($0)" } ?? ""
+        let window = sample.frontmostWindowId.map { " window \($0)" } ?? " window nil"
+        let rank = sample.targetRank.map(String.init) ?? "nil"
+        let covered = sample.protectedCoveredCount.map(String.init) ?? "nil"
+        let originalFrontActive = sample.originalFrontmostIsActive
+            .map { ", original-front active \($0)" } ?? ""
+        return "\(elapsed)ms: frontmost \(frontmost)\(bundle)\(window), target active \(sample.targetIsActive), target rank \(rank), protected-covered \(covered)\(originalFrontActive)"
+    }
+}
+
+private struct WindowOrderObservationStatistics: Encodable {
+    let targetActive: WindowOrderObservationDuration
+    let targetRankOne: WindowOrderObservationDuration
+    let protectedCovered: WindowOrderObservationDuration
+
+    init(samples: [WindowOrderObservationSample], durationNanoseconds: UInt64) {
+        self.targetActive = Self.duration(
+            samples: samples,
+            durationNanoseconds: durationNanoseconds,
+            predicate: { $0.targetIsActive }
+        )
+        self.targetRankOne = Self.duration(
+            samples: samples,
+            durationNanoseconds: durationNanoseconds,
+            predicate: { $0.targetRank == 1 }
+        )
+        self.protectedCovered = Self.duration(
+            samples: samples,
+            durationNanoseconds: durationNanoseconds,
+            predicate: { ($0.protectedCoveredCount ?? 0) > 0 }
+        )
+    }
+
+    private static func duration(
+        samples: [WindowOrderObservationSample],
+        durationNanoseconds: UInt64,
+        predicate: (WindowOrderObservationSample) -> Bool
+    ) -> WindowOrderObservationDuration {
+        guard !samples.isEmpty else {
+            return WindowOrderObservationDuration(totalNanoseconds: 0, maxContiguousNanoseconds: 0)
+        }
+
+        var total: UInt64 = 0
+        var current: UInt64 = 0
+        var maxContiguous: UInt64 = 0
+
+        for index in samples.indices {
+            let sample = samples[index]
+            let nextIndex = samples.index(after: index)
+            let nextElapsed: UInt64
+            if nextIndex < samples.endIndex {
+                let nextSample = samples[nextIndex]
+                precondition(
+                    nextSample.elapsedNanoseconds >= sample.elapsedNanoseconds,
+                    "window order observation samples must be chronological"
+                )
+                nextElapsed = nextSample.elapsedNanoseconds
+            } else {
+                nextElapsed = max(sample.elapsedNanoseconds, durationNanoseconds)
+            }
+
+            let segmentDuration = nextElapsed - sample.elapsedNanoseconds
+            guard predicate(sample) else {
+                maxContiguous = max(maxContiguous, current)
+                current = 0
+                continue
+            }
+
+            total += segmentDuration
+            current += segmentDuration
+        }
+
+        maxContiguous = max(maxContiguous, current)
+        return WindowOrderObservationDuration(
+            totalNanoseconds: total,
+            maxContiguousNanoseconds: maxContiguous
+        )
+    }
+}
+
+private struct WindowOrderObservationDuration: Encodable {
+    let totalNanoseconds: UInt64
+    let maxContiguousNanoseconds: UInt64
+
+    var totalMilliseconds: UInt64 {
+        totalNanoseconds / 1_000_000
+    }
+
+    var maxContiguousMilliseconds: UInt64 {
+        maxContiguousNanoseconds / 1_000_000
+    }
+
+    var approximate60HzFrames: UInt64 {
+        guard maxContiguousNanoseconds > 0 else {
+            return 0
+        }
+        return (maxContiguousNanoseconds * 60 + 999_999_999) / 1_000_000_000
+    }
+}
+
+private struct WindowOrderObservationState: Equatable {
+    let frontmostPID: pid_t?
+    let frontmostBundleIdentifier: String?
+    let frontmostWindowId: CGWindowID?
+    let targetIsActive: Bool
+    let targetRank: Int?
+    let protectedCoveredCount: Int?
+    let originalFrontmostIsActive: Bool?
+
+    init(_ sample: WindowOrderObservationSample) {
+        self.frontmostPID = sample.frontmostPID
+        self.frontmostBundleIdentifier = sample.frontmostBundleIdentifier
+        self.frontmostWindowId = sample.frontmostWindowId
+        self.targetIsActive = sample.targetIsActive
+        self.targetRank = sample.targetRank
+        self.protectedCoveredCount = sample.protectedCoveredCount
+        self.originalFrontmostIsActive = sample.originalFrontmostIsActive
+    }
+}
+
+private struct MouseEventObservationOutput: Encodable, ReadableOutput {
+    let command = "observe-mouse-events"
+    let pid: pid_t?
+    let windowId: CGWindowID?
+    let durationMilliseconds: Int
+    let tapLocation: MouseEventTapLocation
+    let eventCount: Int
+    let samples: [MouseEventObservationSample]
+
+    init(request: MouseEventObservationRequest, samples: [MouseEventObservationSample]) {
+        self.pid = request.pid
+        self.windowId = request.windowId
+        self.durationMilliseconds = request.durationMilliseconds
+        self.tapLocation = request.tapLocation
+        self.eventCount = samples.count
+        self.samples = samples
+    }
+
+    var readableText: String {
+        var lines = ["Mouse event observation"]
+        if let pid, let windowId {
+            lines.append("Target: pid \(pid), window \(windowId)")
+        } else if let pid {
+            lines.append("Target: pid \(pid)")
+        } else if let windowId {
+            lines.append("Target: window \(windowId)")
+        } else {
+            lines.append("Target: all mouse events")
+        }
+        lines.append("Taps: \(tapLocation.rawValue)")
+        lines.append("Duration: \(durationMilliseconds)ms, events: \(eventCount)")
+        if samples.isEmpty {
+            return lines.joined(separator: "\n")
+        }
+        lines.append("")
+        lines.append("Events:")
+        lines.append(contentsOf: samples.map(Self.line))
+        return lines.joined(separator: "\n")
+    }
+
+    private static func line(_ sample: MouseEventObservationSample) -> String {
+        let match = sample.matchesRequestedTarget ? " match" : ""
+        return "\(sample.elapsedNanoseconds / 1_000_000)ms: \(sample.tapLocation.rawValue) \(sample.typeName) "
+            + "loc \(Int(sample.location.x)),\(Int(sample.location.y))\(match), "
+            + "source-pid \(sample.sourcePID) target-pid \(sample.targetPID), "
+            + "button \(sample.buttonNumber) click-state \(sample.clickState) "
+            + "subtype \(sample.subtype), "
+            + "window-under \(sample.windowUnderMousePointer) "
+            + "can-handle \(sample.windowUnderMousePointerThatCanHandleThisEvent), "
+            + "raw[0]=\(sample.rawField0) raw[40]=\(sample.rawField40) "
+            + "raw[51]=\(sample.rawField51) raw[58]=\(sample.rawField58) "
+            + "raw[91]=\(sample.rawField91) raw[92]=\(sample.rawField92)"
     }
 }
 

@@ -104,6 +104,56 @@ struct WindowClickTests {
         ])
     }
 
+    @Test("supports injected routes that skip pre-click target focus")
+    func supportsInjectedRoutesThatSkipPreClickTargetFocus() async throws {
+        let recorder = ClickChainRecorder()
+        let target = Self.window(id: 300, pid: 30, owner: "Chrome", zIndex: 1)
+        let protected = Self.window(id: 100, pid: 10, owner: "Ghostty", zIndex: 2)
+        let core = ComputerUseCore(
+            windowLookup: { windowId in
+                [target, protected].first { $0.id == windowId }
+            },
+            frontmostWindowLookup: {
+                protected
+            },
+            requiresPreClickFocus: { _ in
+                false
+            },
+            focusWindowWithoutRaising: { pid, windowId in
+                await recorder.recordFocus(pid: pid, windowId: windowId)
+            },
+            deactivateWindowWithoutRaising: { pid, windowId in
+                await recorder.recordDeactivate(pid: pid, windowId: windowId)
+            },
+            activateApplication: { pid in
+                await recorder.recordActivate(pid: pid)
+                return true
+            },
+            postLeftClick: { pid, windowId, point, windowBounds, _ in
+                await recorder.recordClick(
+                    pid: pid,
+                    windowId: windowId,
+                    point: point,
+                    windowBounds: windowBounds
+                )
+            }
+        )
+
+        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
+
+        #expect(await recorder.events == [
+            .click(
+                pid: 30,
+                windowId: 300,
+                point: CGPoint(x: 150, y: 50),
+                windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
+            ),
+            .focus(pid: 10, windowId: 100),
+            .deactivate(pid: 30, windowId: 300),
+            .activate(pid: 10),
+        ])
+    }
+
     @Test("rejects an explicit click point outside the target window")
     func rejectsExplicitPointOutsideWindow() async {
         let recorder = ClickChainRecorder()
@@ -301,6 +351,180 @@ struct WindowClickTests {
         ])
     }
 
+    @Test("reactivates the original front application after target deactivation")
+    func reactivatesOriginalFrontApplicationAfterTargetDeactivation() async throws {
+        let recorder = ClickChainRecorder()
+        let target = Self.window(id: 456, pid: 123, owner: "Chrome", zIndex: 2)
+        let front = Self.window(id: 789, pid: 777, owner: "Ghostty", zIndex: 3)
+        let core = ComputerUseCore(
+            windowLookup: { windowId in
+                [target, front].first { $0.id == windowId }
+            },
+            frontmostWindowLookup: {
+                front
+            },
+            focusWindowWithoutRaising: { pid, windowId in
+                await recorder.recordFocus(pid: pid, windowId: windowId)
+            },
+            deactivateWindowWithoutRaising: { pid, windowId in
+                await recorder.recordDeactivate(pid: pid, windowId: windowId)
+            },
+            activateApplication: { pid in
+                await recorder.recordActivate(pid: pid)
+                return true
+            },
+            postLeftClick: { pid, windowId, point, windowBounds, _ in
+                await recorder.recordClick(
+                    pid: pid,
+                    windowId: windowId,
+                    point: point,
+                    windowBounds: windowBounds
+                )
+            }
+        )
+
+        _ = try await core.postLeftClick(pid: 123, windowId: 456, point: CGPoint(x: 150, y: 50))
+
+        #expect(await recorder.events == [
+            .focus(pid: 123, windowId: 456),
+            .click(
+                pid: 123,
+                windowId: 456,
+                point: CGPoint(x: 150, y: 50),
+                windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
+            ),
+            .focus(pid: 777, windowId: 789),
+            .deactivate(pid: 123, windowId: 456),
+            .activate(pid: 777),
+        ])
+    }
+
+    @Test("reactivates the original front application when delayed guard repairs order")
+    func reactivatesOriginalFrontApplicationWhenDelayedGuardRepairsOrder() async throws {
+        let recorder = ClickChainRecorder()
+        let target = Self.window(id: 300, pid: 30, owner: "Chrome", zIndex: 1)
+        let protected = Self.window(id: 100, pid: 10, owner: "Ghostty", zIndex: 2)
+        let snapshots = WindowSnapshotScript([
+            [protected, target],
+            [target, protected],
+            [protected, target],
+        ])
+        let core = ComputerUseCore(
+            windowLookup: { windowId in
+                [target, protected].first { $0.id == windowId }
+            },
+            visibleWindowsLookup: {
+                snapshots.next()
+            },
+            frontmostWindowLookup: {
+                protected
+            },
+            focusWindowWithoutRaising: { pid, windowId in
+                await recorder.recordFocus(pid: pid, windowId: windowId)
+            },
+            deactivateWindowWithoutRaising: { pid, windowId in
+                await recorder.recordDeactivate(pid: pid, windowId: windowId)
+            },
+            activateApplication: { pid in
+                await recorder.recordActivate(pid: pid)
+                return true
+            },
+            raiseWindowWithoutActivating: { window in
+                await recorder.recordRaise(pid: window.pid, windowId: window.id)
+            },
+            orderRepairDelays: [0],
+            sleepForOrderRepair: { _ in },
+            postLeftClick: { pid, windowId, point, windowBounds, _ in
+                await recorder.recordClick(
+                    pid: pid,
+                    windowId: windowId,
+                    point: point,
+                    windowBounds: windowBounds
+                )
+            }
+        )
+
+        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
+
+        #expect(await recorder.events == [
+            .focus(pid: 30, windowId: 300),
+            .click(
+                pid: 30,
+                windowId: 300,
+                point: CGPoint(x: 150, y: 50),
+                windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
+            ),
+            .focus(pid: 10, windowId: 100),
+            .deactivate(pid: 30, windowId: 300),
+            .activate(pid: 10),
+            .raise(pid: 10, windowId: 100),
+            .focus(pid: 10, windowId: 100),
+            .activate(pid: 10),
+        ])
+    }
+
+    @Test("reactivates the original front application when delayed guard sees target still active")
+    func reactivatesOriginalFrontApplicationWhenDelayedGuardSeesTargetStillActive() async throws {
+        let recorder = ClickChainRecorder()
+        let target = Self.window(id: 300, pid: 30, owner: "Chrome", zIndex: 1)
+        let protected = Self.window(id: 100, pid: 10, owner: "Ghostty", zIndex: 2)
+        let snapshots = WindowSnapshotScript([
+            [protected, target],
+            [protected, target],
+        ])
+        let activeStates = ActiveStateScript([true])
+        let core = ComputerUseCore(
+            windowLookup: { windowId in
+                [target, protected].first { $0.id == windowId }
+            },
+            visibleWindowsLookup: {
+                snapshots.next()
+            },
+            frontmostWindowLookup: {
+                protected
+            },
+            focusWindowWithoutRaising: { pid, windowId in
+                await recorder.recordFocus(pid: pid, windowId: windowId)
+            },
+            deactivateWindowWithoutRaising: { pid, windowId in
+                await recorder.recordDeactivate(pid: pid, windowId: windowId)
+            },
+            activateApplication: { pid in
+                await recorder.recordActivate(pid: pid)
+                return true
+            },
+            isApplicationActive: { _ in
+                activeStates.next()
+            },
+            orderRepairDelays: [0],
+            sleepForOrderRepair: { _ in },
+            postLeftClick: { pid, windowId, point, windowBounds, _ in
+                await recorder.recordClick(
+                    pid: pid,
+                    windowId: windowId,
+                    point: point,
+                    windowBounds: windowBounds
+                )
+            }
+        )
+
+        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
+
+        #expect(await recorder.events == [
+            .focus(pid: 30, windowId: 300),
+            .click(
+                pid: 30,
+                windowId: 300,
+                point: CGPoint(x: 150, y: 50),
+                windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
+            ),
+            .focus(pid: 10, windowId: 100),
+            .deactivate(pid: 30, windowId: 300),
+            .activate(pid: 10),
+            .activate(pid: 10),
+        ])
+    }
+
     @Test("repairs protected windows when target deactivation triggers a late raise")
     func repairsProtectedWindowsWhenTargetDeactivationTriggersLateRaise() async throws {
         let recorder = ClickChainRecorder()
@@ -355,6 +579,206 @@ struct WindowClickTests {
             .deactivate(pid: 30, windowId: 300),
             .raise(pid: 10, windowId: 100),
             .focus(pid: 10, windowId: 100),
+        ])
+    }
+
+    @Test("runs post-dispatch cleanup before delayed repair guard")
+    func runsPostDispatchCleanupBeforeDelayedRepairGuard() async throws {
+        let recorder = ClickChainRecorder()
+        let target = Self.window(id: 300, pid: 30, owner: "Chrome", zIndex: 1)
+        let protected = Self.window(id: 100, pid: 10, owner: "Ghostty", zIndex: 2)
+        let snapshots = WindowSnapshotScript([
+            [protected, target],
+            [protected, target],
+            [target, protected],
+            [protected, target],
+        ])
+        let core = ComputerUseCore(
+            windowLookup: { windowId in
+                [target, protected].first { $0.id == windowId }
+            },
+            visibleWindowsLookup: {
+                snapshots.next()
+            },
+            frontmostWindowLookup: {
+                protected
+            },
+            focusWindowWithoutRaising: { pid, windowId in
+                await recorder.recordFocus(pid: pid, windowId: windowId)
+            },
+            deactivateWindowWithoutRaising: { pid, windowId in
+                await recorder.recordDeactivate(pid: pid, windowId: windowId)
+            },
+            activateApplication: { pid in
+                await recorder.recordActivate(pid: pid)
+                return true
+            },
+            raiseWindowWithoutActivating: { window in
+                await recorder.recordRaise(pid: window.pid, windowId: window.id)
+            },
+            orderRepairDelays: [0, 1],
+            sleepForOrderRepair: { _ in },
+            postLeftClick: { pid, windowId, point, windowBounds, stageObserver in
+                await recorder.recordClick(
+                    pid: pid,
+                    windowId: windowId,
+                    point: point,
+                    windowBounds: windowBounds
+                )
+                try await stageObserver?(.afterTargetUp)
+            }
+        )
+
+        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
+
+        #expect(await recorder.events == [
+            .focus(pid: 30, windowId: 300),
+            .click(
+                pid: 30,
+                windowId: 300,
+                point: CGPoint(x: 150, y: 50),
+                windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
+            ),
+            .focus(pid: 10, windowId: 100),
+            .deactivate(pid: 30, windowId: 300),
+            .activate(pid: 10),
+            .raise(pid: 10, windowId: 100),
+            .focus(pid: 10, windowId: 100),
+            .activate(pid: 10),
+        ])
+    }
+
+    @Test("uses the order repair cadence after post-dispatch cleanup")
+    func usesOrderRepairCadenceAfterPostDispatchCleanup() async throws {
+        let recorder = ClickChainRecorder()
+        let target = Self.window(id: 300, pid: 30, owner: "Chrome", zIndex: 1)
+        let protected = Self.window(id: 100, pid: 10, owner: "Ghostty", zIndex: 2)
+        let snapshots = WindowSnapshotScript([
+            [protected, target],
+            [protected, target],
+            [protected, target],
+            [target, protected],
+            [protected, target],
+        ])
+        let core = ComputerUseCore(
+            windowLookup: { windowId in
+                [target, protected].first { $0.id == windowId }
+            },
+            visibleWindowsLookup: {
+                snapshots.next()
+            },
+            frontmostWindowLookup: {
+                protected
+            },
+            focusWindowWithoutRaising: { pid, windowId in
+                await recorder.recordFocus(pid: pid, windowId: windowId)
+            },
+            deactivateWindowWithoutRaising: { pid, windowId in
+                await recorder.recordDeactivate(pid: pid, windowId: windowId)
+            },
+            activateApplication: { pid in
+                await recorder.recordActivate(pid: pid)
+                return true
+            },
+            raiseWindowWithoutActivating: { window in
+                await recorder.recordRaise(pid: window.pid, windowId: window.id)
+            },
+            orderRepairDelays: [0, 1, 1],
+            sleepForOrderRepair: { _ in },
+            postLeftClick: { pid, windowId, point, windowBounds, stageObserver in
+                await recorder.recordClick(
+                    pid: pid,
+                    windowId: windowId,
+                    point: point,
+                    windowBounds: windowBounds
+                )
+                try await stageObserver?(.afterTargetUp)
+            }
+        )
+
+        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
+
+        #expect(await recorder.events == [
+            .focus(pid: 30, windowId: 300),
+            .click(
+                pid: 30,
+                windowId: 300,
+                point: CGPoint(x: 150, y: 50),
+                windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
+            ),
+            .focus(pid: 10, windowId: 100),
+            .deactivate(pid: 30, windowId: 300),
+            .activate(pid: 10),
+            .raise(pid: 10, windowId: 100),
+            .focus(pid: 10, windowId: 100),
+            .activate(pid: 10),
+        ])
+    }
+
+    @Test("repairs order from a window-order notification before post-dispatch cleanup")
+    func repairsOrderFromWindowOrderNotificationBeforePostDispatchCleanup() async throws {
+        let recorder = ClickChainRecorder()
+        let orderObserver = ManualWindowOrderChangeObserver()
+        let target = Self.window(id: 300, pid: 30, owner: "Chrome", zIndex: 1)
+        let protected = Self.window(id: 100, pid: 10, owner: "Ghostty", zIndex: 2)
+        let snapshots = WindowSnapshotScript([
+            [protected, target],
+            [target, protected],
+        ])
+        let core = ComputerUseCore(
+            windowLookup: { windowId in
+                [target, protected].first { $0.id == windowId }
+            },
+            visibleWindowsLookup: {
+                snapshots.next()
+            },
+            frontmostWindowLookup: {
+                protected
+            },
+            focusWindowWithoutRaising: { pid, windowId in
+                await recorder.recordFocus(pid: pid, windowId: windowId)
+            },
+            deactivateWindowWithoutRaising: { pid, windowId in
+                await recorder.recordDeactivate(pid: pid, windowId: windowId)
+            },
+            activateApplication: { pid in
+                await recorder.recordActivate(pid: pid)
+                return true
+            },
+            raiseWindowWithoutActivating: { window in
+                await recorder.recordRaise(pid: window.pid, windowId: window.id)
+            },
+            windowOrderChangeObserver: orderObserver.observer,
+            orderRepairDelays: [],
+            sleepForOrderRepair: { _ in },
+            postLeftClick: { pid, windowId, point, windowBounds, _ in
+                await recorder.recordClick(
+                    pid: pid,
+                    windowId: windowId,
+                    point: point,
+                    windowBounds: windowBounds
+                )
+                try await orderObserver.emit(windowId: windowId)
+            }
+        )
+
+        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
+
+        #expect(orderObserver.observedWindowIds == [300])
+        #expect(await recorder.events == [
+            .focus(pid: 30, windowId: 300),
+            .click(
+                pid: 30,
+                windowId: 300,
+                point: CGPoint(x: 150, y: 50),
+                windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
+            ),
+            .raise(pid: 10, windowId: 100),
+            .focus(pid: 10, windowId: 100),
+            .activate(pid: 10),
+            .focus(pid: 10, windowId: 100),
+            .deactivate(pid: 30, windowId: 300),
+            .activate(pid: 10),
         ])
     }
 
@@ -793,9 +1217,9 @@ struct WindowClickTests {
         ])
         #expect(recorder.sleeps == [15_000, 1_000])
         #expect(recorder.integerFields.map(\.field) == [
-            0, 40, 51, 58, 91, 92,
-            0, 40, 51, 58, 91, 92,
-            0, 40, 51, 58, 91, 92,
+            0, 40, 51, 91, 92,
+            0, 40, 51, 91, 92,
+            0, 40, 51, 91, 92,
         ])
         #expect(recorder.integerFields.filter { $0.field == 0 }.map(\.value) == [
             2, 3, 3,
@@ -812,9 +1236,6 @@ struct WindowClickTests {
         #expect(recorder.integerFields.filter { $0.field == 92 }.map(\.value) == [
             456, 456, 456,
         ])
-        let clickGroups = recorder.integerFields.filter { $0.field == 58 }.map(\.value)
-        #expect(clickGroups.count == 3)
-        #expect(Set(clickGroups).count == 1)
         #expect(recorder.stages == [
             .afterMouseMoved,
             .afterTargetDown,
@@ -848,8 +1269,8 @@ struct WindowClickTests {
         ) == .appKit)
     }
 
-    @Test("Chromium delivery route uses SkyLight primer sequence instead of public pid posts")
-    func chromiumDeliveryRouteUsesSkyLightPrimerSequence() async throws {
+    @Test("Chromium delivery route matches Codex annotated mouse sequence")
+    func chromiumDeliveryRouteMatchesCodexAnnotatedMouseSequence() async throws {
         let recorder = MousePostRecorder()
         let poster = MouseEventPoster(
             postPublicEventToPID: { event, pid in
@@ -891,21 +1312,21 @@ struct WindowClickTests {
         ])
         #expect(recorder.skyLightPosts.map(\.location) == [
             CGPoint(x: 160, y: 70),
-            CGPoint(x: -1, y: -1),
-            CGPoint(x: -1, y: -1),
+            CGPoint(x: 9, y: 119),
+            CGPoint(x: 9, y: 119),
             CGPoint(x: 160, y: 70),
             CGPoint(x: 160, y: 70),
         ])
         #expect(recorder.windowLocations == [
             CGPoint(x: 150, y: 50),
-            CGPoint(x: -1, y: -1),
-            CGPoint(x: -1, y: -1),
+            CGPoint(x: -1, y: 99),
+            CGPoint(x: -1, y: 99),
             CGPoint(x: 150, y: 50),
             CGPoint(x: 150, y: 50),
         ])
         #expect(recorder.sleeps == [15_000, 1_000, 100_000, 1_000])
         #expect(recorder.integerFields.filter { $0.field == 0 }.map(\.value) == [
-            2, 1, 2, 3, 3,
+            0, 1, 2, 1, 1,
         ])
         #expect(recorder.integerFields.filter { $0.field == 40 }.map(\.value) == [
             123, 123, 123, 123, 123,
@@ -919,6 +1340,10 @@ struct WindowClickTests {
         #expect(recorder.integerFields.filter { $0.field == 92 }.map(\.value) == [
             456, 456, 456, 456, 456,
         ])
+        let annotatedTimestamps = recorder.skyLightPosts.map(\.rawField58)
+        #expect(annotatedTimestamps.count == 5)
+        #expect(Set(annotatedTimestamps).count == 1)
+        #expect(annotatedTimestamps.allSatisfy { $0 > 0 && $0 < 100_000_000_000 })
         #expect(recorder.stages == [
             .afterMouseMoved,
             .afterPrimerDown,
@@ -981,12 +1406,17 @@ private actor ClickChainRecorder {
     func recordDeactivate(pid: pid_t, windowId: CGWindowID) {
         recordedEvents.append(.deactivate(pid: pid, windowId: windowId))
     }
+
+    func recordActivate(pid: pid_t) {
+        recordedEvents.append(.activate(pid: pid))
+    }
 }
 
 private enum ClickChainEvent: Equatable {
     case focus(pid: pid_t, windowId: CGWindowID)
     case raise(pid: pid_t, windowId: CGWindowID)
     case deactivate(pid: pid_t, windowId: CGWindowID)
+    case activate(pid: pid_t)
     case click(pid: pid_t, windowId: CGWindowID, point: CGPoint, windowBounds: WindowBounds)
 }
 
@@ -1008,6 +1438,67 @@ private final class WindowSnapshotScript: @unchecked Sendable {
     }
 }
 
+private final class ActiveStateScript: @unchecked Sendable {
+    private let states: [Bool]
+    private let lock = NSLock()
+    private var index = 0
+
+    init(_ states: [Bool]) {
+        self.states = states
+    }
+
+    func next() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let state = states[min(index, states.count - 1)]
+        index += 1
+        return state
+    }
+}
+
+private final class ManualWindowOrderChangeObserver: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedWindowIds: [CGWindowID] = []
+    private var handler: (@Sendable (CGWindowID) async throws -> Void)?
+
+    var observer: WindowOrderChangeObserver {
+        WindowOrderChangeObserver { windowIds, handler in
+            self.arm(windowIds: windowIds, handler: handler)
+            return WindowOrderChangeObservation {}
+        }
+    }
+
+    var observedWindowIds: [CGWindowID] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedWindowIds
+    }
+
+    func emit(windowId: CGWindowID) async throws {
+        guard let handler = handlerSnapshot() else {
+            throw ComputerUseError.clickUnavailable("window-order observer was not armed")
+        }
+        try await handler(windowId)
+    }
+
+    private func arm(
+        windowIds: [CGWindowID],
+        handler: @escaping @Sendable (CGWindowID) async throws -> Void
+    ) {
+        lock.lock()
+        recordedWindowIds = windowIds
+        self.handler = handler
+        lock.unlock()
+    }
+
+    private func handlerSnapshot() -> (@Sendable (CGWindowID) async throws -> Void)? {
+        lock.lock()
+        defer { lock.unlock() }
+        let handler = handler
+        return handler
+    }
+}
+
 private final class MousePostRecorder: @unchecked Sendable {
     struct Post: Sendable, Equatable {
         let type: CGEventType
@@ -1015,6 +1506,7 @@ private final class MousePostRecorder: @unchecked Sendable {
         let location: CGPoint
         let windowUnderMousePointer: Int64
         let windowUnderMousePointerThatCanHandleThisEvent: Int64
+        let rawField58: Int64
     }
 
     struct IntegerField: Equatable {
@@ -1076,7 +1568,8 @@ private final class MousePostRecorder: @unchecked Sendable {
             windowUnderMousePointer: event.getIntegerValueField(.mouseEventWindowUnderMousePointer),
             windowUnderMousePointerThatCanHandleThisEvent: event.getIntegerValueField(
                 .mouseEventWindowUnderMousePointerThatCanHandleThisEvent
-            )
+            ),
+            rawField58: event.getIntegerValueField(CGEventField(rawValue: 58)!)
         ))
     }
 
@@ -1090,7 +1583,8 @@ private final class MousePostRecorder: @unchecked Sendable {
             windowUnderMousePointer: event.getIntegerValueField(.mouseEventWindowUnderMousePointer),
             windowUnderMousePointerThatCanHandleThisEvent: event.getIntegerValueField(
                 .mouseEventWindowUnderMousePointerThatCanHandleThisEvent
-            )
+            ),
+            rawField58: event.getIntegerValueField(CGEventField(rawValue: 58)!)
         ))
     }
 

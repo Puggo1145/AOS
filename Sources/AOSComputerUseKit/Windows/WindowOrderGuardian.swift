@@ -12,6 +12,10 @@ struct WindowOrderGuardian: Sendable {
     let targetWindowId: CGWindowID
     private let protectedWindows: [WindowInfo]
 
+    var observedWindowIds: [CGWindowID] {
+        [targetWindowId]
+    }
+
     init(targetWindowId: CGWindowID, beforeWindows: [WindowInfo]) throws {
         let orderedWindows = Self.guardableWindows(beforeWindows)
         guard let targetIndex = orderedWindows.firstIndex(where: { $0.id == targetWindowId }) else {

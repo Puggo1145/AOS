@@ -73,8 +73,8 @@ struct MouseClickDeliveryClassifier: Sendable {
     ]
 }
 
-/// Posts pid-scoped mouse events for the general, non-Chromium path through
-/// either the public AppKit route or the Chromium/Electron SkyLight route.
+/// Posts pid-scoped mouse events through either the public AppKit route or the
+/// Chromium/Electron SkyLight route.
 ///
 /// Both routes construct NSEvent-bridged CGEvents, stamp window-local
 /// coordinates and private SkyLight fields, and rely on the core to repair
@@ -83,12 +83,14 @@ struct MouseEventPoster: Sendable {
     typealias PostEventToPID = @Sendable (CGEvent, pid_t) throws -> Void
     typealias SetWindowLocation = @Sendable (CGEvent, CGPoint) throws -> Void
     typealias SetIntegerField = @Sendable (CGEvent, UInt32, Int64) throws -> Void
+    typealias UptimeSeconds = @Sendable () -> UInt64
     typealias Sleep = @Sendable (useconds_t) -> Void
 
     private let postPublicEventToPID: PostEventToPID
     private let postSkyLightEventToPID: PostEventToPID
     private let setWindowLocation: SetWindowLocation
     private let setIntegerField: SetIntegerField
+    private let uptimeSeconds: UptimeSeconds
     private let sleep: Sleep
 
     init(
@@ -96,12 +98,14 @@ struct MouseEventPoster: Sendable {
         postSkyLightEventToPID: @escaping PostEventToPID,
         setWindowLocation: @escaping SetWindowLocation,
         setIntegerField: @escaping SetIntegerField,
+        uptimeSeconds: @escaping UptimeSeconds = { UInt64(ProcessInfo.processInfo.systemUptime) },
         sleep: @escaping Sleep = { usleep($0) }
     ) {
         self.postPublicEventToPID = postPublicEventToPID
         self.postSkyLightEventToPID = postSkyLightEventToPID
         self.setWindowLocation = setWindowLocation
         self.setIntegerField = setIntegerField
+        self.uptimeSeconds = uptimeSeconds
         self.sleep = sleep
     }
 
@@ -161,7 +165,6 @@ struct MouseEventPoster: Sendable {
             x: point.x - windowBounds.x,
             y: point.y - windowBounds.y
         )
-        let clickGroup = Int64(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) & 0x7fff_ffff)
 
         let move = try makeMouseEvent(
             type: .mouseMoved,
@@ -184,7 +187,6 @@ struct MouseEventPoster: Sendable {
             pid: pid,
             windowId: windowId,
             mouseEventNumber: 2,
-            clickGroup: clickGroup,
             screenPoint: point,
             windowLocalPoint: windowLocalPoint
         )
@@ -193,7 +195,6 @@ struct MouseEventPoster: Sendable {
             pid: pid,
             windowId: windowId,
             mouseEventNumber: 3,
-            clickGroup: clickGroup,
             screenPoint: point,
             windowLocalPoint: windowLocalPoint
         )
@@ -202,7 +203,6 @@ struct MouseEventPoster: Sendable {
             pid: pid,
             windowId: windowId,
             mouseEventNumber: 3,
-            clickGroup: clickGroup,
             screenPoint: point,
             windowLocalPoint: windowLocalPoint
         )
@@ -228,8 +228,12 @@ struct MouseEventPoster: Sendable {
             x: point.x - windowBounds.x,
             y: point.y - windowBounds.y
         )
-        let offScreenPrimerPoint = CGPoint(x: -1, y: -1)
-        let clickGroup = Int64(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) & 0x7fff_ffff)
+        let primerScreenPoint = CGPoint(
+            x: windowBounds.x - 1,
+            y: windowBounds.y + max(windowBounds.height - 1, 0)
+        )
+        let primerWindowLocalPoint = CGPoint(x: -1, y: max(windowBounds.height - 1, 0))
+        let gestureTimestamp = uptimeSeconds()
 
         let move = try makeMouseEvent(type: .mouseMoved, windowId: windowId, clickCount: 0)
         let primerDown = try makeMouseEvent(type: .leftMouseDown, windowId: windowId, clickCount: 1)
@@ -241,8 +245,7 @@ struct MouseEventPoster: Sendable {
             move,
             pid: pid,
             windowId: windowId,
-            mouseEventNumber: 2,
-            clickGroup: clickGroup,
+            mouseEventNumber: 0,
             screenPoint: point,
             windowLocalPoint: targetWindowLocalPoint
         )
@@ -251,25 +254,22 @@ struct MouseEventPoster: Sendable {
             pid: pid,
             windowId: windowId,
             mouseEventNumber: 1,
-            clickGroup: clickGroup,
-            screenPoint: offScreenPrimerPoint,
-            windowLocalPoint: offScreenPrimerPoint
+            screenPoint: primerScreenPoint,
+            windowLocalPoint: primerWindowLocalPoint
         )
         try stamp(
             primerUp,
             pid: pid,
             windowId: windowId,
             mouseEventNumber: 2,
-            clickGroup: clickGroup,
-            screenPoint: offScreenPrimerPoint,
-            windowLocalPoint: offScreenPrimerPoint
+            screenPoint: primerScreenPoint,
+            windowLocalPoint: primerWindowLocalPoint
         )
         try stamp(
             targetDown,
             pid: pid,
             windowId: windowId,
-            mouseEventNumber: 3,
-            clickGroup: clickGroup,
+            mouseEventNumber: 1,
             screenPoint: point,
             windowLocalPoint: targetWindowLocalPoint
         )
@@ -277,26 +277,25 @@ struct MouseEventPoster: Sendable {
             targetUp,
             pid: pid,
             windowId: windowId,
-            mouseEventNumber: 3,
-            clickGroup: clickGroup,
+            mouseEventNumber: 1,
             screenPoint: point,
             windowLocalPoint: targetWindowLocalPoint
         )
 
-        try postSkyLight(move, pid: pid)
+        try postSkyLight(move, pid: pid, timestamp: gestureTimestamp)
         try await stageObserver?(.afterMouseMoved)
         sleep(15_000)
-        try postSkyLight(primerDown, pid: pid)
+        try postSkyLight(primerDown, pid: pid, timestamp: gestureTimestamp)
         try await stageObserver?(.afterPrimerDown)
         sleep(1_000)
-        try postSkyLight(primerUp, pid: pid)
+        try postSkyLight(primerUp, pid: pid, timestamp: gestureTimestamp)
         try await stageObserver?(.afterPrimerUp)
         sleep(100_000)
         try await stageObserver?(.afterPrimerGap)
-        try postSkyLight(targetDown, pid: pid)
+        try postSkyLight(targetDown, pid: pid, timestamp: gestureTimestamp)
         try await stageObserver?(.afterTargetDown)
         sleep(1_000)
-        try postSkyLight(targetUp, pid: pid)
+        try postSkyLight(targetUp, pid: pid, timestamp: gestureTimestamp)
         try await stageObserver?(.afterTargetUp)
     }
 
@@ -331,7 +330,6 @@ struct MouseEventPoster: Sendable {
         pid: pid_t,
         windowId: CGWindowID,
         mouseEventNumber: Int64,
-        clickGroup: Int64,
         screenPoint: CGPoint,
         windowLocalPoint: CGPoint
     ) throws {
@@ -349,7 +347,6 @@ struct MouseEventPoster: Sendable {
         try setIntegerField(event, 0, mouseEventNumber)
         try setIntegerField(event, 40, Int64(pid))
         try setIntegerField(event, 51, rawWindowId)
-        try setIntegerField(event, 58, clickGroup)
         try setIntegerField(event, 91, rawWindowId)
         try setIntegerField(event, 92, rawWindowId)
     }
@@ -359,8 +356,8 @@ struct MouseEventPoster: Sendable {
         try postPublicEventToPID(event, pid)
     }
 
-    private func postSkyLight(_ event: CGEvent, pid: pid_t) throws {
-        event.timestamp = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+    private func postSkyLight(_ event: CGEvent, pid: pid_t, timestamp: CGEventTimestamp? = nil) throws {
+        event.timestamp = timestamp ?? clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         try postSkyLightEventToPID(event, pid)
     }
 }

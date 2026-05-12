@@ -8,7 +8,8 @@
 - 鼠标事件进入目标 pid/window。
 - 投放后目标窗口不留在被 raise 到前面的状态。
 
-当前结论只覆盖 general AppKit path。Chromium / Electron web content 仍需要进一步测试。
+本文只描述 general AppKit path。Chromium / Electron web content 使用单独的
+SkyLight route，见 `docs/research/bgclick-chromium.md`。
 
 ## Core Idea
 
@@ -181,7 +182,7 @@ SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: defocus))
 
 这条链路把四个问题拆开处理：
 
-1. **Input routing**：standard target-side `SLPSPostEventRecordTo` focus/key-window records
+1. **Input routing**：standard target-side `SLPSPostEventRecordTo` focus record
    让目标 AppKit 窗口相信自己可接收输入。
 2. **Event delivery**：pid-scoped `CGEvent.postToPid` 把鼠标事件送进目标进程，不碰全局 HID cursor。
 3. **Visual order preservation**：`WindowOrderGuardian + AXRaise` 把点击造成的 delayed raise 副作用压回去。
@@ -223,35 +224,11 @@ background click core path。
 
 ## Known Limits
 
-- Chromium / Electron web content uses a separate `post-left-click` delivery
-  route instead of replacing the proven AppKit route.
-
-  Implemented split:
-
-  - Keep the current general AppKit route as-is:
-    `mouseMoved -> leftMouseDown -> leftMouseUp`, delivered once through
-    public `CGEvent.postToPid`.
-  - Classify Chromium-family browsers and Electron bundles before mouse
-    delivery. The outer click chain remains the same: validate ownership,
-    target-side focus without raise, per-stage order repair, delayed order
-    guard, and target-side deactivation.
-  - For Chromium / Electron, use a dedicated SkyLight mouse recipe:
-    `mouseMoved(target) -> leftDown/leftUp(off-screen primer) ->
-    leftDown/leftUp(target)`, delivered via `SLEventPostToPid` without an
-    authentication message. The primer is part of the delivery contract; do not
-    silently fall back to the AppKit path if this route fails.
-  - The Chromium / Electron route must continue stamping target pid, window
-    identity, click state, and window-local coordinates on each event.
-  - Safari / WebKit remains out of scope for this route. CUA's Safari tests
-    validate AX and keyboard paths; they explicitly mark pixel clicks into
-    Safari web content as known non-delivery.
-
-- Chromium / Electron route 仍需要真实 Chrome / Electron target 的 live
-  validation。当前实现按 CUA recipe 纳入 SkyLight route 和 off-screen primer；
-  若 live 验证失败，不应 fallback 到 AppKit route，而应继续收集 renderer
-  trust-gate 所需的 event fields / timing evidence。
+- Chromium / Electron web content is not part of this AppKit route. Its current
+  working route is documented in `docs/research/bgclick-chromium.md`.
+- Safari / WebKit remains out of scope for pixel background clicks.
 - CLI 版本用同步 300ms guard 模拟常驻 observer。长期形态应迁入 AOS app 进程，做真正
-  的 `WindowOrderingObserver`，减少命令返回延迟，并更接近 Codex Computer Use。
+  的 `WindowOrderingObserver`，减少命令返回延迟。
 - repair 依赖 Accessibility permission，因为当前 primitive 是 `AXRaise`。
 - 目标窗口必须是当前 Space 上可见的 layer-0 window；隐藏、最小化、跨 Space 的窗口
   不在当前已验证范围内。
@@ -259,11 +236,11 @@ background click core path。
 ## Implementation Map
 
 - `SkyLightWindowFocuser`
-  - standard target-side focus/key-window records for mouse routing and explicit focus.
+  - standard target-side focus record for mouse routing and explicit focus.
   - target-side defocus record for post-dispatch background active cleanup.
 
 - `MouseEventPoster`
-  - create/stamp/post pid-scoped move/down/up events.
+  - create/stamp/post AppKit-route pid-scoped move/down/up events.
 
 - `WindowOrderGuardian`
   - capture protected overlapping windows before click.
