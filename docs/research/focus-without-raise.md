@@ -95,8 +95,8 @@ focuser. A pid/window mismatch fails before any private event is posted.
 ## Background Click Integration
 
 `postLeftClick` uses this same target-side focus step before event delivery. The
-outer click chain is responsible for mouse dispatch, order repair, front-window
-restore, and target cleanup.
+outer click chain is responsible for mouse dispatch, active-state guarding,
+front-window restore, and target cleanup.
 
 After dispatch, if the target was not originally the front window, cleanup posts
 a target-side defocus event:

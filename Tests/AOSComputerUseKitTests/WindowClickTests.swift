@@ -399,8 +399,8 @@ struct WindowClickTests {
         ])
     }
 
-    @Test("reactivates the original front application when delayed guard repairs order")
-    func reactivatesOriginalFrontApplicationWhenDelayedGuardRepairsOrder() async throws {
+    @Test("reactivates the original front application when delayed guard observes order drift")
+    func reactivatesOriginalFrontApplicationWhenDelayedGuardObservesOrderDrift() async throws {
         let recorder = ClickChainRecorder()
         let target = Self.window(id: 300, pid: 30, owner: "Chrome", zIndex: 1)
         let protected = Self.window(id: 100, pid: 10, owner: "Ghostty", zIndex: 2)
@@ -429,11 +429,8 @@ struct WindowClickTests {
                 await recorder.recordActivate(pid: pid)
                 return true
             },
-            raiseWindowWithoutActivating: { window in
-                await recorder.recordRaise(pid: window.pid, windowId: window.id)
-            },
-            orderRepairDelays: [0],
-            sleepForOrderRepair: { _ in },
+            activeStateGuardDelays: [0],
+            sleepForActiveStateGuard: { _ in },
             postLeftClick: { pid, windowId, point, windowBounds, _ in
                 await recorder.recordClick(
                     pid: pid,
@@ -457,7 +454,6 @@ struct WindowClickTests {
             .focus(pid: 10, windowId: 100),
             .deactivate(pid: 30, windowId: 300),
             .activate(pid: 10),
-            .raise(pid: 10, windowId: 100),
             .focus(pid: 10, windowId: 100),
             .activate(pid: 10),
         ])
@@ -496,8 +492,8 @@ struct WindowClickTests {
             isApplicationActive: { _ in
                 activeStates.next()
             },
-            orderRepairDelays: [0],
-            sleepForOrderRepair: { _ in },
+            activeStateGuardDelays: [0],
+            sleepForActiveStateGuard: { _ in },
             postLeftClick: { pid, windowId, point, windowBounds, _ in
                 await recorder.recordClick(
                     pid: pid,
@@ -525,8 +521,8 @@ struct WindowClickTests {
         ])
     }
 
-    @Test("repairs protected windows when target deactivation triggers a late raise")
-    func repairsProtectedWindowsWhenTargetDeactivationTriggersLateRaise() async throws {
+    @Test("restores original front focus when target deactivation triggers a late raise")
+    func restoresOriginalFrontFocusWhenTargetDeactivationTriggersLateRaise() async throws {
         let recorder = ClickChainRecorder()
         let target = Self.window(id: 300, pid: 30, owner: "Chrome", zIndex: 1)
         let protected = Self.window(id: 100, pid: 10, owner: "Ghostty", zIndex: 2)
@@ -550,11 +546,8 @@ struct WindowClickTests {
             deactivateWindowWithoutRaising: { pid, windowId in
                 await recorder.recordDeactivate(pid: pid, windowId: windowId)
             },
-            raiseWindowWithoutActivating: { window in
-                await recorder.recordRaise(pid: window.pid, windowId: window.id)
-            },
-            orderRepairDelays: [0],
-            sleepForOrderRepair: { _ in },
+            activeStateGuardDelays: [0],
+            sleepForActiveStateGuard: { _ in },
             postLeftClick: { pid, windowId, point, windowBounds, _ in
                 await recorder.recordClick(
                     pid: pid,
@@ -577,13 +570,12 @@ struct WindowClickTests {
             ),
             .focus(pid: 10, windowId: 100),
             .deactivate(pid: 30, windowId: 300),
-            .raise(pid: 10, windowId: 100),
             .focus(pid: 10, windowId: 100),
         ])
     }
 
-    @Test("runs post-dispatch cleanup before delayed repair guard")
-    func runsPostDispatchCleanupBeforeDelayedRepairGuard() async throws {
+    @Test("runs post-dispatch cleanup before delayed active-state guard")
+    func runsPostDispatchCleanupBeforeDelayedActiveStateGuard() async throws {
         let recorder = ClickChainRecorder()
         let target = Self.window(id: 300, pid: 30, owner: "Chrome", zIndex: 1)
         let protected = Self.window(id: 100, pid: 10, owner: "Ghostty", zIndex: 2)
@@ -613,11 +605,8 @@ struct WindowClickTests {
                 await recorder.recordActivate(pid: pid)
                 return true
             },
-            raiseWindowWithoutActivating: { window in
-                await recorder.recordRaise(pid: window.pid, windowId: window.id)
-            },
-            orderRepairDelays: [0, 1],
-            sleepForOrderRepair: { _ in },
+            activeStateGuardDelays: [0, 1],
+            sleepForActiveStateGuard: { _ in },
             postLeftClick: { pid, windowId, point, windowBounds, stageObserver in
                 await recorder.recordClick(
                     pid: pid,
@@ -642,14 +631,13 @@ struct WindowClickTests {
             .focus(pid: 10, windowId: 100),
             .deactivate(pid: 30, windowId: 300),
             .activate(pid: 10),
-            .raise(pid: 10, windowId: 100),
             .focus(pid: 10, windowId: 100),
             .activate(pid: 10),
         ])
     }
 
-    @Test("uses the order repair cadence after post-dispatch cleanup")
-    func usesOrderRepairCadenceAfterPostDispatchCleanup() async throws {
+    @Test("uses the active-state guard cadence after post-dispatch cleanup")
+    func usesActiveStateGuardCadenceAfterPostDispatchCleanup() async throws {
         let recorder = ClickChainRecorder()
         let target = Self.window(id: 300, pid: 30, owner: "Chrome", zIndex: 1)
         let protected = Self.window(id: 100, pid: 10, owner: "Ghostty", zIndex: 2)
@@ -680,11 +668,8 @@ struct WindowClickTests {
                 await recorder.recordActivate(pid: pid)
                 return true
             },
-            raiseWindowWithoutActivating: { window in
-                await recorder.recordRaise(pid: window.pid, windowId: window.id)
-            },
-            orderRepairDelays: [0, 1, 1],
-            sleepForOrderRepair: { _ in },
+            activeStateGuardDelays: [0, 1, 1],
+            sleepForActiveStateGuard: { _ in },
             postLeftClick: { pid, windowId, point, windowBounds, stageObserver in
                 await recorder.recordClick(
                     pid: pid,
@@ -709,14 +694,13 @@ struct WindowClickTests {
             .focus(pid: 10, windowId: 100),
             .deactivate(pid: 30, windowId: 300),
             .activate(pid: 10),
-            .raise(pid: 10, windowId: 100),
             .focus(pid: 10, windowId: 100),
             .activate(pid: 10),
         ])
     }
 
-    @Test("repairs order from a window-order notification before post-dispatch cleanup")
-    func repairsOrderFromWindowOrderNotificationBeforePostDispatchCleanup() async throws {
+    @Test("guards active state from a window-order notification before post-dispatch cleanup")
+    func guardsActiveStateFromWindowOrderNotificationBeforePostDispatchCleanup() async throws {
         let recorder = ClickChainRecorder()
         let orderObserver = ManualWindowOrderChangeObserver()
         let target = Self.window(id: 300, pid: 30, owner: "Chrome", zIndex: 1)
@@ -745,12 +729,9 @@ struct WindowClickTests {
                 await recorder.recordActivate(pid: pid)
                 return true
             },
-            raiseWindowWithoutActivating: { window in
-                await recorder.recordRaise(pid: window.pid, windowId: window.id)
-            },
             windowOrderChangeObserver: orderObserver.observer,
-            orderRepairDelays: [],
-            sleepForOrderRepair: { _ in },
+            activeStateGuardDelays: [],
+            sleepForActiveStateGuard: { _ in },
             postLeftClick: { pid, windowId, point, windowBounds, _ in
                 await recorder.recordClick(
                     pid: pid,
@@ -773,7 +754,6 @@ struct WindowClickTests {
                 point: CGPoint(x: 150, y: 50),
                 windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
             ),
-            .raise(pid: 10, windowId: 100),
             .focus(pid: 10, windowId: 100),
             .activate(pid: 10),
             .focus(pid: 10, windowId: 100),
@@ -782,8 +762,8 @@ struct WindowClickTests {
         ])
     }
 
-    @Test("trace records repair guard ticks and post-guard settle samples")
-    func traceRecordsRepairGuardTicksAndPostGuardSettleSamples() async throws {
+    @Test("trace records active-state guard ticks and post-guard settle samples")
+    func traceRecordsActiveStateGuardTicksAndPostGuardSettleSamples() async throws {
         let recorder = ClickChainRecorder()
         let target = Self.window(id: 300, pid: 30, owner: "Chrome", zIndex: 1)
         let protected = Self.window(id: 100, pid: 10, owner: "Ghostty", zIndex: 2)
@@ -817,11 +797,8 @@ struct WindowClickTests {
             deactivateWindowWithoutRaising: { pid, windowId in
                 await recorder.recordDeactivate(pid: pid, windowId: windowId)
             },
-            raiseWindowWithoutActivating: { window in
-                await recorder.recordRaise(pid: window.pid, windowId: window.id)
-            },
-            orderRepairDelays: [0, 1],
-            sleepForOrderRepair: { _ in },
+            activeStateGuardDelays: [0, 1],
+            sleepForActiveStateGuard: { _ in },
             postLeftClick: { pid, windowId, point, windowBounds, _ in
                 await recorder.recordClick(
                     pid: pid,
@@ -837,18 +814,18 @@ struct WindowClickTests {
             windowId: 300,
             point: CGPoint(x: 150, y: 50)
         )
-        let repairTicks = trace.snapshots.filter { $0.stage == .repairGuardTick }
+        let guardTicks = trace.snapshots.filter { $0.stage == .activeStateGuardTick }
 
-        #expect(repairTicks.map(\.repairAttempt) == [0, 1])
-        #expect(repairTicks.map(\.elapsedNanoseconds) == [0, 1])
-        #expect(repairTicks.map(\.repaired) == [false, true])
+        #expect(guardTicks.map(\.guardAttempt) == [0, 1])
+        #expect(guardTicks.map(\.elapsedNanoseconds) == [0, 1])
+        #expect(guardTicks.map(\.corrected) == [false, true])
         #expect(trace.snapshots.contains(where: { $0.stage == .afterTraceSettle50ms }))
         #expect(trace.snapshots.contains(where: { $0.stage == .afterTraceSettle200ms }))
         #expect(trace.snapshots.contains(where: { $0.stage == .afterTraceSettle1s }))
     }
 
-    @Test("repairs protected windows when the target crosses them after a click")
-    func repairsProtectedWindowsWhenTargetCrossesThemAfterClick() async throws {
+    @Test("restores original front focus when the target crosses protected windows after a click")
+    func restoresOriginalFrontFocusWhenTargetCrossesProtectedWindowsAfterClick() async throws {
         let recorder = ClickChainRecorder()
         let target = Self.window(id: 300, pid: 30, owner: "Safari", zIndex: 1)
         let protectedFront = Self.window(id: 100, pid: 10, owner: "Ghostty", zIndex: 3)
@@ -876,11 +853,8 @@ struct WindowClickTests {
             },
             deactivateWindowWithoutRaising: { _, _ in
             },
-            raiseWindowWithoutActivating: { window in
-                await recorder.recordRaise(pid: window.pid, windowId: window.id)
-            },
-            orderRepairDelays: [0, 1],
-            sleepForOrderRepair: { _ in },
+            activeStateGuardDelays: [0, 1],
+            sleepForActiveStateGuard: { _ in },
             postLeftClick: { pid, windowId, point, windowBounds, _ in
                 await recorder.recordClick(
                     pid: pid,
@@ -902,14 +876,12 @@ struct WindowClickTests {
                 windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
             ),
             .focus(pid: 10, windowId: 100),
-            .raise(pid: 20, windowId: 200),
-            .raise(pid: 10, windowId: 100),
             .focus(pid: 10, windowId: 100),
         ])
     }
 
-    @Test("repairs protected windows immediately after a mouse post stage")
-    func repairsProtectedWindowsImmediatelyAfterMousePostStage() async throws {
+    @Test("restores original front focus immediately after a mouse post stage")
+    func restoresOriginalFrontFocusImmediatelyAfterMousePostStage() async throws {
         let recorder = ClickChainRecorder()
         let target = Self.window(id: 300, pid: 30, owner: "Safari", zIndex: 1)
         let protected = Self.window(id: 100, pid: 10, owner: "Ghostty", zIndex: 2)
@@ -933,11 +905,8 @@ struct WindowClickTests {
             },
             deactivateWindowWithoutRaising: { _, _ in
             },
-            raiseWindowWithoutActivating: { window in
-                await recorder.recordRaise(pid: window.pid, windowId: window.id)
-            },
-            orderRepairDelays: [0],
-            sleepForOrderRepair: { _ in },
+            activeStateGuardDelays: [0],
+            sleepForActiveStateGuard: { _ in },
             postLeftClick: { pid, windowId, point, windowBounds, stageObserver in
                 await recorder.recordClick(
                     pid: pid,
@@ -959,14 +928,13 @@ struct WindowClickTests {
                 point: CGPoint(x: 150, y: 50),
                 windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
             ),
-            .raise(pid: 10, windowId: 100),
             .focus(pid: 10, windowId: 100),
             .focus(pid: 10, windowId: 100),
         ])
     }
 
-    @Test("does not repair windows that were already below the target before clicking")
-    func doesNotRepairWindowsOriginallyBelowTarget() async throws {
+    @Test("does not react to windows that were already below the target before clicking")
+    func doesNotReactToWindowsOriginallyBelowTarget() async throws {
         let recorder = ClickChainRecorder()
         let target = Self.window(id: 300, pid: 30, owner: "Safari", zIndex: 2)
         let protected = Self.window(id: 100, pid: 10, owner: "Ghostty", zIndex: 3)
@@ -992,11 +960,8 @@ struct WindowClickTests {
             },
             deactivateWindowWithoutRaising: { _, _ in
             },
-            raiseWindowWithoutActivating: { window in
-                await recorder.recordRaise(pid: window.pid, windowId: window.id)
-            },
-            orderRepairDelays: [0, 1],
-            sleepForOrderRepair: { _ in },
+            activeStateGuardDelays: [0, 1],
+            sleepForActiveStateGuard: { _ in },
             postLeftClick: { pid, windowId, point, windowBounds, _ in
                 await recorder.recordClick(
                     pid: pid,
@@ -1009,16 +974,21 @@ struct WindowClickTests {
 
         _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
 
-        #expect(await recorder.events.filter {
-            if case .raise = $0 { return true }
-            return false
-        } == [
-            .raise(pid: 10, windowId: 100),
+        #expect(await recorder.events == [
+            .focus(pid: 30, windowId: 300),
+            .click(
+                pid: 30,
+                windowId: 300,
+                point: CGPoint(x: 150, y: 50),
+                windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
+            ),
+            .focus(pid: 10, windowId: 100),
+            .focus(pid: 10, windowId: 100),
         ])
     }
 
-    @Test("does not repair non-overlapping windows that were globally above the target")
-    func doesNotRepairNonOverlappingWindowsAboveTarget() async throws {
+    @Test("ignores non-overlapping windows during user-window protection")
+    func ignoresNonOverlappingWindowsDuringUserWindowProtection() async throws {
         let recorder = ClickChainRecorder()
         let target = Self.window(id: 300, pid: 30, owner: "Safari", zIndex: 1)
         let overlappingFront = Self.window(id: 100, pid: 10, owner: "WeChat", zIndex: 3)
@@ -1031,7 +1001,6 @@ struct WindowClickTests {
         )
         let snapshots = WindowSnapshotScript([
             [overlappingFront, nonOverlappingFront, target],
-            [target, overlappingFront, nonOverlappingFront],
             [overlappingFront, target, nonOverlappingFront],
         ])
         let core = ComputerUseCore(
@@ -1049,11 +1018,8 @@ struct WindowClickTests {
             },
             deactivateWindowWithoutRaising: { _, _ in
             },
-            raiseWindowWithoutActivating: { window in
-                await recorder.recordRaise(pid: window.pid, windowId: window.id)
-            },
-            orderRepairDelays: [0],
-            sleepForOrderRepair: { _ in },
+            activeStateGuardDelays: [0],
+            sleepForActiveStateGuard: { _ in },
             postLeftClick: { pid, windowId, point, windowBounds, _ in
                 await recorder.recordClick(
                     pid: pid,
@@ -1066,16 +1032,134 @@ struct WindowClickTests {
 
         _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
 
-        #expect(await recorder.events.filter {
-            if case .raise = $0 { return true }
-            return false
-        } == [
-            .raise(pid: 10, windowId: 100),
+        #expect(await recorder.events == [
+            .focus(pid: 30, windowId: 300),
+            .click(
+                pid: 30,
+                windowId: 300,
+                point: CGPoint(x: 150, y: 50),
+                windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
+            ),
+            .focus(pid: 20, windowId: 200),
         ])
     }
 
-    @Test("continues repairing when the delayed target raise reappears")
-    func continuesRepairingWhenDelayedTargetRaiseReappears() async throws {
+    @Test("does not fail the delayed guard when no protected windows exist and target disappears")
+    func ignoresMissingTargetDuringDelayedGuardWhenNoProtectedWindowsExist() async throws {
+        let recorder = ClickChainRecorder()
+        let target = Self.window(id: 300, pid: 30, owner: "Safari", zIndex: 1)
+        let originalFront = Self.window(
+            id: 100,
+            pid: 10,
+            owner: "Ghostty",
+            zIndex: 2,
+            bounds: WindowBounds(x: 500, y: 0, width: 300, height: 100)
+        )
+        let snapshots = WindowSnapshotScript([
+            [originalFront, target],
+            [originalFront],
+        ])
+        let core = ComputerUseCore(
+            windowLookup: { windowId in
+                [target, originalFront].first { $0.id == windowId }
+            },
+            visibleWindowsLookup: {
+                snapshots.next()
+            },
+            frontmostWindowLookup: {
+                originalFront
+            },
+            focusWindowWithoutRaising: { pid, windowId in
+                await recorder.recordFocus(pid: pid, windowId: windowId)
+            },
+            deactivateWindowWithoutRaising: { _, _ in
+            },
+            activeStateGuardDelays: [0],
+            sleepForActiveStateGuard: { _ in },
+            postLeftClick: { pid, windowId, point, windowBounds, _ in
+                await recorder.recordClick(
+                    pid: pid,
+                    windowId: windowId,
+                    point: point,
+                    windowBounds: windowBounds
+                )
+            }
+        )
+
+        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
+
+        #expect(await recorder.events == [
+            .focus(pid: 30, windowId: 300),
+            .click(
+                pid: 30,
+                windowId: 300,
+                point: CGPoint(x: 150, y: 50),
+                windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
+            ),
+            .focus(pid: 10, windowId: 100),
+        ])
+    }
+
+    @Test("does not reorder a non-active cover when preserving the active window")
+    func doesNotReorderNonActiveCoverWhenPreservingActiveWindow() async throws {
+        let recorder = ClickChainRecorder()
+        let target = Self.window(id: 300, pid: 30, owner: "Chrome", zIndex: 1)
+        let activeFront = Self.window(
+            id: 100,
+            pid: 10,
+            owner: "Ghostty",
+            zIndex: 3,
+            bounds: WindowBounds(x: 500, y: 0, width: 300, height: 100)
+        )
+        let nonActiveCover = Self.window(id: 200, pid: 20, owner: "Finder", zIndex: 2)
+        let snapshots = WindowSnapshotScript([
+            [activeFront, nonActiveCover, target],
+            [target, activeFront, nonActiveCover],
+        ])
+        let core = ComputerUseCore(
+            windowLookup: { windowId in
+                [target, activeFront, nonActiveCover].first { $0.id == windowId }
+            },
+            visibleWindowsLookup: {
+                snapshots.next()
+            },
+            frontmostWindowLookup: {
+                activeFront
+            },
+            focusWindowWithoutRaising: { pid, windowId in
+                await recorder.recordFocus(pid: pid, windowId: windowId)
+            },
+            deactivateWindowWithoutRaising: { _, _ in
+            },
+            activeStateGuardDelays: [0],
+            sleepForActiveStateGuard: { _ in },
+            postLeftClick: { pid, windowId, point, windowBounds, _ in
+                await recorder.recordClick(
+                    pid: pid,
+                    windowId: windowId,
+                    point: point,
+                    windowBounds: windowBounds
+                )
+            }
+        )
+
+        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
+
+        #expect(await recorder.events == [
+            .focus(pid: 30, windowId: 300),
+            .click(
+                pid: 30,
+                windowId: 300,
+                point: CGPoint(x: 150, y: 50),
+                windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
+            ),
+            .focus(pid: 10, windowId: 100),
+            .focus(pid: 10, windowId: 100),
+        ])
+    }
+
+    @Test("continues guarding active state when delayed target raise reappears")
+    func continuesGuardingActiveStateWhenDelayedTargetRaiseReappears() async throws {
         let recorder = ClickChainRecorder()
         let target = Self.window(id: 300, pid: 30, owner: "Safari", zIndex: 1)
         let protectedFront = Self.window(id: 100, pid: 10, owner: "Ghostty", zIndex: 3)
@@ -1101,11 +1185,8 @@ struct WindowClickTests {
             },
             deactivateWindowWithoutRaising: { _, _ in
             },
-            raiseWindowWithoutActivating: { window in
-                await recorder.recordRaise(pid: window.pid, windowId: window.id)
-            },
-            orderRepairDelays: [0, 1, 1],
-            sleepForOrderRepair: { _ in },
+            activeStateGuardDelays: [0, 1, 1],
+            sleepForActiveStateGuard: { _ in },
             postLeftClick: { pid, windowId, point, windowBounds, _ in
                 await recorder.recordClick(
                     pid: pid,
@@ -1118,14 +1199,17 @@ struct WindowClickTests {
 
         _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
 
-        #expect(await recorder.events.filter {
-            if case .raise = $0 { return true }
-            return false
-        } == [
-            .raise(pid: 20, windowId: 200),
-            .raise(pid: 10, windowId: 100),
-            .raise(pid: 20, windowId: 200),
-            .raise(pid: 10, windowId: 100),
+        #expect(await recorder.events == [
+            .focus(pid: 30, windowId: 300),
+            .click(
+                pid: 30,
+                windowId: 300,
+                point: CGPoint(x: 150, y: 50),
+                windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
+            ),
+            .focus(pid: 10, windowId: 100),
+            .focus(pid: 10, windowId: 100),
+            .focus(pid: 10, windowId: 100),
         ])
     }
 
@@ -1399,10 +1483,6 @@ private actor ClickChainRecorder {
         ))
     }
 
-    func recordRaise(pid: pid_t, windowId: CGWindowID) {
-        recordedEvents.append(.raise(pid: pid, windowId: windowId))
-    }
-
     func recordDeactivate(pid: pid_t, windowId: CGWindowID) {
         recordedEvents.append(.deactivate(pid: pid, windowId: windowId))
     }
@@ -1414,7 +1494,6 @@ private actor ClickChainRecorder {
 
 private enum ClickChainEvent: Equatable {
     case focus(pid: pid_t, windowId: CGWindowID)
-    case raise(pid: pid_t, windowId: CGWindowID)
     case deactivate(pid: pid_t, windowId: CGWindowID)
     case activate(pid: pid_t)
     case click(pid: pid_t, windowId: CGWindowID, point: CGPoint, windowBounds: WindowBounds)

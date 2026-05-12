@@ -48,7 +48,7 @@ public struct WindowOrderObservationSample: Sendable, Hashable, Codable {
 /// This probe intentionally does not post input, raise windows, or repair
 /// anything. It captures the same visual-order invariant as
 /// ``WindowOrderGuardian`` so diagnostics can distinguish "no order change"
-/// from "order changed and was repaired fast enough to hide".
+/// from "order changed and was handled fast enough to hide".
 public struct WindowOrderProbe: Sendable {
     private let targetPID: pid_t
     private let targetWindowId: CGWindowID

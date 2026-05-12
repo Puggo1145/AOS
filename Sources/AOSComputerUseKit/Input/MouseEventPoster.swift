@@ -77,8 +77,8 @@ struct MouseClickDeliveryClassifier: Sendable {
 /// Chromium/Electron SkyLight route.
 ///
 /// Both routes construct NSEvent-bridged CGEvents, stamp window-local
-/// coordinates and private SkyLight fields, and rely on the core to repair
-/// WindowServer order after observable post stages.
+/// coordinates and private SkyLight fields, and rely on the core to run the
+/// active-state guard after observable post stages.
 struct MouseEventPoster: Sendable {
     typealias PostEventToPID = @Sendable (CGEvent, pid_t) throws -> Void
     typealias SetWindowLocation = @Sendable (CGEvent, CGPoint) throws -> Void

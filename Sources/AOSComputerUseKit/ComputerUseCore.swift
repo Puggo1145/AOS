@@ -70,8 +70,8 @@ public enum WindowClickTraceStage: String, Sendable, Codable, Equatable {
     case afterTargetUp
     case afterRestoreOriginalFrontWindow
     case afterTargetDeactivate
-    case repairGuardTick
-    case afterRepairGuard
+    case activeStateGuardTick
+    case afterActiveStateGuard
     case afterTraceSettle50ms
     case afterTraceSettle200ms
     case afterTraceSettle1s
@@ -86,8 +86,8 @@ public struct WindowClickTraceSnapshot: Sendable, Codable, Equatable {
     public let targetRank: Int?
     public let protectedCoveredCount: Int?
     public let elapsedNanoseconds: UInt64?
-    public let repairAttempt: Int?
-    public let repaired: Bool?
+    public let guardAttempt: Int?
+    public let corrected: Bool?
 
     public init(
         stage: WindowClickTraceStage,
@@ -98,8 +98,8 @@ public struct WindowClickTraceSnapshot: Sendable, Codable, Equatable {
         targetRank: Int?,
         protectedCoveredCount: Int?,
         elapsedNanoseconds: UInt64? = nil,
-        repairAttempt: Int? = nil,
-        repaired: Bool? = nil
+        guardAttempt: Int? = nil,
+        corrected: Bool? = nil
     ) {
         self.stage = stage
         self.frontmostPID = frontmostPID
@@ -109,8 +109,8 @@ public struct WindowClickTraceSnapshot: Sendable, Codable, Equatable {
         self.targetRank = targetRank
         self.protectedCoveredCount = protectedCoveredCount
         self.elapsedNanoseconds = elapsedNanoseconds
-        self.repairAttempt = repairAttempt
-        self.repaired = repaired
+        self.guardAttempt = guardAttempt
+        self.corrected = corrected
     }
 }
 
@@ -172,10 +172,9 @@ public actor ComputerUseCore {
     private let deactivateWindowWithoutRaising: @Sendable (pid_t, CGWindowID) async throws -> Void
     private let activateApplication: @Sendable (pid_t) async -> Bool
     private let isApplicationActive: @Sendable (pid_t) async -> Bool
-    private let raiseWindowWithoutActivating: @Sendable (WindowInfo) async throws -> Void
     private let windowOrderChangeObserver: WindowOrderChangeObserver?
-    private let orderRepairDelays: [UInt64]
-    private let sleepForOrderRepair: @Sendable (UInt64) async throws -> Void
+    private let activeStateGuardDelays: [UInt64]
+    private let sleepForActiveStateGuard: @Sendable (UInt64) async throws -> Void
     private let postLeftClickEvent: @Sendable (
         pid_t,
         CGWindowID,
@@ -189,7 +188,6 @@ public actor ComputerUseCore {
         let windowFocuser = SkyLightWindowFocuser.live()
         let mousePoster = MouseEventPoster.live()
         let mouseDeliveryClassifier = MouseClickDeliveryClassifier()
-        let windowRaiser = AXWindowRaiser.live()
         let deliveryRouteForPID: @Sendable (pid_t) -> MouseClickDeliveryRoute = { pid in
             let app = NSRunningApplication(processIdentifier: pid)
             return mouseDeliveryClassifier.deliveryRoute(
@@ -230,12 +228,9 @@ public actor ComputerUseCore {
                     NSRunningApplication(processIdentifier: pid)?.isActive ?? false
                 }
             },
-            raiseWindowWithoutActivating: { window in
-                try windowRaiser.raise(window)
-            },
             windowOrderChangeObserver: .live(),
-            orderRepairDelays: Self.liveOrderRepairDelays,
-            sleepForOrderRepair: { delay in
+            activeStateGuardDelays: Self.liveActiveStateGuardDelays,
+            sleepForActiveStateGuard: { delay in
                 try await Task.sleep(nanoseconds: delay)
             },
             postLeftClick: { pid, windowId, point, windowBounds, stageObserver in
@@ -264,10 +259,9 @@ public actor ComputerUseCore {
         deactivateWindowWithoutRaising: @escaping @Sendable (pid_t, CGWindowID) async throws -> Void,
         activateApplication: @escaping @Sendable (pid_t) async -> Bool = { _ in false },
         isApplicationActive: @escaping @Sendable (pid_t) async -> Bool = { _ in false },
-        raiseWindowWithoutActivating: @escaping @Sendable (WindowInfo) async throws -> Void = { _ in },
         windowOrderChangeObserver: WindowOrderChangeObserver? = nil,
-        orderRepairDelays: [UInt64] = [],
-        sleepForOrderRepair: @escaping @Sendable (UInt64) async throws -> Void = { _ in },
+        activeStateGuardDelays: [UInt64] = [],
+        sleepForActiveStateGuard: @escaping @Sendable (UInt64) async throws -> Void = { _ in },
         postLeftClick: @escaping @Sendable (
             pid_t,
             CGWindowID,
@@ -291,10 +285,9 @@ public actor ComputerUseCore {
         self.deactivateWindowWithoutRaising = deactivateWindowWithoutRaising
         self.activateApplication = activateApplication
         self.isApplicationActive = isApplicationActive
-        self.raiseWindowWithoutActivating = raiseWindowWithoutActivating
         self.windowOrderChangeObserver = windowOrderChangeObserver
-        self.orderRepairDelays = orderRepairDelays
-        self.sleepForOrderRepair = sleepForOrderRepair
+        self.activeStateGuardDelays = activeStateGuardDelays
+        self.sleepForActiveStateGuard = sleepForActiveStateGuard
         self.postLeftClickEvent = postLeftClick
     }
 
@@ -397,7 +390,7 @@ public actor ComputerUseCore {
         let originalFrontWindow = frontmostWindowLookup()
         let orderGuardian = try makeWindowOrderGuardian(targetWindowId: windowId)
         let traceRecorder = tracing ? WindowClickTraceRecorder() : nil
-        let orderChangeObservation = try await startWindowOrderChangeRepair(
+        let orderChangeObservation = try await startWindowOrderChangeGuard(
             orderGuardian,
             originalFrontWindow: originalFrontWindow,
             targetWindowId: windowId,
@@ -424,8 +417,8 @@ public actor ComputerUseCore {
                 )
             }
             try await postLeftClickEvent(pid, windowId, point, window.bounds) { [self] stage in
-                if stage.repairsWindowOrder {
-                    try await self.repairWindowOrderOnce(
+                if stage.runsActiveStateGuard {
+                    try await self.runActiveStateGuardOnce(
                         orderGuardian,
                         originalFrontWindow: originalFrontWindow,
                         targetWindowId: windowId
@@ -446,16 +439,16 @@ public actor ComputerUseCore {
                 orderGuardian: orderGuardian,
                 traceRecorder: traceRecorder
             )
-            try await repairWindowOrder(
+            try await runActiveStateGuard(
                 orderGuardian,
                 originalFrontWindow: originalFrontWindow,
                 targetWindowId: windowId,
                 traceRecorder: traceRecorder,
                 targetPID: pid,
-                delays: orderRepairDelays
+                delays: activeStateGuardDelays
             )
             await recordTraceStage(
-                .afterRepairGuard,
+                .afterActiveStateGuard,
                 recorder: traceRecorder,
                 targetPID: pid,
                 targetWindowId: windowId,
@@ -555,7 +548,7 @@ public actor ComputerUseCore {
     }
 
     private func makeWindowOrderGuardian(targetWindowId: CGWindowID) throws -> WindowOrderGuardian? {
-        guard windowOrderChangeObserver != nil || !orderRepairDelays.isEmpty else {
+        guard windowOrderChangeObserver != nil || !activeStateGuardDelays.isEmpty else {
             return nil
         }
         return try WindowOrderGuardian(
@@ -564,7 +557,7 @@ public actor ComputerUseCore {
         )
     }
 
-    private func startWindowOrderChangeRepair(
+    private func startWindowOrderChangeGuard(
         _ orderGuardian: WindowOrderGuardian?,
         originalFrontWindow: WindowInfo?,
         targetWindowId: CGWindowID,
@@ -576,7 +569,7 @@ public actor ComputerUseCore {
         return try await windowOrderChangeObserver.observe(
             windowIds: orderGuardian.observedWindowIds
         ) { [self] _ in
-            try await self.repairWindowOrder(
+            try await self.runActiveStateGuard(
                 orderGuardian,
                 originalFrontWindow: originalFrontWindow,
                 targetWindowId: targetWindowId,
@@ -586,7 +579,7 @@ public actor ComputerUseCore {
         }
     }
 
-    private func repairWindowOrder(
+    private func runActiveStateGuard(
         _ orderGuardian: WindowOrderGuardian?,
         originalFrontWindow: WindowInfo?,
         targetWindowId: CGWindowID,
@@ -597,10 +590,10 @@ public actor ComputerUseCore {
         var elapsed: UInt64 = 0
         for (attempt, delay) in delays.enumerated() {
             if delay > 0 {
-                try await sleepForOrderRepair(delay)
+                try await sleepForActiveStateGuard(delay)
                 elapsed += delay
             }
-            let repairedOrder = try await repairWindowOrderOnce(
+            let orderDriftObserved = try await runActiveStateGuardOnce(
                 orderGuardian,
                 originalFrontWindow: originalFrontWindow,
                 targetWindowId: targetWindowId
@@ -610,8 +603,8 @@ public actor ComputerUseCore {
                 originalFrontWindow: originalFrontWindow,
                 targetWindowId: targetWindowId
             )
-            let repaired = repairedOrder || targetActive
-            if repaired {
+            let corrected = orderDriftObserved || targetActive
+            if corrected {
                 await reactivateOriginalFrontApplicationIfNeeded(
                     originalFrontWindow,
                     targetWindowId: targetWindowId
@@ -619,14 +612,14 @@ public actor ComputerUseCore {
             }
             if let traceRecorder, let targetPID {
                 await recordTraceStage(
-                    .repairGuardTick,
+                    .activeStateGuardTick,
                     recorder: traceRecorder,
                     targetPID: targetPID,
                     targetWindowId: targetWindowId,
                     orderGuardian: orderGuardian,
                     elapsedNanoseconds: elapsed,
-                    repairAttempt: attempt,
-                    repaired: repaired
+                    guardAttempt: attempt,
+                    corrected: corrected
                 )
             }
         }
@@ -644,7 +637,7 @@ public actor ComputerUseCore {
     }
 
     @discardableResult
-    private func repairWindowOrderOnce(
+    private func runActiveStateGuardOnce(
         _ orderGuardian: WindowOrderGuardian?,
         originalFrontWindow: WindowInfo?,
         targetWindowId: CGWindowID
@@ -652,13 +645,13 @@ public actor ComputerUseCore {
         guard let orderGuardian else {
             return false
         }
-        let repaired = try await orderGuardian.repair(currentWindows: visibleWindowsLookup()) { window in
-            try await raiseWindowWithoutActivating(window)
-        }
-        if repaired {
+        let orderDriftObserved = try orderGuardian.targetCrossedProtectedWindow(
+            currentWindows: visibleWindowsLookup()
+        )
+        if orderDriftObserved {
             try await restoreOriginalFrontWindow(originalFrontWindow, targetWindowId: targetWindowId)
         }
-        return repaired
+        return orderDriftObserved
     }
 
     private func recordTraceStage(
@@ -668,8 +661,8 @@ public actor ComputerUseCore {
         targetWindowId: CGWindowID,
         orderGuardian: WindowOrderGuardian?,
         elapsedNanoseconds: UInt64? = nil,
-        repairAttempt: Int? = nil,
-        repaired: Bool? = nil,
+        guardAttempt: Int? = nil,
+        corrected: Bool? = nil,
         currentWindows providedCurrentWindows: [WindowInfo]? = nil
     ) async {
         guard let recorder else {
@@ -691,8 +684,8 @@ public actor ComputerUseCore {
             targetRank: targetRank,
             protectedCoveredCount: orderGuardian?.protectedCoveredCount(currentWindows: currentWindows),
             elapsedNanoseconds: elapsedNanoseconds,
-            repairAttempt: repairAttempt,
-            repaired: repaired
+            guardAttempt: guardAttempt,
+            corrected: corrected
         ))
     }
 
@@ -708,7 +701,7 @@ public actor ComputerUseCore {
             (.afterTraceSettle1s, 800_000_000),
         ]
         for sample in samples {
-            try await sleepForOrderRepair(sample.delay)
+            try await sleepForActiveStateGuard(sample.delay)
             await recordTraceStage(
                 sample.stage,
                 recorder: recorder,
@@ -765,13 +758,13 @@ public actor ComputerUseCore {
 }
 
 private extension ComputerUseCore {
-    static let liveOrderRepairInterval: UInt64 = 5_000_000
-    static let liveOrderRepairWindow: UInt64 = 300_000_000
-    static let liveOrderRepairDelays: [UInt64] = [
+    static let liveActiveStateGuardInterval: UInt64 = 5_000_000
+    static let liveActiveStateGuardWindow: UInt64 = 300_000_000
+    static let liveActiveStateGuardDelays: [UInt64] = [
         0,
     ] + Array(
-        repeating: liveOrderRepairInterval,
-        count: Int(liveOrderRepairWindow / liveOrderRepairInterval)
+        repeating: liveActiveStateGuardInterval,
+        count: Int(liveActiveStateGuardWindow / liveActiveStateGuardInterval)
     )
 
     static func currentFrontmostLayerZeroWindow() -> WindowInfo? {
@@ -800,7 +793,7 @@ private actor WindowClickTraceRecorder {
 }
 
 private extension MouseClickPostStage {
-    var repairsWindowOrder: Bool {
+    var runsActiveStateGuard: Bool {
         switch self {
         case .afterMouseMoved, .afterTargetDown, .afterTargetUp:
             return true

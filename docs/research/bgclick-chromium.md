@@ -10,9 +10,9 @@ click into the target web content while preserving the user's front window and
 cursor ownership:
 
 - The target app receives the click.
-- The user's original front window stays visually in front.
-- The target window does not cross above windows that covered it before the
-  click.
+- The user's original front app/window is restored and remains the user's
+  active working context.
+- Background z-order drift against non-active cover windows is accepted.
 - Any transient target active state is cleaned up after dispatch.
 
 ## Current Implementation Path
@@ -33,14 +33,14 @@ Production flow:
    rejects points outside the target window.
 2. It snapshots the original front layer-0 window.
 3. It creates `WindowOrderGuardian` from the current visible window order.
-4. It starts `WindowOrderChangeObserver` so order changes can trigger immediate
-   repair.
+4. It starts `WindowOrderChangeObserver` so order changes can trigger the
+   active-state guard immediately.
 5. It performs target-side focus without raise.
 6. It posts the Chromium / Electron mouse event sequence.
-7. It repairs order after observable mouse-post stages.
+7. It runs the active-state guard after observable mouse-post stages.
 8. It restores original front focus, deactivates only the target window, and
    reactivates the original front app if needed.
-9. It runs the delayed repair guard for 300ms at 5ms cadence.
+9. It runs the delayed active-state guard for 300ms at 5ms cadence.
 
 ## Route Selection
 
@@ -139,8 +139,9 @@ delivery and window-order stability.
 ## Window Order Preservation
 
 The target may transiently become active or attempt to rise after mouse
-dispatch. `WindowOrderGuardian` protects the visual invariant instead of trying
-to preserve a global z-order list exactly.
+dispatch. AOS no longer attempts to repair background z-order. It protects the
+user's active/front window state and treats any non-active background-window
+reordering as acceptable.
 
 Before dispatch it records every normal visible window that:
 
@@ -150,19 +151,26 @@ Before dispatch it records every normal visible window that:
 - overlaps the target window,
 - was above the target before the click.
 
-Those are the protected windows. During repair, if the target crosses above any
-protected window, AOS raises the protected windows back over the target using
-`AXWindowRaiser`, then restores original front focus.
+Those are the protected windows for diagnostics only. `protected-covered`
+reports when Chrome crosses above them, but the guard does not reorder Chrome or
+the protected windows.
 
-Repairs run at three points:
+AOS deliberately does not use `AXRaise` or `SLSOrderWindow` in this path. The
+guard only restores original front focus and reactivates the original front app
+when Chrome remains active.
+
+`WindowOrderChangeObserver` observes the target window so target order changes
+can trigger the guard immediately.
+
+The active-state guard runs at three points:
 
 - immediately from `WindowOrderChangeObserver`,
-- after mouse stages that can affect order: `afterMouseMoved`,
+- after mouse stages that can affect order or active state: `afterMouseMoved`,
   `afterTargetDown`, and `afterTargetUp`,
 - during the delayed guard: 0ms, then every 5ms until 300ms.
 
-The repair guard also checks whether the target app is still active. If it is,
-AOS reactivates the original front app.
+The active-state guard also checks whether the target app is still active. If
+it is, AOS reactivates the original front app.
 
 ## Verified Behavior
 
@@ -180,7 +188,7 @@ Live Chrome validation used:
   --between-runs-ms 100
 ```
 
-Result:
+Result from the earlier z-order-preservation prototype:
 
 ```text
 Runs: 20, protected-covered-observed 0/20
@@ -201,7 +209,7 @@ Stress validation at a text-input point used:
   --between-runs-ms 50
 ```
 
-Result:
+Result from the earlier z-order-preservation prototype:
 
 ```text
 Runs: 100, protected-covered-observed 0/100
@@ -209,16 +217,19 @@ Summary: max active contiguous 0ms, max rank1 contiguous 0ms, max protected-cove
 ```
 
 Chrome received the clicks and typed text into the target web content while no
-window-order disturbance was observed.
+active-window disturbance was observed. The current simplified implementation
+does not use target lowering, so `protected-covered-observed` is now diagnostic
+only rather than a pass/fail criterion.
 
 ## Success Criteria
 
 For this route to be considered stable in a scenario:
 
 - The target receives the click.
-- `protected-covered-observed` is `0/N`.
 - `max rank1 contiguous` remains `0ms` when the target was not originally front.
 - The original front app remains or is restored as active.
+- `protected-covered-observed` is reported for diagnosis, but background cover
+  drift by non-active windows is accepted.
 
 `measure-left-click-window-order` is the regression diagnostic for this path.
 Use short per-run windows, for example `--duration-ms 500`; that option is per
@@ -227,14 +238,15 @@ run, not total duration.
 ## Files
 
 - `Sources/AOSComputerUseKit/ComputerUseCore.swift`
-  - Orchestrates validation, target focus, mouse dispatch, cleanup, and repair.
+  - Orchestrates validation, target focus, mouse dispatch, cleanup, and the
+    active-state guard.
 - `Sources/AOSComputerUseKit/Input/MouseEventPoster.swift`
   - Implements Chromium/Electron route classification, event stamping, and the
     SkyLight mouse sequence.
 - `Sources/AOSComputerUseKit/Windows/SkyLightWindowFocuser.swift`
   - Posts target-side focus/defocus event records without raising.
 - `Sources/AOSComputerUseKit/Windows/WindowOrderGuardian.swift`
-  - Defines protected windows and repairs target crossing.
+  - Defines protected windows and protected-covered diagnostics.
 - `Sources/AOSComputerUseCLI/ComputerUseCLI.swift`
   - Provides `post-left-click`, `post-left-click --trace`,
     `observe-window-order`, and `measure-left-click-window-order`.

@@ -1675,9 +1675,9 @@ private struct ClickTraceOutput: ReadableOutput {
         let rank = snapshot.targetRank.map(String.init) ?? "nil"
         let covered = snapshot.protectedCoveredCount.map(String.init) ?? "nil"
         let elapsed = snapshot.elapsedNanoseconds.map { ", elapsed-ms \($0 / 1_000_000)" } ?? ""
-        let attempt = snapshot.repairAttempt.map { ", attempt \($0)" } ?? ""
-        let repaired = snapshot.repaired.map { ", repaired \($0)" } ?? ""
-        return "\(snapshot.stage.rawValue): frontmost \(frontmost)\(bundle)\(window), target active \(snapshot.targetIsActive), target rank \(rank), protected-covered \(covered)\(elapsed)\(attempt)\(repaired)"
+        let attempt = snapshot.guardAttempt.map { ", attempt \($0)" } ?? ""
+        let corrected = snapshot.corrected.map { ", corrected \($0)" } ?? ""
+        return "\(snapshot.stage.rawValue): frontmost \(frontmost)\(bundle)\(window), target active \(snapshot.targetIsActive), target rank \(rank), protected-covered \(covered)\(elapsed)\(attempt)\(corrected)"
     }
 }
 

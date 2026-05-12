@@ -276,7 +276,7 @@ struct ComputerUseCLITests {
                     protectedCoveredCount: 0
                 ),
                 WindowClickTraceSnapshot(
-                    stage: .repairGuardTick,
+                    stage: .activeStateGuardTick,
                     frontmostPID: 999,
                     frontmostBundleIdentifier: "com.example.Front",
                     frontmostWindowId: 111,
@@ -284,8 +284,8 @@ struct ComputerUseCLITests {
                     targetRank: 1,
                     protectedCoveredCount: 1,
                     elapsedNanoseconds: 15_000_000,
-                    repairAttempt: 3,
-                    repaired: true
+                    guardAttempt: 3,
+                    corrected: true
                 ),
             ]
         ))
@@ -309,10 +309,10 @@ struct ComputerUseCLITests {
         #expect(result.stdout.contains("Posted left click to window 456 at 310,250"))
         #expect(result.stderr.contains("Click trace:"))
         #expect(result.stderr.contains("before: frontmost pid 999"))
-        #expect(result.stderr.contains("repairGuardTick"))
+        #expect(result.stderr.contains("activeStateGuardTick"))
         #expect(result.stderr.contains("elapsed-ms 15"))
         #expect(result.stderr.contains("attempt 3"))
-        #expect(result.stderr.contains("repaired true"))
+        #expect(result.stderr.contains("corrected true"))
         #expect(result.stderr.contains("target active true"))
         #expect(result.stderr.contains("protected-covered 1"))
         #expect(result.exitCode == 0)

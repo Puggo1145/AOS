@@ -1,13 +1,13 @@
 import CoreGraphics
 import Foundation
 
-/// Repairs the target click side effect where WindowServer raises the target
+/// Detects the target click side effect where WindowServer raises the target
 /// above windows that were visibly covering it.
 ///
-/// The invariant is visual rather than global: every normal on-screen window
-/// that overlapped the target and was above it before the click must remain
-/// above it after the click settles. Non-overlapping windows, including windows
-/// on another display, do not need repair because the target cannot cover them.
+/// The invariant is visual: every normal on-screen window that overlapped the
+/// target and was above it before the click is treated as protected diagnostic
+/// context. The current production guard reports this drift for active-state
+/// cleanup, but deliberately does not reorder any windows.
 struct WindowOrderGuardian: Sendable {
     let targetWindowId: CGWindowID
     private let protectedWindows: [WindowInfo]
@@ -31,17 +31,15 @@ struct WindowOrderGuardian: Sendable {
         }
     }
 
-    @discardableResult
-    func repair(
-        currentWindows: [WindowInfo],
-        raiseWindow: @Sendable (WindowInfo) async throws -> Void
-    ) async throws -> Bool {
-        let violatedWindows = try violatedWindows(currentWindows: currentWindows)
-        for window in violatedWindows.reversed() {
-            try await raiseWindow(window)
+    func targetCrossedProtectedWindow(currentWindows: [WindowInfo]) throws -> Bool {
+        guard !protectedWindows.isEmpty else {
+            return false
         }
 
-        return !violatedWindows.isEmpty
+        return try targetCrossedProtectedWindow(
+            targetIndex: targetIndex(in: currentWindows),
+            currentWindows: currentWindows
+        )
     }
 
     func protectedCoveredCount(currentWindows: [WindowInfo]) -> Int? {
@@ -67,29 +65,33 @@ struct WindowOrderGuardian: Sendable {
         }.count
     }
 
-    private func violatedWindows(currentWindows: [WindowInfo]) throws -> [WindowInfo] {
-        guard !protectedWindows.isEmpty else {
-            return []
-        }
-
+    private func targetIndex(in currentWindows: [WindowInfo]) throws -> Int {
         let orderedWindows = Self.guardableWindows(currentWindows)
         guard let targetIndex = orderedWindows.firstIndex(where: { $0.id == targetWindowId }) else {
             throw ComputerUseError.clickUnavailable(
-                "target window \(targetWindowId) disappeared during window-order repair"
+                "target window \(targetWindowId) disappeared during window-order guard"
             )
         }
+        return targetIndex
+    }
 
+    private func targetCrossedProtectedWindow(
+        targetIndex: Int,
+        currentWindows: [WindowInfo]
+    ) -> Bool {
+        let orderedWindows = Self.guardableWindows(currentWindows)
         let indexByWindowId = Dictionary(
             uniqueKeysWithValues: orderedWindows.enumerated().map { index, window in
                 (window.id, index)
             }
         )
-        return protectedWindows.filter { window in
+        let targetCrossedProtectedWindow = protectedWindows.contains { window in
             guard let currentIndex = indexByWindowId[window.id] else {
                 return false
             }
             return currentIndex > targetIndex
         }
+        return targetCrossedProtectedWindow
     }
 
     static func guardableWindows(_ windows: [WindowInfo]) -> [WindowInfo] {
