@@ -8,8 +8,8 @@
 - 鼠标事件进入目标 pid/window。
 - 投放后目标窗口不留在被 raise 到前面的状态。
 
-本文只描述 general AppKit path。Chromium / Electron web content 使用单独的
-SkyLight route，见 `docs/research/bgclick-chromium.md`。
+本文只描述 general AppKit path。Browser web content 使用单独的 SkyLight route，
+见 `docs/research/bgclick-chromium.md`。
 
 ## Core Idea
 
@@ -220,9 +220,21 @@ background click core path。
 
 ## Known Limits
 
-- Chromium / Electron web content is not part of this AppKit route. Its current
-  working route is documented in `docs/research/bgclick-chromium.md`.
-- Safari / WebKit remains out of scope for pixel background clicks.
+- Browser web content is not part of this AppKit route. Its current working
+  route is documented in `docs/research/bgclick-chromium.md`.
+- Safari validation found that WebKit page content needs the same SkyLight
+  web-content route as Chromium/Electron: explicitly classifying
+  `com.apple.Safari` as `webContent` makes page clicks work, and Safari's
+  AppKit chrome such as sidebar/back/forward controls still responds.
+- Caveat: Safari support is an explicit known-browser bundle-id rule, not a
+  general WebKit rule. Do not classify arbitrary apps as `webContent` merely
+  because they link WebKit or contain a `WKWebView`; many native AppKit apps
+  embed web views but do not need the browser event trust path, and the
+  SkyLight route has broader private-API side effects than the AppKit route.
+- Current classification logic is conservative:
+  Electron/CEF/Chromium runtime evidence, known Chromium-family browser bundle
+  ids, known Electron bundle ids, and explicit Safari bundle id use
+  `webContent`; everything else defaults to `appKit`.
 - CLI 版本用同步 300ms guard 模拟常驻 observer。长期形态应迁入 AOS app 进程，做真正
   的 `WindowOrderingObserver`，减少命令返回延迟。
 - 当前方案不追求完美保持所有后台窗口的相对顺序；如果 target 被系统 raise 到 non-active

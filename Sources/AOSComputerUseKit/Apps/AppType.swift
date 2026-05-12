@@ -4,7 +4,7 @@ import Foundation
 /// AOS's current mouse-delivery classification for a running app.
 public enum AppType: String, Sendable, Codable, Equatable {
     case appKit
-    case chromiumElectron
+    case webContent
 }
 
 /// Why AOS chose an app type classification.
@@ -13,6 +13,7 @@ public enum AppTypeReason: String, Sendable, Codable, Equatable {
     case chromiumEmbeddedFramework
     case chromiumRuntimeResources
     case chromiumBrowserBundleId
+    case safariBundleId
     case knownElectronBundleId
     case appKitDefault
 }

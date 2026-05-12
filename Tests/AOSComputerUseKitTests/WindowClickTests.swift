@@ -157,7 +157,7 @@ struct WindowClickTests {
     @Test("resolves the click delivery route once per click and reuses it for posting")
     func resolvesClickDeliveryRouteOncePerClickAndReusesItForPosting() async throws {
         let recorder = ClickChainRecorder()
-        let routeRecorder = DeliveryRouteRecorder(route: .chromiumElectron)
+        let routeRecorder = DeliveryRouteRecorder(route: .webContent)
         let core = ComputerUseCore(
             windowLookup: { windowId in
                 guard windowId == 456 else { return nil }
@@ -181,7 +181,7 @@ struct WindowClickTests {
             deactivateWindowWithoutRaising: { _, _ in
             },
             postLeftClick: { pid, windowId, point, windowBounds, deliveryRoute, _ in
-                #expect(deliveryRoute == .chromiumElectron)
+                #expect(deliveryRoute == .webContent)
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -1378,8 +1378,8 @@ struct WindowClickTests {
         ])
     }
 
-    @Test("classifies Chromium browsers, CEF apps, and Electron bundles for the Chromium delivery route")
-    func classifiesChromiumBrowsersCEFAppsAndElectronBundles() {
+    @Test("classifies browser web content targets for the webContent delivery route")
+    func classifiesBrowserWebContentTargetsForWebContentDeliveryRoute() {
         let classifier = MouseClickDeliveryClassifier(
             fileExists: { path in
                 path == "/Applications/CustomElectron.app/Contents/Frameworks/Electron Framework.framework"
@@ -1391,23 +1391,27 @@ struct WindowClickTests {
         #expect(classifier.classification(
             bundleIdentifier: "com.google.Chrome",
             bundleURL: nil
-        ) == MouseClickDeliveryClassification(route: .chromiumElectron, reason: .chromiumBrowserBundleId))
+        ) == MouseClickDeliveryClassification(route: .webContent, reason: .chromiumBrowserBundleId))
+        #expect(classifier.classification(
+            bundleIdentifier: "com.apple.Safari",
+            bundleURL: nil
+        ) == MouseClickDeliveryClassification(route: .webContent, reason: .safariBundleId))
         #expect(classifier.classification(
             bundleIdentifier: "com.tinyspeck.slackmacgap",
             bundleURL: nil
-        ) == MouseClickDeliveryClassification(route: .chromiumElectron, reason: .knownElectronBundleId))
+        ) == MouseClickDeliveryClassification(route: .webContent, reason: .knownElectronBundleId))
         #expect(classifier.classification(
             bundleIdentifier: "dev.local.CustomElectron",
             bundleURL: URL(fileURLWithPath: "/Applications/CustomElectron.app")
-        ) == MouseClickDeliveryClassification(route: .chromiumElectron, reason: .electronFramework))
+        ) == MouseClickDeliveryClassification(route: .webContent, reason: .electronFramework))
         #expect(classifier.classification(
             bundleIdentifier: "dev.local.CustomCEF",
             bundleURL: URL(fileURLWithPath: "/Applications/CustomCEF.app")
-        ) == MouseClickDeliveryClassification(route: .chromiumElectron, reason: .chromiumEmbeddedFramework))
+        ) == MouseClickDeliveryClassification(route: .webContent, reason: .chromiumEmbeddedFramework))
         #expect(classifier.classification(
             bundleIdentifier: "com.tencent.qq",
             bundleURL: URL(fileURLWithPath: "/Applications/QQ.app")
-        ) == MouseClickDeliveryClassification(route: .chromiumElectron, reason: .knownElectronBundleId))
+        ) == MouseClickDeliveryClassification(route: .webContent, reason: .knownElectronBundleId))
         #expect(classifier.classification(
             bundleIdentifier: "com.apple.TextEdit",
             bundleURL: URL(fileURLWithPath: "/System/Applications/TextEdit.app")
@@ -1433,11 +1437,11 @@ struct WindowClickTests {
         #expect(classifier.classification(
             bundleIdentifier: "dev.local.NotWhitelisted",
             bundleURL: appURL
-        ) == MouseClickDeliveryClassification(route: .chromiumElectron, reason: .chromiumRuntimeResources))
+        ) == MouseClickDeliveryClassification(route: .webContent, reason: .chromiumRuntimeResources))
     }
 
-    @Test("Chromium delivery route matches Codex annotated mouse sequence")
-    func chromiumDeliveryRouteMatchesCodexAnnotatedMouseSequence() async throws {
+    @Test("webContent delivery route matches Codex annotated mouse sequence")
+    func webContentDeliveryRouteMatchesCodexAnnotatedMouseSequence() async throws {
         let recorder = MousePostRecorder()
         let poster = MouseEventPoster(
             postPublicEventToPID: { event, pid in
@@ -1462,7 +1466,7 @@ struct WindowClickTests {
             windowId: 456,
             point: CGPoint(x: 160, y: 70),
             windowBounds: WindowBounds(x: 10, y: 20, width: 300, height: 100),
-            deliveryRoute: .chromiumElectron,
+            deliveryRoute: .webContent,
             stageObserver: { stage in
                 recorder.recordStage(stage)
             }

@@ -834,7 +834,7 @@ private extension MouseClickPostStage {
 private extension MouseClickDeliveryRoute {
     var requiresPreClickFocus: Bool {
         switch self {
-        case .appKit, .chromiumElectron:
+        case .appKit, .webContent:
             return true
         }
     }

@@ -1,13 +1,14 @@
-# Chromium Background Click
+# Web Content Background Click
 
-This document is the source of truth for the Chromium / Electron background
-click path that currently works in AOS.
+This document is the source of truth for the web-content background click path
+that currently works in AOS. It was first validated on Chromium / Electron and
+now also covers Safari through an explicit known-browser bundle-id rule.
 
 ## Goal
 
-Given a visible Chromium-family or Electron window, AOS must deliver a left
-click into the target web content while preserving the user's front window and
-cursor ownership:
+Given a visible known-browser or Electron window, AOS must deliver a left click
+into the target web content while preserving the user's front window and cursor
+ownership:
 
 - The target app receives the click.
 - The user's original front app/window is restored and remains the user's
@@ -36,7 +37,7 @@ Production flow:
 4. It starts `WindowOrderChangeObserver` so order changes can trigger the
    active-state guard immediately.
 5. It performs target-side focus without raise.
-6. It posts the Chromium / Electron mouse event sequence.
+6. It posts the web-content mouse event sequence.
 7. It runs the active-state guard after observable mouse-post stages.
 8. It restores original front focus, deactivates only the target window, and
    reactivates the original front app if needed.
@@ -44,8 +45,9 @@ Production flow:
 
 ## Route Selection
 
-`MouseClickDeliveryClassifier` selects the Chromium / Electron route from
-runtime evidence first, then falls back to known bundle identifiers. The
+`MouseClickDeliveryClassifier` selects the `webContent` route from Chromium /
+Electron runtime evidence first, then falls back to known browser or Electron
+bundle identifiers. The
 runtime checks are:
 
 ```text
@@ -57,10 +59,16 @@ Contents/Frameworks/Chromium Embedded Framework.framework
 ```
 
 Bundle identifier checks remain as fallback coverage for known Chromium-family
-browsers and non-standard Electron packages. `get-app-type` reports both the
-selected type and reason, such as `electronFramework`,
-`chromiumEmbeddedFramework`, `chromiumRuntimeResources`,
-`chromiumBrowserBundleId`, `knownElectronBundleId`, or `appKitDefault`.
+browsers, explicit Safari support, and non-standard Electron packages.
+`get-app-type` reports both the selected type and reason, such as
+`electronFramework`, `chromiumEmbeddedFramework`,
+`chromiumRuntimeResources`, `chromiumBrowserBundleId`, `safariBundleId`,
+`knownElectronBundleId`, or `appKitDefault`.
+
+The Safari rule is intentionally bundle-id based. Do not infer this route from
+generic WebKit framework presence or arbitrary `WKWebView` usage; those are
+common in native AppKit apps and are not evidence that the app needs the
+browser web-content event path.
 
 ## Focus Without Raise
 
@@ -90,10 +98,10 @@ SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: 0x02))
 That clears the target's background active/key state without deactivating the
 user's original front window.
 
-## Chromium Mouse Sequence
+## Web Content Mouse Sequence
 
 The working delivery recipe is implemented in
-`MouseEventPoster.postChromiumElectronLeftClick`.
+`MouseEventPoster.postWebContentLeftClick`.
 
 All events are created as `NSEvent.mouseEvent`, bridged to `CGEvent`, stamped
 with target pid/window fields, then posted through SkyLight:
@@ -248,7 +256,7 @@ run, not total duration.
   - Orchestrates validation, target focus, mouse dispatch, cleanup, and the
     active-state guard.
 - `Sources/AOSComputerUseKit/Input/MouseEventPoster.swift`
-  - Implements Chromium/Electron route classification, event stamping, and the
+  - Implements web-content route classification, event stamping, and the
     SkyLight mouse sequence.
 - `Sources/AOSComputerUseKit/Windows/SkyLightWindowFocuser.swift`
   - Posts target-side focus/defocus event records without raising.

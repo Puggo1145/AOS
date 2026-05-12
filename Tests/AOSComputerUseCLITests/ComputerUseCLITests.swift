@@ -111,7 +111,7 @@ struct ComputerUseCLITests {
             appName: "NetEaseMusic",
             bundleId: "com.netease.163music",
             bundlePath: "/Applications/NeteaseMusic.app",
-            type: .chromiumElectron,
+            type: .webContent,
             reason: .chromiumEmbeddedFramework
         ))
 
@@ -125,7 +125,7 @@ struct ComputerUseCLITests {
         #expect(result.stdout.contains("App type for pid 123"))
         #expect(result.stdout.contains("name: NetEaseMusic"))
         #expect(result.stdout.contains("bundleId: com.netease.163music"))
-        #expect(result.stdout.contains("type: chromiumElectron"))
+        #expect(result.stdout.contains("type: webContent"))
         #expect(result.stdout.contains("reason: chromiumEmbeddedFramework"))
         #expect(result.stdout.contains("bundlePath: /Applications/NeteaseMusic.app"))
         #expect(result.exitCode == 0)
@@ -878,7 +878,7 @@ struct ComputerUseCLITests {
             appName: "Postman",
             bundleId: "com.postmanlabs.mac",
             bundlePath: "/Applications/Postman.app",
-            type: .chromiumElectron,
+            type: .webContent,
             reason: .electronFramework
         ))
 
@@ -889,7 +889,7 @@ struct ComputerUseCLITests {
         )
 
         #expect(result.stdout.contains("\"command\":\"get-app-type\""))
-        #expect(result.stdout.contains("\"type\":\"chromiumElectron\""))
+        #expect(result.stdout.contains("\"type\":\"webContent\""))
         #expect(result.stdout.contains("\"reason\":\"electronFramework\""))
         #expect(result.stdout.contains("\"bundleId\":\"com.postmanlabs.mac\""))
         #expect(result.exitCode == 0)

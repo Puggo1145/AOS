@@ -17,14 +17,14 @@ public typealias MouseClickPostObserver = @Sendable (MouseClickPostStage) async 
 /// Mouse-event delivery route selected for a target process.
 enum MouseClickDeliveryRoute: Sendable, Equatable {
     case appKit
-    case chromiumElectron
+    case webContent
 
     var appType: AppType {
         switch self {
         case .appKit:
             return .appKit
-        case .chromiumElectron:
-            return .chromiumElectron
+        case .webContent:
+            return .webContent
         }
     }
 }
@@ -34,7 +34,7 @@ struct MouseClickDeliveryClassification: Sendable, Equatable {
     let reason: AppTypeReason
 }
 
-/// Classifies targets that need the Chromium/Electron mouse delivery recipe.
+/// Classifies targets that need the web-content SkyLight mouse delivery recipe.
 struct MouseClickDeliveryClassifier: Sendable {
     typealias FileExists = @Sendable (String) -> Bool
     typealias ContainsChromiumRuntimeResources = @Sendable (URL) -> Bool
@@ -68,31 +68,35 @@ struct MouseClickDeliveryClassifier: Sendable {
                 .appendingPathComponent("Contents/Frameworks/Electron Framework.framework")
                 .path
             if fileExists(electronFrameworkPath) {
-                return MouseClickDeliveryClassification(route: .chromiumElectron, reason: .electronFramework)
+                return MouseClickDeliveryClassification(route: .webContent, reason: .electronFramework)
             }
 
             let chromiumEmbeddedFrameworkPath = bundleURL
                 .appendingPathComponent("Contents/Frameworks/Chromium Embedded Framework.framework")
                 .path
             if fileExists(chromiumEmbeddedFrameworkPath) {
-                return MouseClickDeliveryClassification(route: .chromiumElectron, reason: .chromiumEmbeddedFramework)
+                return MouseClickDeliveryClassification(route: .webContent, reason: .chromiumEmbeddedFramework)
             }
 
             if containsChromiumRuntimeResources(bundleURL) {
-                return MouseClickDeliveryClassification(route: .chromiumElectron, reason: .chromiumRuntimeResources)
+                return MouseClickDeliveryClassification(route: .webContent, reason: .chromiumRuntimeResources)
             }
+        }
+
+        if bundleIdentifier == "com.apple.Safari" {
+            return MouseClickDeliveryClassification(route: .webContent, reason: .safariBundleId)
         }
 
         if let bundleIdentifier,
            Self.chromiumFamilyBundleIdentifiers.contains(bundleIdentifier)
         {
-            return MouseClickDeliveryClassification(route: .chromiumElectron, reason: .chromiumBrowserBundleId)
+            return MouseClickDeliveryClassification(route: .webContent, reason: .chromiumBrowserBundleId)
         }
 
         if let bundleIdentifier,
            Self.knownElectronBundleIdentifiers.contains(bundleIdentifier)
         {
-            return MouseClickDeliveryClassification(route: .chromiumElectron, reason: .knownElectronBundleId)
+            return MouseClickDeliveryClassification(route: .webContent, reason: .knownElectronBundleId)
         }
 
         return MouseClickDeliveryClassification(route: .appKit, reason: .appKitDefault)
@@ -153,7 +157,7 @@ struct MouseClickDeliveryClassifier: Sendable {
 }
 
 /// Posts pid-scoped mouse events through either the public AppKit route or the
-/// Chromium/Electron SkyLight route.
+/// web-content SkyLight route.
 ///
 /// Both routes construct NSEvent-bridged CGEvents, stamp window-local
 /// coordinates and private SkyLight fields, and rely on the core to run the
@@ -222,8 +226,8 @@ struct MouseEventPoster: Sendable {
                 windowBounds: windowBounds,
                 stageObserver: stageObserver
             )
-        case .chromiumElectron:
-            try await postChromiumElectronLeftClick(
+        case .webContent:
+            try await postWebContentLeftClick(
                 pid: pid,
                 windowId: windowId,
                 point: point,
@@ -296,7 +300,7 @@ struct MouseEventPoster: Sendable {
         try await stageObserver?(.afterTargetUp)
     }
 
-    private func postChromiumElectronLeftClick(
+    private func postWebContentLeftClick(
         pid: pid_t,
         windowId: CGWindowID,
         point: CGPoint,
