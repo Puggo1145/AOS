@@ -301,6 +301,128 @@ struct WindowClickTests {
         ])
     }
 
+    @Test("repairs protected windows when target deactivation triggers a late raise")
+    func repairsProtectedWindowsWhenTargetDeactivationTriggersLateRaise() async throws {
+        let recorder = ClickChainRecorder()
+        let target = Self.window(id: 300, pid: 30, owner: "Chrome", zIndex: 1)
+        let protected = Self.window(id: 100, pid: 10, owner: "Ghostty", zIndex: 2)
+        let snapshots = WindowSnapshotScript([
+            [protected, target],
+            [target, protected],
+        ])
+        let core = ComputerUseCore(
+            windowLookup: { windowId in
+                [target, protected].first { $0.id == windowId }
+            },
+            visibleWindowsLookup: {
+                snapshots.next()
+            },
+            frontmostWindowLookup: {
+                protected
+            },
+            focusWindowWithoutRaising: { pid, windowId in
+                await recorder.recordFocus(pid: pid, windowId: windowId)
+            },
+            deactivateWindowWithoutRaising: { pid, windowId in
+                await recorder.recordDeactivate(pid: pid, windowId: windowId)
+            },
+            raiseWindowWithoutActivating: { window in
+                await recorder.recordRaise(pid: window.pid, windowId: window.id)
+            },
+            orderRepairDelays: [0],
+            sleepForOrderRepair: { _ in },
+            postLeftClick: { pid, windowId, point, windowBounds, _ in
+                await recorder.recordClick(
+                    pid: pid,
+                    windowId: windowId,
+                    point: point,
+                    windowBounds: windowBounds
+                )
+            }
+        )
+
+        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
+
+        #expect(await recorder.events == [
+            .focus(pid: 30, windowId: 300),
+            .click(
+                pid: 30,
+                windowId: 300,
+                point: CGPoint(x: 150, y: 50),
+                windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
+            ),
+            .focus(pid: 10, windowId: 100),
+            .deactivate(pid: 30, windowId: 300),
+            .raise(pid: 10, windowId: 100),
+            .focus(pid: 10, windowId: 100),
+        ])
+    }
+
+    @Test("trace records repair guard ticks and post-guard settle samples")
+    func traceRecordsRepairGuardTicksAndPostGuardSettleSamples() async throws {
+        let recorder = ClickChainRecorder()
+        let target = Self.window(id: 300, pid: 30, owner: "Chrome", zIndex: 1)
+        let protected = Self.window(id: 100, pid: 10, owner: "Ghostty", zIndex: 2)
+        let snapshots = WindowSnapshotScript([
+            [protected, target],
+            [protected, target],
+            [protected, target],
+            [protected, target],
+            [protected, target],
+            [protected, target],
+            [protected, target],
+            [target, protected],
+            [protected, target],
+            [target, protected],
+            [target, protected],
+            [protected, target],
+        ])
+        let core = ComputerUseCore(
+            windowLookup: { windowId in
+                [target, protected].first { $0.id == windowId }
+            },
+            visibleWindowsLookup: {
+                snapshots.next()
+            },
+            frontmostWindowLookup: {
+                protected
+            },
+            focusWindowWithoutRaising: { pid, windowId in
+                await recorder.recordFocus(pid: pid, windowId: windowId)
+            },
+            deactivateWindowWithoutRaising: { pid, windowId in
+                await recorder.recordDeactivate(pid: pid, windowId: windowId)
+            },
+            raiseWindowWithoutActivating: { window in
+                await recorder.recordRaise(pid: window.pid, windowId: window.id)
+            },
+            orderRepairDelays: [0, 1],
+            sleepForOrderRepair: { _ in },
+            postLeftClick: { pid, windowId, point, windowBounds, _ in
+                await recorder.recordClick(
+                    pid: pid,
+                    windowId: windowId,
+                    point: point,
+                    windowBounds: windowBounds
+                )
+            }
+        )
+
+        let trace = try await core.postLeftClickTrace(
+            pid: 30,
+            windowId: 300,
+            point: CGPoint(x: 150, y: 50)
+        )
+        let repairTicks = trace.snapshots.filter { $0.stage == .repairGuardTick }
+
+        #expect(repairTicks.map(\.repairAttempt) == [0, 1])
+        #expect(repairTicks.map(\.elapsedNanoseconds) == [0, 1])
+        #expect(repairTicks.map(\.repaired) == [false, true])
+        #expect(trace.snapshots.contains(where: { $0.stage == .afterTraceSettle50ms }))
+        #expect(trace.snapshots.contains(where: { $0.stage == .afterTraceSettle200ms }))
+        #expect(trace.snapshots.contains(where: { $0.stage == .afterTraceSettle1s }))
+    }
+
     @Test("repairs protected windows when the target crosses them after a click")
     func repairsProtectedWindowsWhenTargetCrossesThemAfterClick() async throws {
         let recorder = ClickChainRecorder()
@@ -624,8 +746,11 @@ struct WindowClickTests {
     func mousePosterUsesPublicPidMoveDownUpWithRichWindowStamps() async throws {
         let recorder = MousePostRecorder()
         let poster = MouseEventPoster(
-            postEventToPID: { event, pid in
-                recorder.recordPost(event: event, pid: pid)
+            postPublicEventToPID: { event, pid in
+                recorder.recordPublicPost(event: event, pid: pid)
+            },
+            postSkyLightEventToPID: { event, pid in
+                recorder.recordSkyLightPost(event: event, pid: pid)
             },
             setWindowLocation: { _, point in
                 recorder.recordWindowLocation(point)
@@ -643,18 +768,20 @@ struct WindowClickTests {
             windowId: 456,
             point: CGPoint(x: 160, y: 70),
             windowBounds: WindowBounds(x: 10, y: 20, width: 300, height: 100),
+            deliveryRoute: .appKit,
             stageObserver: { stage in
                 recorder.recordStage(stage)
             }
         )
 
-        #expect(recorder.posts.map(\.pid) == [123, 123, 123])
-        #expect(recorder.posts.map(\.type) == [
+        #expect(recorder.skyLightPosts.isEmpty)
+        #expect(recorder.publicPosts.map(\.pid) == [123, 123, 123])
+        #expect(recorder.publicPosts.map(\.type) == [
             .mouseMoved,
             .leftMouseDown,
             .leftMouseUp,
         ])
-        #expect(recorder.posts.map(\.location) == [
+        #expect(recorder.publicPosts.map(\.location) == [
             CGPoint(x: 160, y: 70),
             CGPoint(x: 160, y: 70),
             CGPoint(x: 160, y: 70),
@@ -690,6 +817,113 @@ struct WindowClickTests {
         #expect(Set(clickGroups).count == 1)
         #expect(recorder.stages == [
             .afterMouseMoved,
+            .afterTargetDown,
+            .afterTargetUp,
+        ])
+    }
+
+    @Test("classifies Chromium browsers and Electron bundles for the Chromium delivery route")
+    func classifiesChromiumBrowsersAndElectronBundles() {
+        let classifier = MouseClickDeliveryClassifier(
+            fileExists: { path in
+                path == "/Applications/CustomElectron.app/Contents/Frameworks/Electron Framework.framework"
+            }
+        )
+
+        #expect(classifier.deliveryRoute(
+            bundleIdentifier: "com.google.Chrome",
+            bundleURL: nil
+        ) == .chromiumElectron)
+        #expect(classifier.deliveryRoute(
+            bundleIdentifier: "com.tinyspeck.slackmacgap",
+            bundleURL: nil
+        ) == .chromiumElectron)
+        #expect(classifier.deliveryRoute(
+            bundleIdentifier: "dev.local.CustomElectron",
+            bundleURL: URL(fileURLWithPath: "/Applications/CustomElectron.app")
+        ) == .chromiumElectron)
+        #expect(classifier.deliveryRoute(
+            bundleIdentifier: "com.apple.TextEdit",
+            bundleURL: URL(fileURLWithPath: "/System/Applications/TextEdit.app")
+        ) == .appKit)
+    }
+
+    @Test("Chromium delivery route uses SkyLight primer sequence instead of public pid posts")
+    func chromiumDeliveryRouteUsesSkyLightPrimerSequence() async throws {
+        let recorder = MousePostRecorder()
+        let poster = MouseEventPoster(
+            postPublicEventToPID: { event, pid in
+                recorder.recordPublicPost(event: event, pid: pid)
+            },
+            postSkyLightEventToPID: { event, pid in
+                recorder.recordSkyLightPost(event: event, pid: pid)
+            },
+            setWindowLocation: { _, point in
+                recorder.recordWindowLocation(point)
+            },
+            setIntegerField: { _, field, value in
+                recorder.recordIntegerField(field: field, value: value)
+            },
+            sleep: { interval in
+                recorder.recordSleep(interval)
+            }
+        )
+
+        try await poster.postLeftClick(
+            pid: 123,
+            windowId: 456,
+            point: CGPoint(x: 160, y: 70),
+            windowBounds: WindowBounds(x: 10, y: 20, width: 300, height: 100),
+            deliveryRoute: .chromiumElectron,
+            stageObserver: { stage in
+                recorder.recordStage(stage)
+            }
+        )
+
+        #expect(recorder.publicPosts.isEmpty)
+        #expect(recorder.skyLightPosts.map(\.pid) == [123, 123, 123, 123, 123])
+        #expect(recorder.skyLightPosts.map(\.type) == [
+            .mouseMoved,
+            .leftMouseDown,
+            .leftMouseUp,
+            .leftMouseDown,
+            .leftMouseUp,
+        ])
+        #expect(recorder.skyLightPosts.map(\.location) == [
+            CGPoint(x: 160, y: 70),
+            CGPoint(x: -1, y: -1),
+            CGPoint(x: -1, y: -1),
+            CGPoint(x: 160, y: 70),
+            CGPoint(x: 160, y: 70),
+        ])
+        #expect(recorder.windowLocations == [
+            CGPoint(x: 150, y: 50),
+            CGPoint(x: -1, y: -1),
+            CGPoint(x: -1, y: -1),
+            CGPoint(x: 150, y: 50),
+            CGPoint(x: 150, y: 50),
+        ])
+        #expect(recorder.sleeps == [15_000, 1_000, 100_000, 1_000])
+        #expect(recorder.integerFields.filter { $0.field == 0 }.map(\.value) == [
+            2, 1, 2, 3, 3,
+        ])
+        #expect(recorder.integerFields.filter { $0.field == 40 }.map(\.value) == [
+            123, 123, 123, 123, 123,
+        ])
+        #expect(recorder.integerFields.filter { $0.field == 51 }.map(\.value) == [
+            456, 456, 456, 456, 456,
+        ])
+        #expect(recorder.integerFields.filter { $0.field == 91 }.map(\.value) == [
+            456, 456, 456, 456, 456,
+        ])
+        #expect(recorder.integerFields.filter { $0.field == 92 }.map(\.value) == [
+            456, 456, 456, 456, 456,
+        ])
+        #expect(recorder.stages == [
+            .afterMouseMoved,
+            .afterPrimerDown,
+            .afterPrimerUp,
+            .afterPrimerGap,
             .afterTargetDown,
             .afterTargetUp,
         ])
@@ -779,6 +1013,8 @@ private final class MousePostRecorder: @unchecked Sendable {
         let type: CGEventType
         let pid: pid_t
         let location: CGPoint
+        let windowUnderMousePointer: Int64
+        let windowUnderMousePointerThatCanHandleThisEvent: Int64
     }
 
     struct IntegerField: Equatable {
@@ -787,16 +1023,23 @@ private final class MousePostRecorder: @unchecked Sendable {
     }
 
     private let lock = NSLock()
-    private var recordedPosts: [Post] = []
+    private var recordedPublicPosts: [Post] = []
+    private var recordedSkyLightPosts: [Post] = []
     private var recordedWindowLocations: [CGPoint] = []
     private var recordedIntegerFields: [IntegerField] = []
     private var recordedSleeps: [useconds_t] = []
     private var recordedStages: [MouseClickPostStage] = []
 
-    var posts: [Post] {
+    var publicPosts: [Post] {
         lock.lock()
         defer { lock.unlock() }
-        return recordedPosts
+        return recordedPublicPosts
+    }
+
+    var skyLightPosts: [Post] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedSkyLightPosts
     }
 
     var windowLocations: [CGPoint] {
@@ -823,10 +1066,32 @@ private final class MousePostRecorder: @unchecked Sendable {
         return recordedStages
     }
 
-    func recordPost(event: CGEvent, pid: pid_t) {
+    func recordPublicPost(event: CGEvent, pid: pid_t) {
         lock.lock()
         defer { lock.unlock() }
-        recordedPosts.append(Post(type: event.type, pid: pid, location: event.location))
+        recordedPublicPosts.append(Post(
+            type: event.type,
+            pid: pid,
+            location: event.location,
+            windowUnderMousePointer: event.getIntegerValueField(.mouseEventWindowUnderMousePointer),
+            windowUnderMousePointerThatCanHandleThisEvent: event.getIntegerValueField(
+                .mouseEventWindowUnderMousePointerThatCanHandleThisEvent
+            )
+        ))
+    }
+
+    func recordSkyLightPost(event: CGEvent, pid: pid_t) {
+        lock.lock()
+        defer { lock.unlock() }
+        recordedSkyLightPosts.append(Post(
+            type: event.type,
+            pid: pid,
+            location: event.location,
+            windowUnderMousePointer: event.getIntegerValueField(.mouseEventWindowUnderMousePointer),
+            windowUnderMousePointerThatCanHandleThisEvent: event.getIntegerValueField(
+                .mouseEventWindowUnderMousePointerThatCanHandleThisEvent
+            )
+        ))
     }
 
     func recordWindowLocation(_ point: CGPoint) {

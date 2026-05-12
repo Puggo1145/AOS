@@ -59,6 +59,71 @@ public struct WindowClickResult: Sendable, Equatable {
     }
 }
 
+public enum WindowClickTraceStage: String, Sendable, Codable, Equatable {
+    case before
+    case afterFocus
+    case afterMouseMoved
+    case afterPrimerDown
+    case afterPrimerUp
+    case afterPrimerGap
+    case afterTargetDown
+    case afterTargetUp
+    case afterRestoreOriginalFrontWindow
+    case afterTargetDeactivate
+    case repairGuardTick
+    case afterRepairGuard
+    case afterTraceSettle50ms
+    case afterTraceSettle200ms
+    case afterTraceSettle1s
+}
+
+public struct WindowClickTraceSnapshot: Sendable, Codable, Equatable {
+    public let stage: WindowClickTraceStage
+    public let frontmostPID: pid_t?
+    public let frontmostBundleIdentifier: String?
+    public let frontmostWindowId: CGWindowID?
+    public let targetIsActive: Bool
+    public let targetRank: Int?
+    public let protectedCoveredCount: Int?
+    public let elapsedNanoseconds: UInt64?
+    public let repairAttempt: Int?
+    public let repaired: Bool?
+
+    public init(
+        stage: WindowClickTraceStage,
+        frontmostPID: pid_t?,
+        frontmostBundleIdentifier: String?,
+        frontmostWindowId: CGWindowID?,
+        targetIsActive: Bool,
+        targetRank: Int?,
+        protectedCoveredCount: Int?,
+        elapsedNanoseconds: UInt64? = nil,
+        repairAttempt: Int? = nil,
+        repaired: Bool? = nil
+    ) {
+        self.stage = stage
+        self.frontmostPID = frontmostPID
+        self.frontmostBundleIdentifier = frontmostBundleIdentifier
+        self.frontmostWindowId = frontmostWindowId
+        self.targetIsActive = targetIsActive
+        self.targetRank = targetRank
+        self.protectedCoveredCount = protectedCoveredCount
+        self.elapsedNanoseconds = elapsedNanoseconds
+        self.repairAttempt = repairAttempt
+        self.repaired = repaired
+    }
+}
+
+public struct WindowClickTraceResult: Sendable, Equatable {
+    public let result: WindowClickResult
+    public let snapshots: [WindowClickTraceSnapshot]
+
+    public init(result: WindowClickResult, snapshots: [WindowClickTraceSnapshot]) {
+        self.result = result
+        self.snapshots = snapshots
+    }
+}
+
 public enum CaptureMode: String, Sendable, Equatable {
     case vision
     case ax
@@ -119,6 +184,7 @@ public actor ComputerUseCore {
         let webAccessibilityActivator = AXWebAccessibilityActivator()
         let windowFocuser = SkyLightWindowFocuser.live()
         let mousePoster = MouseEventPoster.live()
+        let mouseDeliveryClassifier = MouseClickDeliveryClassifier()
         let windowRaiser = AXWindowRaiser.live()
         self.init(
             webAccessibilityActivator: webAccessibilityActivator,
@@ -148,11 +214,17 @@ public actor ComputerUseCore {
                 try await Task.sleep(nanoseconds: delay)
             },
             postLeftClick: { pid, windowId, point, windowBounds, stageObserver in
+                let app = NSRunningApplication(processIdentifier: pid)
+                let deliveryRoute = mouseDeliveryClassifier.deliveryRoute(
+                    bundleIdentifier: app?.bundleIdentifier,
+                    bundleURL: app?.bundleURL
+                )
                 try await mousePoster.postLeftClick(
                     pid: pid,
                     windowId: windowId,
                     point: point,
                     windowBounds: windowBounds,
+                    deliveryRoute: deliveryRoute,
                     stageObserver: stageObserver
                 )
             }
@@ -264,6 +336,30 @@ public actor ComputerUseCore {
         windowId: CGWindowID,
         point: CGPoint
     ) async throws -> WindowClickResult {
+        try await performPostLeftClick(pid: pid, windowId: windowId, point: point, tracing: false).result
+    }
+
+    /// Posts a background left-click and returns per-stage WindowServer state
+    /// for diagnosing browser/Web-content activation and ordering side effects.
+    public func postLeftClickTrace(
+        pid: pid_t,
+        windowId: CGWindowID,
+        point: CGPoint
+    ) async throws -> WindowClickTraceResult {
+        try await performPostLeftClick(
+            pid: pid,
+            windowId: windowId,
+            point: point,
+            tracing: true
+        )
+    }
+
+    private func performPostLeftClick(
+        pid: pid_t,
+        windowId: CGWindowID,
+        point: CGPoint,
+        tracing: Bool
+    ) async throws -> WindowClickTraceResult {
         let window = try validateOwnership(pid: pid, windowId: windowId)
         guard window.bounds.cgRect.contains(point) else {
             throw ComputerUseError.clickUnavailable(
@@ -272,27 +368,71 @@ public actor ComputerUseCore {
         }
         let originalFrontWindow = frontmostWindowLookup()
         let orderGuardian = try makeWindowOrderGuardian(targetWindowId: windowId)
+        let traceRecorder = tracing ? WindowClickTraceRecorder() : nil
+        await recordTraceStage(
+            .before,
+            recorder: traceRecorder,
+            targetPID: pid,
+            targetWindowId: windowId,
+            orderGuardian: orderGuardian
+        )
         try await focusWindowWithoutRaising(pid, windowId)
         try await Task.sleep(nanoseconds: 5_000_000)
-        try await postLeftClickEvent(pid, windowId, point, window.bounds) { [self] _ in
-            try await self.repairWindowOrderOnce(
-                orderGuardian,
-                originalFrontWindow: originalFrontWindow,
-                targetWindowId: windowId
+        await recordTraceStage(
+            .afterFocus,
+            recorder: traceRecorder,
+            targetPID: pid,
+            targetWindowId: windowId,
+            orderGuardian: orderGuardian
+        )
+        try await postLeftClickEvent(pid, windowId, point, window.bounds) { [self] stage in
+            if stage.repairsWindowOrder {
+                try await self.repairWindowOrderOnce(
+                    orderGuardian,
+                    originalFrontWindow: originalFrontWindow,
+                    targetWindowId: windowId
+                )
+            }
+            await self.recordTraceStage(
+                WindowClickTraceStage(stage),
+                recorder: traceRecorder,
+                targetPID: pid,
+                targetWindowId: windowId,
+                orderGuardian: orderGuardian
             )
         }
-        try await restoreOriginalFrontWindow(originalFrontWindow, targetWindowId: windowId)
+        try await runPostDispatchCleanup(
+            pid: pid,
+            windowId: windowId,
+            originalFrontWindow: originalFrontWindow,
+            orderGuardian: orderGuardian,
+            traceRecorder: traceRecorder
+        )
         try await repairWindowOrder(
             orderGuardian,
             originalFrontWindow: originalFrontWindow,
-            targetWindowId: windowId
+            targetWindowId: windowId,
+            traceRecorder: traceRecorder,
+            targetPID: pid
         )
-        try await deactivateTargetWindowIfNeeded(
-            pid: pid,
-            windowId: windowId,
-            originalFrontWindow: originalFrontWindow
+        await recordTraceStage(
+            .afterRepairGuard,
+            recorder: traceRecorder,
+            targetPID: pid,
+            targetWindowId: windowId,
+            orderGuardian: orderGuardian
         )
-        return WindowClickResult(pid: pid, windowId: windowId, point: point)
+        if let traceRecorder {
+            try await recordTraceSettleSamples(
+                recorder: traceRecorder,
+                targetPID: pid,
+                targetWindowId: windowId,
+                orderGuardian: orderGuardian
+            )
+        }
+        let result = WindowClickResult(pid: pid, windowId: windowId, point: point)
+        let snapshots = await traceRecorder?.allSnapshots() ?? []
+        return WindowClickTraceResult(result: result, snapshots: snapshots)
     }
 
     @discardableResult
@@ -327,6 +467,35 @@ public actor ComputerUseCore {
         try await deactivateWindowWithoutRaising(pid, windowId)
     }
 
+    private func runPostDispatchCleanup(
+        pid: pid_t,
+        windowId: CGWindowID,
+        originalFrontWindow: WindowInfo?,
+        orderGuardian: WindowOrderGuardian?,
+        traceRecorder: WindowClickTraceRecorder?
+    ) async throws {
+        try await restoreOriginalFrontWindow(originalFrontWindow, targetWindowId: windowId)
+        await recordTraceStage(
+            .afterRestoreOriginalFrontWindow,
+            recorder: traceRecorder,
+            targetPID: pid,
+            targetWindowId: windowId,
+            orderGuardian: orderGuardian
+        )
+        try await deactivateTargetWindowIfNeeded(
+            pid: pid,
+            windowId: windowId,
+            originalFrontWindow: originalFrontWindow
+        )
+        await recordTraceStage(
+            .afterTargetDeactivate,
+            recorder: traceRecorder,
+            targetPID: pid,
+            targetWindowId: windowId,
+            orderGuardian: orderGuardian
+        )
+    }
+
     private func makeWindowOrderGuardian(targetWindowId: CGWindowID) throws -> WindowOrderGuardian? {
         guard !orderRepairDelays.isEmpty else {
             return nil
@@ -340,36 +509,33 @@ public actor ComputerUseCore {
     private func repairWindowOrder(
         _ orderGuardian: WindowOrderGuardian?,
         originalFrontWindow: WindowInfo?,
-        targetWindowId: CGWindowID
-    ) async throws {
-        for delay in orderRepairDelays {
-            if delay > 0 {
-                try await sleepForOrderRepair(delay)
-            }
-            try await repairWindowOrderOnce(
-                orderGuardian,
-                originalFrontWindow: originalFrontWindow,
-                targetWindowId: targetWindowId
-            )
-        }
-    }
-
-    private func repairWindowOrderDuring(
-        _ duration: UInt64,
-        _ orderGuardian: WindowOrderGuardian?,
-        originalFrontWindow: WindowInfo?,
-        targetWindowId: CGWindowID
+        targetWindowId: CGWindowID,
+        traceRecorder: WindowClickTraceRecorder? = nil,
+        targetPID: pid_t? = nil
     ) async throws {
         var elapsed: UInt64 = 0
-        while elapsed < duration {
-            let delay = min(Self.liveOrderRepairInterval, duration - elapsed)
-            try await sleepForOrderRepair(delay)
-            elapsed += delay
-            try await repairWindowOrderOnce(
+        for (attempt, delay) in orderRepairDelays.enumerated() {
+            if delay > 0 {
+                try await sleepForOrderRepair(delay)
+                elapsed += delay
+            }
+            let repaired = try await repairWindowOrderOnce(
                 orderGuardian,
                 originalFrontWindow: originalFrontWindow,
                 targetWindowId: targetWindowId
             )
+            if let traceRecorder, let targetPID {
+                await recordTraceStage(
+                    .repairGuardTick,
+                    recorder: traceRecorder,
+                    targetPID: targetPID,
+                    targetWindowId: targetWindowId,
+                    orderGuardian: orderGuardian,
+                    elapsedNanoseconds: elapsed,
+                    repairAttempt: attempt,
+                    repaired: repaired
+                )
+            }
         }
     }
 
@@ -389,6 +555,64 @@ public actor ComputerUseCore {
             try await restoreOriginalFrontWindow(originalFrontWindow, targetWindowId: targetWindowId)
         }
         return repaired
+    }
+
+    private func recordTraceStage(
+        _ stage: WindowClickTraceStage,
+        recorder: WindowClickTraceRecorder?,
+        targetPID: pid_t,
+        targetWindowId: CGWindowID,
+        orderGuardian: WindowOrderGuardian?,
+        elapsedNanoseconds: UInt64? = nil,
+        repairAttempt: Int? = nil,
+        repaired: Bool? = nil,
+        currentWindows providedCurrentWindows: [WindowInfo]? = nil
+    ) async {
+        guard let recorder else {
+            return
+        }
+
+        let currentWindows = providedCurrentWindows ?? visibleWindowsLookup()
+        let orderedWindows = WindowOrderGuardian.guardableWindows(currentWindows)
+        let targetRank = orderedWindows.firstIndex { $0.id == targetWindowId }.map { $0 + 1 }
+        let frontmostApp = NSWorkspace.shared.frontmostApplication
+        let frontmostWindow = Self.currentFrontmostLayerZeroWindow()
+        let targetApp = NSRunningApplication(processIdentifier: targetPID)
+        await recorder.record(WindowClickTraceSnapshot(
+            stage: stage,
+            frontmostPID: frontmostApp?.processIdentifier,
+            frontmostBundleIdentifier: frontmostApp?.bundleIdentifier,
+            frontmostWindowId: frontmostWindow?.id,
+            targetIsActive: targetApp?.isActive ?? false,
+            targetRank: targetRank,
+            protectedCoveredCount: orderGuardian?.protectedCoveredCount(currentWindows: currentWindows),
+            elapsedNanoseconds: elapsedNanoseconds,
+            repairAttempt: repairAttempt,
+            repaired: repaired
+        ))
+    }
+
+    private func recordTraceSettleSamples(
+        recorder: WindowClickTraceRecorder,
+        targetPID: pid_t,
+        targetWindowId: CGWindowID,
+        orderGuardian: WindowOrderGuardian?
+    ) async throws {
+        let samples: [(stage: WindowClickTraceStage, delay: UInt64)] = [
+            (.afterTraceSettle50ms, 50_000_000),
+            (.afterTraceSettle200ms, 150_000_000),
+            (.afterTraceSettle1s, 800_000_000),
+        ]
+        for sample in samples {
+            try await sleepForOrderRepair(sample.delay)
+            await recordTraceStage(
+                sample.stage,
+                recorder: recorder,
+                targetPID: targetPID,
+                targetWindowId: targetWindowId,
+                orderGuardian: orderGuardian
+            )
+        }
     }
 
     private func captureWithPayloadCap(
@@ -456,6 +680,48 @@ private extension ComputerUseCore {
                 && window.layer == 0
                 && window.bounds.width >= 64
                 && window.bounds.height >= 64
+        }
+    }
+}
+
+private actor WindowClickTraceRecorder {
+    private var recordedSnapshots: [WindowClickTraceSnapshot] = []
+
+    func record(_ snapshot: WindowClickTraceSnapshot) {
+        recordedSnapshots.append(snapshot)
+    }
+
+    func allSnapshots() -> [WindowClickTraceSnapshot] {
+        recordedSnapshots
+    }
+}
+
+private extension MouseClickPostStage {
+    var repairsWindowOrder: Bool {
+        switch self {
+        case .afterMouseMoved, .afterTargetDown, .afterTargetUp:
+            return true
+        case .afterPrimerDown, .afterPrimerUp, .afterPrimerGap:
+            return false
+        }
+    }
+}
+
+private extension WindowClickTraceStage {
+    init(_ stage: MouseClickPostStage) {
+        switch stage {
+        case .afterMouseMoved:
+            self = .afterMouseMoved
+        case .afterPrimerDown:
+            self = .afterPrimerDown
+        case .afterPrimerUp:
+            self = .afterPrimerUp
+        case .afterPrimerGap:
+            self = .afterPrimerGap
+        case .afterTargetDown:
+            self = .afterTargetDown
+        case .afterTargetUp:
+            self = .afterTargetUp
         }
     }
 }

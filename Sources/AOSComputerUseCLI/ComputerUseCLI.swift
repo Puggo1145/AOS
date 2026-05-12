@@ -114,6 +114,12 @@ public protocol ComputerUseCoreClient: Sendable {
     func focusWindowWithoutRaise(pid: pid_t, windowId: CGWindowID) async throws -> WindowFocusResult
     /// Posts a left click to an explicit screen-space point in the pid/window pair.
     func postLeftClick(pid: pid_t, windowId: CGWindowID, point: CGPoint) async throws -> WindowClickResult
+    /// Posts a left click and returns diagnostic state captured around each click stage.
+    func postLeftClickTrace(
+        pid: pid_t,
+        windowId: CGWindowID,
+        point: CGPoint
+    ) async throws -> WindowClickTraceResult
 }
 
 public enum PostCursorKey: Sendable, Equatable {
@@ -174,6 +180,17 @@ public struct ComputerUseCoreAdapter: ComputerUseCoreClient {
         try await core.postLeftClick(pid: pid, windowId: windowId, point: point)
     }
 
+    public func postLeftClickTrace(
+        pid: pid_t,
+        windowId: CGWindowID,
+        point: CGPoint
+    ) async throws -> WindowClickTraceResult {
+        try await core.postLeftClickTrace(
+            pid: pid,
+            windowId: windowId,
+            point: point
+        )
+    }
 }
 
 public struct ComputerUseCLIResult: Sendable, Equatable {
@@ -294,7 +311,7 @@ public enum ComputerUseCLI {
           AOSComputerUseCLI list-windows --pid <pid>
           AOSComputerUseCLI get-app-state --pid <pid> --window-id <id> [--mode vision|ax] [--max-image-dimension <pixels>] [--screenshot-output <path>]
           AOSComputerUseCLI focus-window --pid <pid> --window-id <id>
-          AOSComputerUseCLI post-left-click --pid <pid> --window-id <id> --coor <x,y>
+          AOSComputerUseCLI post-left-click --pid <pid> --window-id <id> --coor <x,y> [--trace]
           AOSComputerUseCLI post-cursor [--pid <pid>] [--window-id <id>] [--coor <x,y>]
 
         Options:
@@ -309,6 +326,7 @@ public enum ComputerUseCLI {
           focus-window    Focus a specific app window without raising it.
           post-left-click
                           Post a background left click to a local --coor point of a specific app window.
+                          Use --trace to write per-stage click diagnostics to stderr.
           post-cursor
                           Open an interactive test cursor. Arrow keys move it, A posts a left click, B exits.
 
@@ -362,6 +380,18 @@ public enum ComputerUseCLI {
                 )
                 return try success(FocusWindowOutput(request: request, result: result), format: parsed.outputFormat)
             case .postLeftClick(let request):
+                if request.trace {
+                    let trace = try await postLeftClickTrace(request: request, core: core)
+                    let output = try success(
+                        LeftClickOutput(request: request, result: trace.result),
+                        format: parsed.outputFormat
+                    )
+                    return ComputerUseCLIResult(
+                        stdout: output.stdout,
+                        stderr: ClickTraceOutput(trace: trace).readableText + "\n",
+                        exitCode: output.exitCode
+                    )
+                }
                 let result = try await postLeftClick(request: request, core: core)
                 return try success(LeftClickOutput(request: request, result: result), format: parsed.outputFormat)
             case .postCursor(let request):
@@ -406,18 +436,37 @@ public enum ComputerUseCLI {
         request: LeftClickRequest,
         core: ComputerUseCoreClient
     ) async throws -> WindowClickResult {
-        let windows = try await core.listWindows(pid: request.pid)
-        guard let window = windows.first(where: { $0.id == request.windowId }) else {
-            throw UsageError("window \(request.windowId) for pid \(request.pid) is not available")
-        }
-        let screenPoint = CGPoint(
-            x: window.bounds.x + request.coordinate.x,
-            y: window.bounds.y + request.coordinate.y
-        )
+        let screenPoint = try await leftClickScreenPoint(request: request, core: core)
         return try await core.postLeftClick(
             pid: request.pid,
             windowId: request.windowId,
             point: screenPoint
+        )
+    }
+
+    private static func postLeftClickTrace(
+        request: LeftClickRequest,
+        core: ComputerUseCoreClient
+    ) async throws -> WindowClickTraceResult {
+        let screenPoint = try await leftClickScreenPoint(request: request, core: core)
+        return try await core.postLeftClickTrace(
+            pid: request.pid,
+            windowId: request.windowId,
+            point: screenPoint
+        )
+    }
+
+    private static func leftClickScreenPoint(
+        request: LeftClickRequest,
+        core: ComputerUseCoreClient
+    ) async throws -> CGPoint {
+        let windows = try await core.listWindows(pid: request.pid)
+        guard let window = windows.first(where: { $0.id == request.windowId }) else {
+            throw UsageError("window \(request.windowId) for pid \(request.pid) is not available")
+        }
+        return CGPoint(
+            x: window.bounds.x + request.coordinate.x,
+            y: window.bounds.y + request.coordinate.y
         )
     }
 
@@ -638,8 +687,14 @@ private struct ParsedCommand {
             let pid = try options.requiredPID("--pid")
             let windowId = try options.requiredWindowID("--window-id")
             let coordinate = try options.requiredPoint("--coor")
+            let trace = try options.takeFlag("--trace")
             try options.rejectUnused()
-            command = .postLeftClick(LeftClickRequest(pid: pid, windowId: windowId, coordinate: coordinate))
+            command = .postLeftClick(LeftClickRequest(
+                pid: pid,
+                windowId: windowId,
+                coordinate: coordinate,
+                trace: trace
+            ))
         case "post-cursor":
             let pid = try options.optionalPID("--pid")
             let windowId = try options.optionalWindowID("--window-id")
@@ -816,6 +871,7 @@ private struct LeftClickRequest: Sendable {
     let pid: pid_t
     let windowId: CGWindowID
     let coordinate: CGPoint
+    let trace: Bool
 }
 
 private struct PostCursorRequest: Sendable {
@@ -1057,6 +1113,28 @@ private struct LeftClickOutput: Encodable, ReadableOutput {
 
     var readableText: String {
         "Posted left click to window \(windowId) at \(Int(point.x)),\(Int(point.y)) (pid \(pid))."
+    }
+}
+
+private struct ClickTraceOutput: ReadableOutput {
+    let trace: WindowClickTraceResult
+
+    var readableText: String {
+        var lines = ["Click trace:"]
+        lines.append(contentsOf: trace.snapshots.map(Self.line))
+        return lines.joined(separator: "\n")
+    }
+
+    private static func line(_ snapshot: WindowClickTraceSnapshot) -> String {
+        let frontmost = snapshot.frontmostPID.map { "pid \($0)" } ?? "pid nil"
+        let bundle = snapshot.frontmostBundleIdentifier.map { " bundle \($0)" } ?? ""
+        let window = snapshot.frontmostWindowId.map { " window \($0)" } ?? " window nil"
+        let rank = snapshot.targetRank.map(String.init) ?? "nil"
+        let covered = snapshot.protectedCoveredCount.map(String.init) ?? "nil"
+        let elapsed = snapshot.elapsedNanoseconds.map { ", elapsed-ms \($0 / 1_000_000)" } ?? ""
+        let attempt = snapshot.repairAttempt.map { ", attempt \($0)" } ?? ""
+        let repaired = snapshot.repaired.map { ", repaired \($0)" } ?? ""
+        return "\(snapshot.stage.rawValue): frontmost \(frontmost)\(bundle)\(window), target active \(snapshot.targetIsActive), target rank \(rank), protected-covered \(covered)\(elapsed)\(attempt)\(repaired)"
     }
 }
 

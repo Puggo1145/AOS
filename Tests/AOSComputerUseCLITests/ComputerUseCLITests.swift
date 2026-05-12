@@ -17,6 +17,8 @@ struct ComputerUseCLITests {
         #expect(output.contains("open-coor-test"))
         #expect(!output.contains("open-button"))
         #expect(output.contains("post-left-click"))
+        #expect(!output.contains("target-down-window-local-offscreen"))
+        #expect(!output.contains("target-up-window-local-offscreen"))
         #expect(output.contains("post-cursor"))
         #expect(!output.contains("trace-postLeftClick"))
         #expect(output.contains("grant-permissions"))
@@ -231,11 +233,121 @@ struct ComputerUseCLITests {
 
         #expect(await fake.requestedWindowPID == 123)
         #expect(await fake.requestedLeftClickPID == 123)
+        #expect(await fake.requestedLeftClickTracePID == nil)
         #expect(await fake.requestedLeftClickWindowID == 456)
         #expect(await fake.requestedLeftClickPoint == CGPoint(x: 310, y: 250))
         #expect(result.stdout.contains("Posted left click to window 456 at 310,250"))
         #expect(result.stderr.isEmpty)
         #expect(result.exitCode == 0)
+    }
+
+    @Test("post-left-click trace is opt-in and writes diagnostics to stderr")
+    func postLeftClickTraceIsOptInAndWritesDiagnosticsToStderr() async throws {
+        let fake = FakeComputerUseCore()
+        await fake.setWindows([
+            WindowInfo(
+                id: 456,
+                pid: 123,
+                owner: "Google Chrome",
+                title: "Trace Target",
+                bounds: WindowBounds(x: 50, y: 70, width: 520, height: 360),
+                zIndex: 1,
+                isOnScreen: true,
+                layer: 0
+            )
+        ])
+        await fake.setLeftClickTrace(WindowClickTraceResult(
+            result: WindowClickResult(
+                pid: 123,
+                windowId: 456,
+                point: CGPoint(x: 310, y: 250)
+            ),
+            snapshots: [
+                WindowClickTraceSnapshot(
+                    stage: .before,
+                    frontmostPID: 999,
+                    frontmostBundleIdentifier: "com.example.Front",
+                    frontmostWindowId: 111,
+                    targetIsActive: false,
+                    targetRank: 3,
+                    protectedCoveredCount: 0
+                ),
+                WindowClickTraceSnapshot(
+                    stage: .repairGuardTick,
+                    frontmostPID: 999,
+                    frontmostBundleIdentifier: "com.example.Front",
+                    frontmostWindowId: 111,
+                    targetIsActive: true,
+                    targetRank: 1,
+                    protectedCoveredCount: 1,
+                    elapsedNanoseconds: 15_000_000,
+                    repairAttempt: 3,
+                    repaired: true
+                ),
+            ]
+        ))
+
+        let result = try await ComputerUseCLI.run(
+            arguments: [
+                "post-left-click",
+                "--pid", "123",
+                "--window-id", "456",
+                "--coor", "260,180",
+                "--trace",
+            ],
+            core: fake,
+            permissions: FakePermissionClient()
+        )
+
+        #expect(await fake.requestedLeftClickPID == nil)
+        #expect(await fake.requestedLeftClickTracePID == 123)
+        #expect(await fake.requestedLeftClickTraceWindowID == 456)
+        #expect(await fake.requestedLeftClickTracePoint == CGPoint(x: 310, y: 250))
+        #expect(result.stdout.contains("Posted left click to window 456 at 310,250"))
+        #expect(result.stderr.contains("Click trace:"))
+        #expect(result.stderr.contains("before: frontmost pid 999"))
+        #expect(result.stderr.contains("repairGuardTick"))
+        #expect(result.stderr.contains("elapsed-ms 15"))
+        #expect(result.stderr.contains("attempt 3"))
+        #expect(result.stderr.contains("repaired true"))
+        #expect(result.stderr.contains("target active true"))
+        #expect(result.stderr.contains("protected-covered 1"))
+        #expect(result.exitCode == 0)
+    }
+
+    @Test("removed trace experiment options are rejected")
+    func removedTraceExperimentOptionsAreRejected() async throws {
+        let fake = FakeComputerUseCore()
+        await fake.setWindows([
+            WindowInfo(
+                id: 456,
+                pid: 123,
+                owner: "Google Chrome",
+                title: "Trace Target",
+                bounds: WindowBounds(x: 50, y: 70, width: 520, height: 360),
+                zIndex: 1,
+                isOnScreen: true,
+                layer: 0
+            )
+        ])
+
+        let result = try await ComputerUseCLI.run(
+            arguments: [
+                "post-left-click",
+                "--pid", "123",
+                "--window-id", "456",
+                "--coor", "260,180",
+                "--trace-mouse-sequence", "no-primer",
+            ],
+            core: fake,
+            permissions: FakePermissionClient()
+        )
+
+        #expect(await fake.requestedLeftClickPID == nil)
+        #expect(await fake.requestedLeftClickTracePID == nil)
+        #expect(result.stdout.isEmpty)
+        #expect(result.stderr.contains("unknown option --trace-mouse-sequence"))
+        #expect(result.exitCode == 64)
     }
 
     @Test("post-cursor accepts explicit target and posts click at adjusted local coordinate")
@@ -504,6 +616,10 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
     private(set) var requestedLeftClickPID: pid_t?
     private(set) var requestedLeftClickWindowID: CGWindowID?
     private(set) var requestedLeftClickPoint: CGPoint?
+    private(set) var requestedLeftClickTracePID: pid_t?
+    private(set) var requestedLeftClickTraceWindowID: CGWindowID?
+    private(set) var requestedLeftClickTracePoint: CGPoint?
+    private var leftClickTrace: WindowClickTraceResult?
 
     func setApps(_ apps: [AppInfo]) {
         self.apps = apps
@@ -515,6 +631,10 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
 
     func setState(_ state: AppStateBundle) {
         self.state = state
+    }
+
+    func setLeftClickTrace(_ trace: WindowClickTraceResult) {
+        self.leftClickTrace = trace
     }
 
     func listApps(mode: AppListMode) async throws -> [AppInfo] {
@@ -551,6 +671,23 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
         requestedLeftClickWindowID = windowId
         requestedLeftClickPoint = point
         return WindowClickResult(pid: pid, windowId: windowId, point: point)
+    }
+
+    func postLeftClickTrace(
+        pid: pid_t,
+        windowId: CGWindowID,
+        point: CGPoint
+    ) async throws -> WindowClickTraceResult {
+        requestedLeftClickTracePID = pid
+        requestedLeftClickTraceWindowID = windowId
+        requestedLeftClickTracePoint = point
+        if let leftClickTrace {
+            return leftClickTrace
+        }
+        return WindowClickTraceResult(
+            result: WindowClickResult(pid: pid, windowId: windowId, point: point),
+            snapshots: []
+        )
     }
 
 }

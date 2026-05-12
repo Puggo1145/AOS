@@ -5,39 +5,101 @@ import Foundation
 
 public enum MouseClickPostStage: String, Sendable, Equatable {
     case afterMouseMoved
+    case afterPrimerDown
+    case afterPrimerUp
+    case afterPrimerGap
     case afterTargetDown
     case afterTargetUp
 }
 
 public typealias MouseClickPostObserver = @Sendable (MouseClickPostStage) async throws -> Void
 
+/// Mouse-event delivery route selected for a target process.
+enum MouseClickDeliveryRoute: Sendable, Equatable {
+    case appKit
+    case chromiumElectron
+}
+
+/// Classifies targets that need the Chromium/Electron mouse delivery recipe.
+struct MouseClickDeliveryClassifier: Sendable {
+    typealias FileExists = @Sendable (String) -> Bool
+
+    private let fileExists: FileExists
+
+    init(fileExists: @escaping FileExists = { FileManager.default.fileExists(atPath: $0) }) {
+        self.fileExists = fileExists
+    }
+
+    func deliveryRoute(
+        bundleIdentifier: String?,
+        bundleURL: URL?
+    ) -> MouseClickDeliveryRoute {
+        if let bundleIdentifier,
+           Self.chromiumFamilyBundleIdentifiers.contains(bundleIdentifier)
+            || Self.knownElectronBundleIdentifiers.contains(bundleIdentifier)
+        {
+            return .chromiumElectron
+        }
+
+        if let bundleURL {
+            let electronFrameworkPath = bundleURL
+                .appendingPathComponent("Contents/Frameworks/Electron Framework.framework")
+                .path
+            if fileExists(electronFrameworkPath) {
+                return .chromiumElectron
+            }
+        }
+
+        return .appKit
+    }
+
+    private static let chromiumFamilyBundleIdentifiers: Set<String> = [
+        "com.google.Chrome",
+        "com.google.Chrome.canary",
+        "com.microsoft.edgemac",
+        "com.brave.Browser",
+        "company.thebrowser.Browser",
+        "com.vivaldi.Vivaldi",
+        "com.operasoftware.Opera",
+    ]
+
+    private static let knownElectronBundleIdentifiers: Set<String> = [
+        "com.tinyspeck.slackmacgap",
+        "com.microsoft.VSCode",
+        "com.microsoft.VSCodeInsiders",
+        "com.discordapp.Discord",
+        "notion.id",
+        "com.figma.Desktop",
+    ]
+}
+
 /// Posts pid-scoped mouse events for the general, non-Chromium path through
-/// the public cursor-neutral per-pid mouse route.
+/// either the public AppKit route or the Chromium/Electron SkyLight route.
 ///
-/// The event shape intentionally mirrors the CUA/Codex probe observations:
-/// AppKit receives an NSEvent-bridged CGEvent, WindowServer gets an explicit
-/// window-local coordinate, and SkyLight private fields carry the pid, window
-/// id, and gesture grouping metadata. `CGEvent.postToPid` is used exactly once
-/// per event because it is the route AppKit reliably drains; the core repairs
-/// WindowServer order immediately after each post stage.
+/// Both routes construct NSEvent-bridged CGEvents, stamp window-local
+/// coordinates and private SkyLight fields, and rely on the core to repair
+/// WindowServer order after observable post stages.
 struct MouseEventPoster: Sendable {
     typealias PostEventToPID = @Sendable (CGEvent, pid_t) throws -> Void
     typealias SetWindowLocation = @Sendable (CGEvent, CGPoint) throws -> Void
     typealias SetIntegerField = @Sendable (CGEvent, UInt32, Int64) throws -> Void
     typealias Sleep = @Sendable (useconds_t) -> Void
 
-    private let postEventToPID: PostEventToPID
+    private let postPublicEventToPID: PostEventToPID
+    private let postSkyLightEventToPID: PostEventToPID
     private let setWindowLocation: SetWindowLocation
     private let setIntegerField: SetIntegerField
     private let sleep: Sleep
 
     init(
-        postEventToPID: @escaping PostEventToPID = { event, pid in event.postToPid(pid) },
+        postPublicEventToPID: @escaping PostEventToPID = { event, pid in event.postToPid(pid) },
+        postSkyLightEventToPID: @escaping PostEventToPID,
         setWindowLocation: @escaping SetWindowLocation,
         setIntegerField: @escaping SetIntegerField,
         sleep: @escaping Sleep = { usleep($0) }
     ) {
-        self.postEventToPID = postEventToPID
+        self.postPublicEventToPID = postPublicEventToPID
+        self.postSkyLightEventToPID = postSkyLightEventToPID
         self.setWindowLocation = setWindowLocation
         self.setIntegerField = setIntegerField
         self.sleep = sleep
@@ -45,6 +107,10 @@ struct MouseEventPoster: Sendable {
 
     static func live() -> MouseEventPoster {
         MouseEventPoster(
+            postSkyLightEventToPID: { event, pid in
+                let symbols = try SkyLightMouseEventPostSymbols.load()
+                symbols.postEventToPID(event, pid)
+            },
             setWindowLocation: { event, point in
                 let symbols = try SkyLightMouseEventSymbols.load()
                 symbols.setWindowLocation(event, point)
@@ -57,6 +123,34 @@ struct MouseEventPoster: Sendable {
     }
 
     func postLeftClick(
+        pid: pid_t,
+        windowId: CGWindowID,
+        point: CGPoint,
+        windowBounds: WindowBounds,
+        deliveryRoute: MouseClickDeliveryRoute = .appKit,
+        stageObserver: MouseClickPostObserver? = nil
+    ) async throws {
+        switch deliveryRoute {
+        case .appKit:
+            try await postAppKitLeftClick(
+                pid: pid,
+                windowId: windowId,
+                point: point,
+                windowBounds: windowBounds,
+                stageObserver: stageObserver
+            )
+        case .chromiumElectron:
+            try await postChromiumElectronLeftClick(
+                pid: pid,
+                windowId: windowId,
+                point: point,
+                windowBounds: windowBounds,
+                stageObserver: stageObserver
+            )
+        }
+    }
+
+    private func postAppKitLeftClick(
         pid: pid_t,
         windowId: CGWindowID,
         point: CGPoint,
@@ -113,13 +207,96 @@ struct MouseEventPoster: Sendable {
             windowLocalPoint: windowLocalPoint
         )
 
-        try post(move, pid: pid)
+        try postPublic(move, pid: pid)
         try await stageObserver?(.afterMouseMoved)
         sleep(15_000)
-        try post(down, pid: pid)
+        try postPublic(down, pid: pid)
         try await stageObserver?(.afterTargetDown)
         sleep(1_000)
-        try post(up, pid: pid)
+        try postPublic(up, pid: pid)
+        try await stageObserver?(.afterTargetUp)
+    }
+
+    private func postChromiumElectronLeftClick(
+        pid: pid_t,
+        windowId: CGWindowID,
+        point: CGPoint,
+        windowBounds: WindowBounds,
+        stageObserver: MouseClickPostObserver? = nil
+    ) async throws {
+        let targetWindowLocalPoint = CGPoint(
+            x: point.x - windowBounds.x,
+            y: point.y - windowBounds.y
+        )
+        let offScreenPrimerPoint = CGPoint(x: -1, y: -1)
+        let clickGroup = Int64(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) & 0x7fff_ffff)
+
+        let move = try makeMouseEvent(type: .mouseMoved, windowId: windowId, clickCount: 0)
+        let primerDown = try makeMouseEvent(type: .leftMouseDown, windowId: windowId, clickCount: 1)
+        let primerUp = try makeMouseEvent(type: .leftMouseUp, windowId: windowId, clickCount: 1)
+        let targetDown = try makeMouseEvent(type: .leftMouseDown, windowId: windowId, clickCount: 1)
+        let targetUp = try makeMouseEvent(type: .leftMouseUp, windowId: windowId, clickCount: 1)
+
+        try stamp(
+            move,
+            pid: pid,
+            windowId: windowId,
+            mouseEventNumber: 2,
+            clickGroup: clickGroup,
+            screenPoint: point,
+            windowLocalPoint: targetWindowLocalPoint
+        )
+        try stamp(
+            primerDown,
+            pid: pid,
+            windowId: windowId,
+            mouseEventNumber: 1,
+            clickGroup: clickGroup,
+            screenPoint: offScreenPrimerPoint,
+            windowLocalPoint: offScreenPrimerPoint
+        )
+        try stamp(
+            primerUp,
+            pid: pid,
+            windowId: windowId,
+            mouseEventNumber: 2,
+            clickGroup: clickGroup,
+            screenPoint: offScreenPrimerPoint,
+            windowLocalPoint: offScreenPrimerPoint
+        )
+        try stamp(
+            targetDown,
+            pid: pid,
+            windowId: windowId,
+            mouseEventNumber: 3,
+            clickGroup: clickGroup,
+            screenPoint: point,
+            windowLocalPoint: targetWindowLocalPoint
+        )
+        try stamp(
+            targetUp,
+            pid: pid,
+            windowId: windowId,
+            mouseEventNumber: 3,
+            clickGroup: clickGroup,
+            screenPoint: point,
+            windowLocalPoint: targetWindowLocalPoint
+        )
+
+        try postSkyLight(move, pid: pid)
+        try await stageObserver?(.afterMouseMoved)
+        sleep(15_000)
+        try postSkyLight(primerDown, pid: pid)
+        try await stageObserver?(.afterPrimerDown)
+        sleep(1_000)
+        try postSkyLight(primerUp, pid: pid)
+        try await stageObserver?(.afterPrimerUp)
+        sleep(100_000)
+        try await stageObserver?(.afterPrimerGap)
+        try postSkyLight(targetDown, pid: pid)
+        try await stageObserver?(.afterTargetDown)
+        sleep(1_000)
+        try postSkyLight(targetUp, pid: pid)
         try await stageObserver?(.afterTargetUp)
     }
 
@@ -177,14 +354,32 @@ struct MouseEventPoster: Sendable {
         try setIntegerField(event, 92, rawWindowId)
     }
 
-    private func post(_ event: CGEvent, pid: pid_t) throws {
+    private func postPublic(_ event: CGEvent, pid: pid_t) throws {
         event.timestamp = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
-        try postEventToPID(event, pid)
+        try postPublicEventToPID(event, pid)
+    }
+
+    private func postSkyLight(_ event: CGEvent, pid: pid_t) throws {
+        event.timestamp = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        try postSkyLightEventToPID(event, pid)
     }
 }
 
+private typealias SLEventPostToPid = @convention(c) (pid_t, CGEvent) -> Void
 private typealias CGEventSetWindowLocation = @convention(c) (CGEvent, CGPoint) -> Void
 private typealias SLEventSetIntegerValueField = @convention(c) (CGEvent, UInt32, Int64) -> Void
+
+private struct SkyLightMouseEventPostSymbols {
+    let postEventToPID: (CGEvent, pid_t) -> Void
+
+    static func load() throws -> SkyLightMouseEventPostSymbols {
+        let handles = try MouseEventPrivateFrameworkHandles.load()
+        let postToPid: SLEventPostToPid = try handles.symbol("SLEventPostToPid")
+        return SkyLightMouseEventPostSymbols(
+            postEventToPID: { event, pid in postToPid(pid, event) }
+        )
+    }
+}
 
 private struct SkyLightMouseEventSymbols {
     let setWindowLocation: CGEventSetWindowLocation

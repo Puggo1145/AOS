@@ -32,8 +32,40 @@ struct WindowOrderGuardian: Sendable {
         currentWindows: [WindowInfo],
         raiseWindow: @Sendable (WindowInfo) async throws -> Void
     ) async throws -> Bool {
+        let violatedWindows = try violatedWindows(currentWindows: currentWindows)
+        for window in violatedWindows.reversed() {
+            try await raiseWindow(window)
+        }
+
+        return !violatedWindows.isEmpty
+    }
+
+    func protectedCoveredCount(currentWindows: [WindowInfo]) -> Int? {
         guard !protectedWindows.isEmpty else {
-            return false
+            return 0
+        }
+
+        let orderedWindows = Self.guardableWindows(currentWindows)
+        guard let targetIndex = orderedWindows.firstIndex(where: { $0.id == targetWindowId }) else {
+            return nil
+        }
+
+        let indexByWindowId = Dictionary(
+            uniqueKeysWithValues: orderedWindows.enumerated().map { index, window in
+                (window.id, index)
+            }
+        )
+        return protectedWindows.filter { window in
+            guard let currentIndex = indexByWindowId[window.id] else {
+                return false
+            }
+            return currentIndex > targetIndex
+        }.count
+    }
+
+    private func violatedWindows(currentWindows: [WindowInfo]) throws -> [WindowInfo] {
+        guard !protectedWindows.isEmpty else {
+            return []
         }
 
         let orderedWindows = Self.guardableWindows(currentWindows)
@@ -48,18 +80,12 @@ struct WindowOrderGuardian: Sendable {
                 (window.id, index)
             }
         )
-        let violatedWindows = protectedWindows.filter { window in
+        return protectedWindows.filter { window in
             guard let currentIndex = indexByWindowId[window.id] else {
                 return false
             }
             return currentIndex > targetIndex
         }
-
-        for window in violatedWindows.reversed() {
-            try await raiseWindow(window)
-        }
-
-        return !violatedWindows.isEmpty
     }
 
     static func guardableWindows(_ windows: [WindowInfo]) -> [WindowInfo] {

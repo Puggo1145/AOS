@@ -171,7 +171,9 @@ SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: defocus))
 关键点：
 
 - 只对目标 pid/window 发 `.defocus`，不对用户原前台窗口发 defocus。
-- 先恢复原 front window focus，并完成 order repair guard，再 deactive target。
+- 先恢复原 front window focus，再 deactive target，然后进入 delayed order repair guard。
+  Chrome / Electron 可能在 target-side deactivation cleanup 后才执行 delayed order
+  compensation；deactivation 必须被同一个 guard window 覆盖，不能放在 guard 之后。
 - 如果目标窗口本来就是点击前的前台 active 窗口，则跳过 deactive；正常前台点击不应被降为 inactive。
 - deactive 不负责 z-order repair，只撤掉目标窗口残留的 active/key 状态，避免下一次后台投放触发 raise 闪动。
 
@@ -221,8 +223,33 @@ background click core path。
 
 ## Known Limits
 
-- Chromium / Electron web content 还没有纳入最终路径。Chrome renderer trust gate 可能
-  需要 SkyLight route、primer click 或额外 native event fields。
+- Chromium / Electron web content uses a separate `post-left-click` delivery
+  route instead of replacing the proven AppKit route.
+
+  Implemented split:
+
+  - Keep the current general AppKit route as-is:
+    `mouseMoved -> leftMouseDown -> leftMouseUp`, delivered once through
+    public `CGEvent.postToPid`.
+  - Classify Chromium-family browsers and Electron bundles before mouse
+    delivery. The outer click chain remains the same: validate ownership,
+    target-side focus without raise, per-stage order repair, delayed order
+    guard, and target-side deactivation.
+  - For Chromium / Electron, use a dedicated SkyLight mouse recipe:
+    `mouseMoved(target) -> leftDown/leftUp(off-screen primer) ->
+    leftDown/leftUp(target)`, delivered via `SLEventPostToPid` without an
+    authentication message. The primer is part of the delivery contract; do not
+    silently fall back to the AppKit path if this route fails.
+  - The Chromium / Electron route must continue stamping target pid, window
+    identity, click state, and window-local coordinates on each event.
+  - Safari / WebKit remains out of scope for this route. CUA's Safari tests
+    validate AX and keyboard paths; they explicitly mark pixel clicks into
+    Safari web content as known non-delivery.
+
+- Chromium / Electron route 仍需要真实 Chrome / Electron target 的 live
+  validation。当前实现按 CUA recipe 纳入 SkyLight route 和 off-screen primer；
+  若 live 验证失败，不应 fallback 到 AppKit route，而应继续收集 renderer
+  trust-gate 所需的 event fields / timing evidence。
 - CLI 版本用同步 300ms guard 模拟常驻 observer。长期形态应迁入 AOS app 进程，做真正
   的 `WindowOrderingObserver`，减少命令返回延迟，并更接近 Codex Computer Use。
 - repair 依赖 Accessibility permission，因为当前 primitive 是 `AXRaise`。
