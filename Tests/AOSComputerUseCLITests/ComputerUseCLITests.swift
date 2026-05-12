@@ -12,6 +12,7 @@ struct ComputerUseCLITests {
 
         #expect(output.contains("list-apps"))
         #expect(output.contains("list-windows"))
+        #expect(output.contains("get-app-type"))
         #expect(output.contains("get-app-state"))
         #expect(output.contains("focus-window"))
         #expect(output.contains("open-coor-test"))
@@ -99,6 +100,34 @@ struct ComputerUseCLITests {
         #expect(result.stdout.contains("Windows for pid 123"))
         #expect(result.stdout.contains("456"))
         #expect(result.stdout.contains("800x600"))
+        #expect(result.exitCode == 0)
+    }
+
+    @Test("get-app-type emits AOS app classification for a pid")
+    func getAppTypeEmitsClassificationForPID() async throws {
+        let fake = FakeComputerUseCore()
+        await fake.setAppType(AppTypeResult(
+            pid: 123,
+            appName: "NetEaseMusic",
+            bundleId: "com.netease.163music",
+            bundlePath: "/Applications/NeteaseMusic.app",
+            type: .chromiumElectron,
+            reason: .chromiumEmbeddedFramework
+        ))
+
+        let result = try await ComputerUseCLI.run(
+            arguments: ["get-app-type", "--pid", "123"],
+            core: fake,
+            permissions: FakePermissionClient()
+        )
+
+        #expect(await fake.requestedAppTypePID == 123)
+        #expect(result.stdout.contains("App type for pid 123"))
+        #expect(result.stdout.contains("name: NetEaseMusic"))
+        #expect(result.stdout.contains("bundleId: com.netease.163music"))
+        #expect(result.stdout.contains("type: chromiumElectron"))
+        #expect(result.stdout.contains("reason: chromiumEmbeddedFramework"))
+        #expect(result.stdout.contains("bundlePath: /Applications/NeteaseMusic.app"))
         #expect(result.exitCode == 0)
     }
 
@@ -841,6 +870,31 @@ struct ComputerUseCLITests {
         #expect(result.exitCode == 0)
     }
 
+    @Test("get-app-type supports machine-readable JSON output")
+    func getAppTypeSupportsMachineReadableJSONOutput() async throws {
+        let fake = FakeComputerUseCore()
+        await fake.setAppType(AppTypeResult(
+            pid: 123,
+            appName: "Postman",
+            bundleId: "com.postmanlabs.mac",
+            bundlePath: "/Applications/Postman.app",
+            type: .chromiumElectron,
+            reason: .electronFramework
+        ))
+
+        let result = try await ComputerUseCLI.run(
+            arguments: ["get-app-type", "--pid", "123", "--json"],
+            core: fake,
+            permissions: FakePermissionClient()
+        )
+
+        #expect(result.stdout.contains("\"command\":\"get-app-type\""))
+        #expect(result.stdout.contains("\"type\":\"chromiumElectron\""))
+        #expect(result.stdout.contains("\"reason\":\"electronFramework\""))
+        #expect(result.stdout.contains("\"bundleId\":\"com.postmanlabs.mac\""))
+        #expect(result.exitCode == 0)
+    }
+
     @Test("missing required option returns usage error")
     func missingRequiredOptionReturnsUsageError() async throws {
         let result = try await ComputerUseCLI.run(
@@ -972,9 +1026,11 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
     var apps: [AppInfo] = []
     var windows: [WindowInfo] = []
     var state: AppStateBundle?
+    var appType: AppTypeResult?
 
     private(set) var requestedAppMode: AppListMode?
     private(set) var requestedWindowPID: pid_t?
+    private(set) var requestedAppTypePID: pid_t?
     private(set) var requestedStatePID: pid_t?
     private(set) var requestedStateWindowID: CGWindowID?
     private(set) var requestedCaptureMode: CaptureMode?
@@ -1002,6 +1058,10 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
         self.state = state
     }
 
+    func setAppType(_ appType: AppTypeResult) {
+        self.appType = appType
+    }
+
     func setLeftClickTrace(_ trace: WindowClickTraceResult) {
         self.leftClickTrace = trace
     }
@@ -1014,6 +1074,11 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
     func listWindows(pid: pid_t) async throws -> [WindowInfo] {
         requestedWindowPID = pid
         return windows
+    }
+
+    func getAppType(pid: pid_t) async throws -> AppTypeResult {
+        requestedAppTypePID = pid
+        return try #require(appType)
     }
 
     func getAppState(

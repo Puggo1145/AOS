@@ -18,39 +18,84 @@ public typealias MouseClickPostObserver = @Sendable (MouseClickPostStage) async 
 enum MouseClickDeliveryRoute: Sendable, Equatable {
     case appKit
     case chromiumElectron
+
+    var appType: AppType {
+        switch self {
+        case .appKit:
+            return .appKit
+        case .chromiumElectron:
+            return .chromiumElectron
+        }
+    }
+}
+
+struct MouseClickDeliveryClassification: Sendable, Equatable {
+    let route: MouseClickDeliveryRoute
+    let reason: AppTypeReason
 }
 
 /// Classifies targets that need the Chromium/Electron mouse delivery recipe.
 struct MouseClickDeliveryClassifier: Sendable {
     typealias FileExists = @Sendable (String) -> Bool
+    typealias ContainsChromiumRuntimeResources = @Sendable (URL) -> Bool
 
     private let fileExists: FileExists
+    private let containsChromiumRuntimeResources: ContainsChromiumRuntimeResources
 
-    init(fileExists: @escaping FileExists = { FileManager.default.fileExists(atPath: $0) }) {
+    init(
+        fileExists: @escaping FileExists = { FileManager.default.fileExists(atPath: $0) },
+        containsChromiumRuntimeResources: @escaping ContainsChromiumRuntimeResources = {
+            Self.bundleContainsChromiumRuntimeResources(bundleURL: $0)
+        }
+    ) {
         self.fileExists = fileExists
+        self.containsChromiumRuntimeResources = containsChromiumRuntimeResources
     }
 
     func deliveryRoute(
         bundleIdentifier: String?,
         bundleURL: URL?
     ) -> MouseClickDeliveryRoute {
-        if let bundleIdentifier,
-           Self.chromiumFamilyBundleIdentifiers.contains(bundleIdentifier)
-            || Self.knownElectronBundleIdentifiers.contains(bundleIdentifier)
-        {
-            return .chromiumElectron
-        }
+        classification(bundleIdentifier: bundleIdentifier, bundleURL: bundleURL).route
+    }
 
+    func classification(
+        bundleIdentifier: String?,
+        bundleURL: URL?
+    ) -> MouseClickDeliveryClassification {
         if let bundleURL {
             let electronFrameworkPath = bundleURL
                 .appendingPathComponent("Contents/Frameworks/Electron Framework.framework")
                 .path
             if fileExists(electronFrameworkPath) {
-                return .chromiumElectron
+                return MouseClickDeliveryClassification(route: .chromiumElectron, reason: .electronFramework)
+            }
+
+            let chromiumEmbeddedFrameworkPath = bundleURL
+                .appendingPathComponent("Contents/Frameworks/Chromium Embedded Framework.framework")
+                .path
+            if fileExists(chromiumEmbeddedFrameworkPath) {
+                return MouseClickDeliveryClassification(route: .chromiumElectron, reason: .chromiumEmbeddedFramework)
+            }
+
+            if containsChromiumRuntimeResources(bundleURL) {
+                return MouseClickDeliveryClassification(route: .chromiumElectron, reason: .chromiumRuntimeResources)
             }
         }
 
-        return .appKit
+        if let bundleIdentifier,
+           Self.chromiumFamilyBundleIdentifiers.contains(bundleIdentifier)
+        {
+            return MouseClickDeliveryClassification(route: .chromiumElectron, reason: .chromiumBrowserBundleId)
+        }
+
+        if let bundleIdentifier,
+           Self.knownElectronBundleIdentifiers.contains(bundleIdentifier)
+        {
+            return MouseClickDeliveryClassification(route: .chromiumElectron, reason: .knownElectronBundleId)
+        }
+
+        return MouseClickDeliveryClassification(route: .appKit, reason: .appKitDefault)
     }
 
     private static let chromiumFamilyBundleIdentifiers: Set<String> = [
@@ -70,7 +115,41 @@ struct MouseClickDeliveryClassifier: Sendable {
         "com.discordapp.Discord",
         "notion.id",
         "com.figma.Desktop",
+        "com.tencent.qq",
     ]
+
+    private static let chromiumRuntimeResourceMarkers: Set<String> = [
+        "chrome_100_percent.pak",
+        "chrome_200_percent.pak",
+        "icudtl.dat",
+        "resources.pak",
+        "v8_context_snapshot.arm64.bin",
+        "v8_context_snapshot.x86_64.bin",
+    ]
+
+    private static func bundleContainsChromiumRuntimeResources(bundleURL: URL) -> Bool {
+        let frameworksURL = bundleURL.appendingPathComponent("Contents/Frameworks", isDirectory: true)
+        guard let enumerator = FileManager.default.enumerator(
+            at: frameworksURL,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return false
+        }
+
+        var matchedMarkers: Set<String> = []
+        for case let url as URL in enumerator {
+            let marker = url.lastPathComponent
+            guard chromiumRuntimeResourceMarkers.contains(marker) else {
+                continue
+            }
+            matchedMarkers.insert(marker)
+            if matchedMarkers.count >= 3 {
+                return true
+            }
+        }
+        return false
+    }
 }
 
 /// Posts pid-scoped mouse events through either the public AppKit route or the

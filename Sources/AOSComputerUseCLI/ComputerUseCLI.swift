@@ -103,6 +103,7 @@ public struct LiveComputerUsePermissionClient: ComputerUsePermissionClient {
 
 public protocol ComputerUseCoreClient: Sendable {
     func listApps(mode: AppListMode) async throws -> [AppInfo]
+    func getAppType(pid: pid_t) async throws -> AppTypeResult
     func listWindows(pid: pid_t) async throws -> [WindowInfo]
     func getAppState(
         pid: pid_t,
@@ -533,6 +534,10 @@ public struct ComputerUseCoreAdapter: ComputerUseCoreClient {
         await core.listApps(mode: mode)
     }
 
+    public func getAppType(pid: pid_t) async throws -> AppTypeResult {
+        try await core.getAppType(pid: pid)
+    }
+
     public func listWindows(pid: pid_t) async throws -> [WindowInfo] {
         await core.listWindows(pid: pid)
     }
@@ -687,6 +692,7 @@ public enum ComputerUseCLI {
           AOSComputerUseCLI grant-permissions
           AOSComputerUseCLI open-coor-test
           AOSComputerUseCLI list-apps [--mode running|all]
+          AOSComputerUseCLI get-app-type --pid <pid>
           AOSComputerUseCLI list-windows --pid <pid>
           AOSComputerUseCLI get-app-state --pid <pid> --window-id <id> [--mode vision|ax] [--max-image-dimension <pixels>] [--screenshot-output <path>]
           AOSComputerUseCLI focus-window --pid <pid> --window-id <id>
@@ -703,6 +709,7 @@ public enum ComputerUseCLI {
           grant-permissions  Trigger macOS prompts and open System Settings for required permissions.
           open-coor-test  Open the coordinate click test target as a separate process.
           list-apps       List running apps by default, or all launchable apps with --mode all.
+          get-app-type    Show AOS's current app-operation classification for a running pid.
           list-windows    List layer-0 windows owned by a process id.
           get-app-state   Capture AX tree and/or screenshot for a specific app window.
           focus-window    Focus a specific app window without raising it.
@@ -748,6 +755,9 @@ public enum ComputerUseCLI {
             case .listApps(let mode):
                 let apps = try await core.listApps(mode: mode)
                 return try success(ListAppsOutput(mode: mode, apps: apps), format: parsed.outputFormat)
+            case .getAppType(let pid):
+                let result = try await core.getAppType(pid: pid)
+                return try success(AppTypeOutput(result: result), format: parsed.outputFormat)
             case .listWindows(let pid):
                 let windows = try await core.listWindows(pid: pid)
                 return try success(ListWindowsOutput(pid: pid, windows: windows), format: parsed.outputFormat)
@@ -1104,6 +1114,7 @@ private struct ParsedCommand {
         case grantPermissions
         case openCoorTestTarget
         case listApps(mode: AppListMode)
+        case getAppType(pid: pid_t)
         case listWindows(pid: pid_t)
         case getAppState(AppStateRequest)
         case focusWindow(FocusWindowRequest)
@@ -1140,6 +1151,10 @@ private struct ParsedCommand {
             let mode = try options.optionalEnum("--mode", AppListMode.self) ?? .running
             try options.rejectUnused()
             command = .listApps(mode: mode)
+        case "get-app-type":
+            let pid = try options.requiredPID("--pid")
+            try options.rejectUnused()
+            command = .getAppType(pid: pid)
         case "list-windows":
             let pid = try options.requiredPID("--pid")
             try options.rejectUnused()
@@ -1525,6 +1540,35 @@ private struct AppInfoOutput: Encodable {
         self.running = app.running
         self.active = app.active
         self.identity = app.identity
+    }
+}
+
+private struct AppTypeOutput: Encodable, ReadableOutput {
+    let command = "get-app-type"
+    let pid: pid_t
+    let appName: String?
+    let bundleId: String?
+    let bundlePath: String?
+    let type: String
+    let reason: String
+
+    init(result: AppTypeResult) {
+        self.pid = result.pid
+        self.appName = result.appName
+        self.bundleId = result.bundleId
+        self.bundlePath = result.bundlePath
+        self.type = result.type.rawValue
+        self.reason = result.reason.rawValue
+    }
+
+    var readableText: String {
+        var lines = ["App type for pid \(pid)"]
+        lines.append("- name: \(appName ?? "nil")")
+        lines.append("- bundleId: \(bundleId ?? "nil")")
+        lines.append("- type: \(type)")
+        lines.append("- reason: \(reason)")
+        lines.append("- bundlePath: \(bundlePath ?? "nil")")
+        return lines.joined(separator: "\n")
     }
 }
 

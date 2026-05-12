@@ -44,16 +44,23 @@ Production flow:
 
 ## Route Selection
 
-`MouseClickDeliveryClassifier` selects the Chromium / Electron route when the
-target process is one of the known Chromium-family bundle identifiers, one of
-the known Electron bundle identifiers, or its app bundle contains:
+`MouseClickDeliveryClassifier` selects the Chromium / Electron route from
+runtime evidence first, then falls back to known bundle identifiers. The
+runtime checks are:
 
 ```text
 Contents/Frameworks/Electron Framework.framework
+Contents/Frameworks/Chromium Embedded Framework.framework
+3+ Chromium resource markers under Contents/Frameworks:
+  chrome_100_percent.pak, chrome_200_percent.pak, icudtl.dat,
+  resources.pak, v8_context_snapshot.*.bin
 ```
 
-The current route includes Chrome, Chrome Canary, Edge, Brave, Arc, Vivaldi,
-Opera, Slack, VS Code, Discord, Notion, and Figma.
+Bundle identifier checks remain as fallback coverage for known Chromium-family
+browsers and non-standard Electron packages. `get-app-type` reports both the
+selected type and reason, such as `electronFramework`,
+`chromiumEmbeddedFramework`, `chromiumRuntimeResources`,
+`chromiumBrowserBundleId`, `knownElectronBundleId`, or `appKitDefault`.
 
 ## Focus Without Raise
 

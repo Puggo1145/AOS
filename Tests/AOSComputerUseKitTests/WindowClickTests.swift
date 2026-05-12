@@ -28,7 +28,7 @@ struct WindowClickTests {
             },
             deactivateWindowWithoutRaising: { _, _ in
             },
-            postLeftClick: { pid, windowId, point, windowBounds, _ in
+            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -76,7 +76,7 @@ struct WindowClickTests {
             },
             deactivateWindowWithoutRaising: { _, _ in
             },
-            postLeftClick: { pid, windowId, point, windowBounds, _ in
+            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -129,7 +129,7 @@ struct WindowClickTests {
                 await recorder.recordActivate(pid: pid)
                 return true
             },
-            postLeftClick: { pid, windowId, point, windowBounds, _ in
+            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -154,6 +154,57 @@ struct WindowClickTests {
         ])
     }
 
+    @Test("resolves the click delivery route once per click and reuses it for posting")
+    func resolvesClickDeliveryRouteOncePerClickAndReusesItForPosting() async throws {
+        let recorder = ClickChainRecorder()
+        let routeRecorder = DeliveryRouteRecorder(route: .chromiumElectron)
+        let core = ComputerUseCore(
+            windowLookup: { windowId in
+                guard windowId == 456 else { return nil }
+                return WindowInfo(
+                    id: 456,
+                    pid: 123,
+                    owner: "Electron",
+                    title: "Electron",
+                    bounds: WindowBounds(x: 10, y: 20, width: 300, height: 100),
+                    zIndex: 1,
+                    isOnScreen: true,
+                    layer: 0
+                )
+            },
+            clickDeliveryRoute: { pid in
+                routeRecorder.resolve(pid: pid)
+            },
+            focusWindowWithoutRaising: { pid, windowId in
+                await recorder.recordFocus(pid: pid, windowId: windowId)
+            },
+            deactivateWindowWithoutRaising: { _, _ in
+            },
+            postLeftClick: { pid, windowId, point, windowBounds, deliveryRoute, _ in
+                #expect(deliveryRoute == .chromiumElectron)
+                await recorder.recordClick(
+                    pid: pid,
+                    windowId: windowId,
+                    point: point,
+                    windowBounds: windowBounds
+                )
+            }
+        )
+
+        _ = try await core.postLeftClick(pid: 123, windowId: 456, point: CGPoint(x: 160, y: 70))
+
+        #expect(routeRecorder.resolvedPIDs == [123])
+        #expect(await recorder.events == [
+            .focus(pid: 123, windowId: 456),
+            .click(
+                pid: 123,
+                windowId: 456,
+                point: CGPoint(x: 160, y: 70),
+                windowBounds: WindowBounds(x: 10, y: 20, width: 300, height: 100)
+            ),
+        ])
+    }
+
     @Test("rejects an explicit click point outside the target window")
     func rejectsExplicitPointOutsideWindow() async {
         let recorder = ClickChainRecorder()
@@ -175,7 +226,7 @@ struct WindowClickTests {
             },
             deactivateWindowWithoutRaising: { _, _ in
             },
-            postLeftClick: { pid, windowId, point, windowBounds, _ in
+            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -244,7 +295,7 @@ struct WindowClickTests {
             },
             deactivateWindowWithoutRaising: { _, _ in
             },
-            postLeftClick: { pid, windowId, point, windowBounds, _ in
+            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -286,7 +337,7 @@ struct WindowClickTests {
             deactivateWindowWithoutRaising: { pid, windowId in
                 await recorder.recordDeactivate(pid: pid, windowId: windowId)
             },
-            postLeftClick: { pid, windowId, point, windowBounds, _ in
+            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -328,7 +379,7 @@ struct WindowClickTests {
             deactivateWindowWithoutRaising: { pid, windowId in
                 await recorder.recordDeactivate(pid: pid, windowId: windowId)
             },
-            postLeftClick: { pid, windowId, point, windowBounds, _ in
+            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -373,7 +424,7 @@ struct WindowClickTests {
                 await recorder.recordActivate(pid: pid)
                 return true
             },
-            postLeftClick: { pid, windowId, point, windowBounds, _ in
+            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -431,7 +482,7 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, _ in
+            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -494,7 +545,7 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, _ in
+            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -548,7 +599,7 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, _ in
+            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -607,7 +658,7 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0, 1],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, stageObserver in
+            postLeftClick: { pid, windowId, point, windowBounds, _, stageObserver in
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -670,7 +721,7 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0, 1, 1],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, stageObserver in
+            postLeftClick: { pid, windowId, point, windowBounds, _, stageObserver in
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -732,7 +783,7 @@ struct WindowClickTests {
             windowOrderChangeObserver: orderObserver.observer,
             activeStateGuardDelays: [],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, _ in
+            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -799,7 +850,7 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0, 1],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, _ in
+            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -855,7 +906,7 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0, 1],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, _ in
+            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -907,7 +958,7 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, stageObserver in
+            postLeftClick: { pid, windowId, point, windowBounds, _, stageObserver in
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -962,7 +1013,7 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0, 1],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, _ in
+            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -1020,7 +1071,7 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, _ in
+            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -1076,7 +1127,7 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, _ in
+            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -1133,7 +1184,7 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, _ in
+            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -1187,7 +1238,7 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0, 1, 1],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, _ in
+            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -1234,7 +1285,7 @@ struct WindowClickTests {
             },
             deactivateWindowWithoutRaising: { _, _ in
             },
-            postLeftClick: { pid, windowId, point, windowBounds, _ in
+            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -1327,30 +1378,62 @@ struct WindowClickTests {
         ])
     }
 
-    @Test("classifies Chromium browsers and Electron bundles for the Chromium delivery route")
-    func classifiesChromiumBrowsersAndElectronBundles() {
+    @Test("classifies Chromium browsers, CEF apps, and Electron bundles for the Chromium delivery route")
+    func classifiesChromiumBrowsersCEFAppsAndElectronBundles() {
         let classifier = MouseClickDeliveryClassifier(
             fileExists: { path in
                 path == "/Applications/CustomElectron.app/Contents/Frameworks/Electron Framework.framework"
-            }
+                    || path == "/Applications/CustomCEF.app/Contents/Frameworks/Chromium Embedded Framework.framework"
+            },
+            containsChromiumRuntimeResources: { _ in false }
         )
 
-        #expect(classifier.deliveryRoute(
+        #expect(classifier.classification(
             bundleIdentifier: "com.google.Chrome",
             bundleURL: nil
-        ) == .chromiumElectron)
-        #expect(classifier.deliveryRoute(
+        ) == MouseClickDeliveryClassification(route: .chromiumElectron, reason: .chromiumBrowserBundleId))
+        #expect(classifier.classification(
             bundleIdentifier: "com.tinyspeck.slackmacgap",
             bundleURL: nil
-        ) == .chromiumElectron)
-        #expect(classifier.deliveryRoute(
+        ) == MouseClickDeliveryClassification(route: .chromiumElectron, reason: .knownElectronBundleId))
+        #expect(classifier.classification(
             bundleIdentifier: "dev.local.CustomElectron",
             bundleURL: URL(fileURLWithPath: "/Applications/CustomElectron.app")
-        ) == .chromiumElectron)
-        #expect(classifier.deliveryRoute(
+        ) == MouseClickDeliveryClassification(route: .chromiumElectron, reason: .electronFramework))
+        #expect(classifier.classification(
+            bundleIdentifier: "dev.local.CustomCEF",
+            bundleURL: URL(fileURLWithPath: "/Applications/CustomCEF.app")
+        ) == MouseClickDeliveryClassification(route: .chromiumElectron, reason: .chromiumEmbeddedFramework))
+        #expect(classifier.classification(
+            bundleIdentifier: "com.tencent.qq",
+            bundleURL: URL(fileURLWithPath: "/Applications/QQ.app")
+        ) == MouseClickDeliveryClassification(route: .chromiumElectron, reason: .knownElectronBundleId))
+        #expect(classifier.classification(
             bundleIdentifier: "com.apple.TextEdit",
             bundleURL: URL(fileURLWithPath: "/System/Applications/TextEdit.app")
-        ) == .appKit)
+        ) == MouseClickDeliveryClassification(route: .appKit, reason: .appKitDefault))
+    }
+
+    @Test("classifies arbitrary Chromium runtime resources without a bundle id whitelist")
+    func classifiesArbitraryChromiumRuntimeResourcesWithoutBundleIDWhitelist() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("aos-chromium-runtime-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let resources = root
+            .appendingPathComponent("CustomChromium.app/Contents/Frameworks/CustomRuntime.framework/Versions/A/Resources", isDirectory: true)
+        try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+        for marker in ["chrome_100_percent.pak", "chrome_200_percent.pak", "icudtl.dat"] {
+            try Data().write(to: resources.appendingPathComponent(marker))
+        }
+
+        let classifier = MouseClickDeliveryClassifier()
+        let appURL = root.appendingPathComponent("CustomChromium.app", isDirectory: true)
+
+        #expect(classifier.classification(
+            bundleIdentifier: "dev.local.NotWhitelisted",
+            bundleURL: appURL
+        ) == MouseClickDeliveryClassification(route: .chromiumElectron, reason: .chromiumRuntimeResources))
     }
 
     @Test("Chromium delivery route matches Codex annotated mouse sequence")
@@ -1532,6 +1615,29 @@ private final class ActiveStateScript: @unchecked Sendable {
         let state = states[min(index, states.count - 1)]
         index += 1
         return state
+    }
+}
+
+private final class DeliveryRouteRecorder: @unchecked Sendable {
+    private let route: MouseClickDeliveryRoute
+    private let lock = NSLock()
+    private var recordedPIDs: [pid_t] = []
+
+    init(route: MouseClickDeliveryRoute) {
+        self.route = route
+    }
+
+    var resolvedPIDs: [pid_t] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedPIDs
+    }
+
+    func resolve(pid: pid_t) -> MouseClickDeliveryRoute {
+        lock.lock()
+        recordedPIDs.append(pid)
+        lock.unlock()
+        return route
     }
 }
 

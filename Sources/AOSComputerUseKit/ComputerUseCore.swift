@@ -130,6 +130,7 @@ public enum CaptureMode: String, Sendable, Equatable {
 }
 
 public enum ComputerUseError: Error, CustomStringConvertible, Sendable {
+    case appNotFound(pid: pid_t)
     case windowMismatch(pid: pid_t, windowId: CGWindowID, ownerPid: pid_t?)
     case captureUnavailable(String)
     case focusUnavailable(String)
@@ -139,6 +140,8 @@ public enum ComputerUseError: Error, CustomStringConvertible, Sendable {
 
     public var description: String {
         switch self {
+        case .appNotFound(let pid):
+            return "no running application with pid \(pid)"
         case .windowMismatch(let pid, let windowId, let ownerPid):
             var detail = "windowId \(windowId) is not owned by pid \(pid)"
             if let ownerPid {
@@ -167,7 +170,8 @@ public actor ComputerUseCore {
     private let windowLookup: @Sendable (CGWindowID) -> WindowInfo?
     private let visibleWindowsLookup: @Sendable () -> [WindowInfo]
     private let frontmostWindowLookup: @Sendable () -> WindowInfo?
-    private let requiresPreClickFocus: @Sendable (pid_t) -> Bool
+    private let clickDeliveryRoute: @Sendable (pid_t) -> MouseClickDeliveryRoute
+    private let requiresPreClickFocus: @Sendable (MouseClickDeliveryRoute) -> Bool
     private let focusWindowWithoutRaising: @Sendable (pid_t, CGWindowID) async throws -> Void
     private let deactivateWindowWithoutRaising: @Sendable (pid_t, CGWindowID) async throws -> Void
     private let activateApplication: @Sendable (pid_t) async -> Bool
@@ -180,6 +184,7 @@ public actor ComputerUseCore {
         CGWindowID,
         CGPoint,
         WindowBounds,
+        MouseClickDeliveryRoute,
         MouseClickPostObserver?
     ) async throws -> Void
 
@@ -209,9 +214,7 @@ public actor ComputerUseCore {
             frontmostWindowLookup: {
                 Self.currentFrontmostLayerZeroWindow()
             },
-            requiresPreClickFocus: { pid in
-                deliveryRouteForPID(pid).requiresPreClickFocus
-            },
+            clickDeliveryRoute: deliveryRouteForPID,
             focusWindowWithoutRaising: { pid, windowId in
                 try windowFocuser.focusWindowWithoutRaising(pid: pid, windowId: windowId)
             },
@@ -233,13 +236,13 @@ public actor ComputerUseCore {
             sleepForActiveStateGuard: { delay in
                 try await Task.sleep(nanoseconds: delay)
             },
-            postLeftClick: { pid, windowId, point, windowBounds, stageObserver in
+            postLeftClick: { pid, windowId, point, windowBounds, deliveryRoute, stageObserver in
                 try await mousePoster.postLeftClick(
                     pid: pid,
                     windowId: windowId,
                     point: point,
                     windowBounds: windowBounds,
-                    deliveryRoute: deliveryRouteForPID(pid),
+                    deliveryRoute: deliveryRoute,
                     stageObserver: stageObserver
                 )
             }
@@ -254,7 +257,8 @@ public actor ComputerUseCore {
         windowLookup: @escaping @Sendable (CGWindowID) -> WindowInfo?,
         visibleWindowsLookup: @escaping @Sendable () -> [WindowInfo] = { [] },
         frontmostWindowLookup: @escaping @Sendable () -> WindowInfo? = { nil },
-        requiresPreClickFocus: @escaping @Sendable (pid_t) -> Bool = { _ in true },
+        clickDeliveryRoute: @escaping @Sendable (pid_t) -> MouseClickDeliveryRoute = { _ in .appKit },
+        requiresPreClickFocus: @escaping @Sendable (MouseClickDeliveryRoute) -> Bool = { $0.requiresPreClickFocus },
         focusWindowWithoutRaising: @escaping @Sendable (pid_t, CGWindowID) async throws -> Void,
         deactivateWindowWithoutRaising: @escaping @Sendable (pid_t, CGWindowID) async throws -> Void,
         activateApplication: @escaping @Sendable (pid_t) async -> Bool = { _ in false },
@@ -267,8 +271,9 @@ public actor ComputerUseCore {
             CGWindowID,
             CGPoint,
             WindowBounds,
+            MouseClickDeliveryRoute,
             MouseClickPostObserver?
-        ) async throws -> Void = { _, _, _, _, _ in
+        ) async throws -> Void = { _, _, _, _, _, _ in
             throw ComputerUseError.clickUnavailable("mouse event poster is not configured")
         }
     ) {
@@ -280,6 +285,7 @@ public actor ComputerUseCore {
         self.windowLookup = windowLookup
         self.visibleWindowsLookup = visibleWindowsLookup
         self.frontmostWindowLookup = frontmostWindowLookup
+        self.clickDeliveryRoute = clickDeliveryRoute
         self.requiresPreClickFocus = requiresPreClickFocus
         self.focusWindowWithoutRaising = focusWindowWithoutRaising
         self.deactivateWindowWithoutRaising = deactivateWindowWithoutRaising
@@ -293,6 +299,27 @@ public actor ComputerUseCore {
 
     public func listApps(mode: AppListMode) -> [AppInfo] {
         AppEnumerator.apps(mode: mode)
+    }
+
+    public func getAppType(pid: pid_t) throws -> AppTypeResult {
+        guard let app = NSRunningApplication(processIdentifier: pid) else {
+            throw ComputerUseError.appNotFound(pid: pid)
+        }
+
+        let classifier = MouseClickDeliveryClassifier()
+        let classification = classifier.classification(
+            bundleIdentifier: app.bundleIdentifier,
+            bundleURL: app.bundleURL
+        )
+
+        return AppTypeResult(
+            pid: pid,
+            appName: app.localizedName,
+            bundleId: app.bundleIdentifier,
+            bundlePath: app.bundleURL?.standardizedFileURL.path,
+            type: classification.route.appType,
+            reason: classification.reason
+        )
     }
 
     public func listWindows(pid: pid_t) -> [WindowInfo] {
@@ -387,6 +414,7 @@ public actor ComputerUseCore {
                 "point \(Int(point.x)),\(Int(point.y)) is outside window \(windowId)"
             )
         }
+        let deliveryRoute = clickDeliveryRoute(pid)
         let originalFrontWindow = frontmostWindowLookup()
         let orderGuardian = try makeWindowOrderGuardian(targetWindowId: windowId)
         let traceRecorder = tracing ? WindowClickTraceRecorder() : nil
@@ -405,7 +433,7 @@ public actor ComputerUseCore {
                 targetWindowId: windowId,
                 orderGuardian: orderGuardian
             )
-            if requiresPreClickFocus(pid) {
+            if requiresPreClickFocus(deliveryRoute) {
                 try await focusWindowWithoutRaising(pid, windowId)
                 try await Task.sleep(nanoseconds: 5_000_000)
                 await recordTraceStage(
@@ -416,7 +444,7 @@ public actor ComputerUseCore {
                     orderGuardian: orderGuardian
                 )
             }
-            try await postLeftClickEvent(pid, windowId, point, window.bounds) { [self] stage in
+            try await postLeftClickEvent(pid, windowId, point, window.bounds, deliveryRoute) { [self] stage in
                 if stage.runsActiveStateGuard {
                     try await self.runActiveStateGuardOnce(
                         orderGuardian,
