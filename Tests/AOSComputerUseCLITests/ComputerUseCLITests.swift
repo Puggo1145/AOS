@@ -17,6 +17,7 @@ struct ComputerUseCLITests {
         #expect(output.contains("open-coor-test"))
         #expect(!output.contains("open-button"))
         #expect(output.contains("post-left-click"))
+        #expect(output.contains("post-cursor"))
         #expect(!output.contains("trace-postLeftClick"))
         #expect(output.contains("grant-permissions"))
         #expect(output.contains("--help"))
@@ -237,6 +238,92 @@ struct ComputerUseCLITests {
         #expect(result.exitCode == 0)
     }
 
+    @Test("post-cursor accepts explicit target and posts click at adjusted local coordinate")
+    func postCursorAcceptsExplicitTargetAndPostsAdjustedCoordinate() async throws {
+        let fake = FakeComputerUseCore()
+        let io = FakePostCursorIO(keys: [.right, .down, .click])
+        let overlay = FakePostCursorOverlay()
+        await fake.setWindows([
+            WindowInfo(
+                id: 456,
+                pid: 123,
+                owner: "AOSCoordinateTarget",
+                title: "AOS Button Reliability Target",
+                bounds: WindowBounds(x: 50, y: 70, width: 520, height: 360),
+                zIndex: 1,
+                isOnScreen: true,
+                layer: 0
+            )
+        ])
+
+        let result = try await ComputerUseCLI.run(
+            arguments: ["post-cursor", "--pid", "123", "--window-id", "456", "--coor", "260,180"],
+            core: fake,
+            permissions: FakePermissionClient(),
+            postCursorIO: io,
+            postCursorOverlay: overlay
+        )
+
+        #expect(await fake.requestedWindowPID == 123)
+        #expect(await fake.requestedLeftClickPID == 123)
+        #expect(await fake.requestedLeftClickWindowID == 456)
+        #expect(await fake.requestedLeftClickPoint == CGPoint(x: 320, y: 260))
+        #expect(await overlay.points == [
+            CGPoint(x: 310, y: 250),
+            CGPoint(x: 320, y: 250),
+            CGPoint(x: 320, y: 260),
+        ])
+        #expect(await overlay.hidden == true)
+        #expect(result.stdout.contains("Posted cursor click to window 456 at local 270,190 / screen 320,260"))
+        #expect(result.stderr.isEmpty)
+        #expect(result.exitCode == 0)
+    }
+
+    @Test("post-cursor prompts for pid and window when omitted")
+    func postCursorPromptsForTargetWhenOmitted() async throws {
+        let fake = FakeComputerUseCore()
+        let io = FakePostCursorIO(lines: ["123", "456"], keys: [.quit])
+        let overlay = FakePostCursorOverlay()
+        await fake.setApps([
+            AppInfo(
+                pid: 123,
+                bundleId: "com.example.Target",
+                name: "Target",
+                path: "/Applications/Target.app",
+                running: true,
+                active: false
+            )
+        ])
+        await fake.setWindows([
+            WindowInfo(
+                id: 456,
+                pid: 123,
+                owner: "Target",
+                title: "Main",
+                bounds: WindowBounds(x: 10, y: 20, width: 100, height: 80),
+                zIndex: 1,
+                isOnScreen: true,
+                layer: 0
+            )
+        ])
+
+        let result = try await ComputerUseCLI.run(
+            arguments: ["post-cursor"],
+            core: fake,
+            permissions: FakePermissionClient(),
+            postCursorIO: io,
+            postCursorOverlay: overlay
+        )
+
+        #expect(await fake.requestedAppMode == .running)
+        #expect(await fake.requestedWindowPID == 123)
+        #expect(await fake.requestedLeftClickPID == nil)
+        #expect(await io.prompts == ["Select pid: ", "Select window id: "])
+        #expect(await overlay.points == [CGPoint(x: 60, y: 60)])
+        #expect(result.stdout.contains("Post cursor exited at local 50,40 / screen 60,60"))
+        #expect(result.exitCode == 0)
+    }
+
     @Test("postLeftClick camel-case command is not accepted")
     func postLeftClickCamelCaseCommandIsNotAccepted() async throws {
         let fake = FakeComputerUseCore()
@@ -356,6 +443,48 @@ private actor FakeCoorTestTargetClient: CoorTestTargetClient {
     func open() async throws -> CoorTestTargetState {
         opened = true
         return state
+    }
+}
+
+private actor FakePostCursorIO: PostCursorIO {
+    private var lines: [String]
+    private var keys: [PostCursorKey]
+    private(set) var writes: [String] = []
+    private(set) var prompts: [String] = []
+
+    init(lines: [String] = [], keys: [PostCursorKey]) {
+        self.lines = lines
+        self.keys = keys
+    }
+
+    func write(_ text: String) async {
+        writes.append(text)
+    }
+
+    func readLine(prompt: String) async throws -> String {
+        prompts.append(prompt)
+        return lines.removeFirst()
+    }
+
+    func readKey() async throws -> PostCursorKey {
+        keys.removeFirst()
+    }
+}
+
+private actor FakePostCursorOverlay: PostCursorOverlay {
+    private(set) var points: [CGPoint] = []
+    private(set) var hidden = false
+
+    func show(at point: CGPoint) async throws {
+        points.append(point)
+    }
+
+    func move(to point: CGPoint) async throws {
+        points.append(point)
+    }
+
+    func hide() async {
+        hidden = true
     }
 }
 

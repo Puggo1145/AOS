@@ -116,6 +116,27 @@ public protocol ComputerUseCoreClient: Sendable {
     func postLeftClick(pid: pid_t, windowId: CGWindowID, point: CGPoint) async throws -> WindowClickResult
 }
 
+public enum PostCursorKey: Sendable, Equatable {
+    case up
+    case down
+    case left
+    case right
+    case click
+    case quit
+}
+
+public protocol PostCursorIO: Sendable {
+    func write(_ text: String) async
+    func readLine(prompt: String) async throws -> String
+    func readKey() async throws -> PostCursorKey
+}
+
+public protocol PostCursorOverlay: Sendable {
+    func show(at point: CGPoint) async throws
+    func move(to point: CGPoint) async throws
+    func hide() async
+}
+
 public struct ComputerUseCoreAdapter: ComputerUseCoreClient {
     private let core: ComputerUseCore
 
@@ -274,6 +295,7 @@ public enum ComputerUseCLI {
           AOSComputerUseCLI get-app-state --pid <pid> --window-id <id> [--mode vision|ax] [--max-image-dimension <pixels>] [--screenshot-output <path>]
           AOSComputerUseCLI focus-window --pid <pid> --window-id <id>
           AOSComputerUseCLI post-left-click --pid <pid> --window-id <id> --coor <x,y>
+          AOSComputerUseCLI post-cursor [--pid <pid>] [--window-id <id>] [--coor <x,y>]
 
         Options:
           --json          Emit machine-readable JSON instead of the default readable text.
@@ -287,6 +309,8 @@ public enum ComputerUseCLI {
           focus-window    Focus a specific app window without raising it.
           post-left-click
                           Post a background left click to a local --coor point of a specific app window.
+          post-cursor
+                          Open an interactive test cursor. Arrow keys move it, A posts a left click, B exits.
 
         Output:
           Successful commands write readable text to stdout by default.
@@ -298,7 +322,9 @@ public enum ComputerUseCLI {
         arguments: [String],
         core: ComputerUseCoreClient,
         permissions: ComputerUsePermissionClient = LiveComputerUsePermissionClient(),
-        coorTestTarget: CoorTestTargetClient = LiveCoorTestTargetClient()
+        coorTestTarget: CoorTestTargetClient = LiveCoorTestTargetClient(),
+        postCursorIO: PostCursorIO = LivePostCursorIO(),
+        postCursorOverlay: PostCursorOverlay = LivePostCursorOverlay()
     ) async throws -> ComputerUseCLIResult {
         do {
             let parsed = try ParsedCommand(arguments: arguments)
@@ -338,6 +364,14 @@ public enum ComputerUseCLI {
             case .postLeftClick(let request):
                 let result = try await postLeftClick(request: request, core: core)
                 return try success(LeftClickOutput(request: request, result: result), format: parsed.outputFormat)
+            case .postCursor(let request):
+                let result = try await runPostCursor(
+                    request: request,
+                    core: core,
+                    io: postCursorIO,
+                    overlay: postCursorOverlay
+                )
+                return try success(PostCursorOutput(result: result), format: parsed.outputFormat)
             }
         } catch let error as UsageError {
             return ComputerUseCLIResult(stdout: "", stderr: error.message + "\n", exitCode: 64)
@@ -387,6 +421,152 @@ public enum ComputerUseCLI {
         )
     }
 
+    private static func runPostCursor(
+        request: PostCursorRequest,
+        core: ComputerUseCoreClient,
+        io: PostCursorIO,
+        overlay: PostCursorOverlay
+    ) async throws -> PostCursorResult {
+        let movementStep: CGFloat = 10
+        let pid = try await resolvePostCursorPID(request.pid, core: core, io: io)
+        let window = try await resolvePostCursorWindow(
+            pid: pid,
+            requestedWindowId: request.windowId,
+            core: core,
+            io: io
+        )
+        var localPoint = request.coordinate ?? CGPoint(
+            x: floor(window.bounds.width / 2),
+            y: floor(window.bounds.height / 2)
+        )
+        localPoint = clamp(localPoint, to: window.bounds)
+        var currentScreenPoint = screenPoint(localPoint: localPoint, window: window)
+
+        try await overlay.show(at: currentScreenPoint)
+        await io.write(postCursorStatus(window: window, localPoint: localPoint))
+
+        do {
+            while true {
+                switch try await io.readKey() {
+                case .up:
+                    localPoint.y -= movementStep
+                case .down:
+                    localPoint.y += movementStep
+                case .left:
+                    localPoint.x -= movementStep
+                case .right:
+                    localPoint.x += movementStep
+                case .click:
+                    let result = try await core.postLeftClick(pid: pid, windowId: window.id, point: currentScreenPoint)
+                    await overlay.hide()
+                    return PostCursorResult(
+                        pid: pid,
+                        windowId: window.id,
+                        point: result.point,
+                        localPoint: localPoint,
+                        clicked: true
+                    )
+                case .quit:
+                    await overlay.hide()
+                    return PostCursorResult(
+                        pid: pid,
+                        windowId: window.id,
+                        point: currentScreenPoint,
+                        localPoint: localPoint,
+                        clicked: false
+                    )
+                }
+
+                localPoint = clamp(localPoint, to: window.bounds)
+                currentScreenPoint = screenPoint(localPoint: localPoint, window: window)
+                try await overlay.move(to: currentScreenPoint)
+                await io.write("cursor local \(Int(localPoint.x)),\(Int(localPoint.y)) screen \(Int(currentScreenPoint.x)),\(Int(currentScreenPoint.y))\n")
+            }
+        } catch {
+            await overlay.hide()
+            throw error
+        }
+    }
+
+    private static func resolvePostCursorPID(
+        _ requestedPID: pid_t?,
+        core: ComputerUseCoreClient,
+        io: PostCursorIO
+    ) async throws -> pid_t {
+        if let requestedPID {
+            return requestedPID
+        }
+
+        let apps = try await core.listApps(mode: .running).filter { $0.pid != nil }
+        if apps.isEmpty {
+            throw UsageError("no running apps with process ids are available")
+        }
+        await io.write("Apps\n")
+        for app in apps {
+            await io.write("\(app.name) pid \(app.pid!)\n")
+        }
+        let raw = try await io.readLine(prompt: "Select pid: ")
+        guard let selected = Int32(raw.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            throw UsageError("invalid app selection: \(raw)")
+        }
+        guard selected > 0 else {
+            throw UsageError("invalid app selection: \(raw)")
+        }
+        return pid_t(selected)
+    }
+
+    private static func resolvePostCursorWindow(
+        pid: pid_t,
+        requestedWindowId: CGWindowID?,
+        core: ComputerUseCoreClient,
+        io: PostCursorIO
+    ) async throws -> WindowInfo {
+        let windows = try await core.listWindows(pid: pid)
+        if let requestedWindowId {
+            guard let window = windows.first(where: { $0.id == requestedWindowId }) else {
+                throw UsageError("window \(requestedWindowId) for pid \(pid) is not available")
+            }
+            return window
+        }
+
+        if windows.isEmpty {
+            throw UsageError("pid \(pid) has no layer-0 windows")
+        }
+        await io.write("Windows for pid \(pid)\n")
+        for window in windows {
+            let title = window.title.isEmpty ? "(untitled)" : window.title
+            await io.write("\(window.id) \(title) \(Int(window.bounds.width))x\(Int(window.bounds.height)) @ \(Int(window.bounds.x)),\(Int(window.bounds.y))\n")
+        }
+        let raw = try await io.readLine(prompt: "Select window id: ")
+        guard let selected = UInt32(raw.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            throw UsageError("invalid window selection: \(raw)")
+        }
+        guard let window = windows.first(where: { $0.id == selected }) else {
+            throw UsageError("window \(selected) for pid \(pid) is not available")
+        }
+        return window
+    }
+
+    private static func screenPoint(localPoint: CGPoint, window: WindowInfo) -> CGPoint {
+        CGPoint(x: window.bounds.x + localPoint.x, y: window.bounds.y + localPoint.y)
+    }
+
+    private static func clamp(_ point: CGPoint, to bounds: WindowBounds) -> CGPoint {
+        CGPoint(
+            x: min(max(point.x, 0), max(bounds.width - 1, 0)),
+            y: min(max(point.y, 0), max(bounds.height - 1, 0))
+        )
+    }
+
+    private static func postCursorStatus(window: WindowInfo, localPoint: CGPoint) -> String {
+        """
+        Post cursor attached to window \(window.id) (pid \(window.pid)).
+        Arrow keys move the cursor. A posts post-left-click. B exits.
+        cursor local \(Int(localPoint.x)),\(Int(localPoint.y)) screen \(Int(window.bounds.x + localPoint.x)),\(Int(window.bounds.y + localPoint.y))
+
+        """
+    }
+
 }
 
 private struct ParsedCommand {
@@ -402,6 +582,7 @@ private struct ParsedCommand {
         case getAppState(AppStateRequest)
         case focusWindow(FocusWindowRequest)
         case postLeftClick(LeftClickRequest)
+        case postCursor(PostCursorRequest)
     }
 
     init(arguments: [String]) throws {
@@ -459,6 +640,12 @@ private struct ParsedCommand {
             let coordinate = try options.requiredPoint("--coor")
             try options.rejectUnused()
             command = .postLeftClick(LeftClickRequest(pid: pid, windowId: windowId, coordinate: coordinate))
+        case "post-cursor":
+            let pid = try options.optionalPID("--pid")
+            let windowId = try options.optionalWindowID("--window-id")
+            let coordinate = try options.optionalPoint("--coor")
+            try options.rejectUnused()
+            command = .postCursor(PostCursorRequest(pid: pid, windowId: windowId, coordinate: coordinate))
         default:
             throw UsageError("unknown command \(first). Run AOSComputerUseCLI --help")
         }
@@ -490,8 +677,24 @@ private struct OptionCursor {
         return pid_t(parsed)
     }
 
+    mutating func optionalPID(_ name: String) throws -> pid_t? {
+        guard let value = try takeValue(name) else { return nil }
+        guard let parsed = Int32(value), parsed > 0 else {
+            throw UsageError("invalid value for \(name): \(value)")
+        }
+        return pid_t(parsed)
+    }
+
     mutating func requiredWindowID(_ name: String) throws -> CGWindowID {
         let value = try requiredString(name)
+        guard let parsed = UInt32(value) else {
+            throw UsageError("invalid value for \(name): \(value)")
+        }
+        return CGWindowID(parsed)
+    }
+
+    mutating func optionalWindowID(_ name: String) throws -> CGWindowID? {
+        guard let value = try takeValue(name) else { return nil }
         guard let parsed = UInt32(value) else {
             throw UsageError("invalid value for \(name): \(value)")
         }
@@ -613,6 +816,20 @@ private struct LeftClickRequest: Sendable {
     let pid: pid_t
     let windowId: CGWindowID
     let coordinate: CGPoint
+}
+
+private struct PostCursorRequest: Sendable {
+    let pid: pid_t?
+    let windowId: CGWindowID?
+    let coordinate: CGPoint?
+}
+
+private struct PostCursorResult: Sendable, Equatable {
+    let pid: pid_t
+    let windowId: CGWindowID
+    let point: CGPoint
+    let localPoint: CGPoint
+    let clicked: Bool
 }
 
 private struct GrantPermissionsOutput: Encodable, ReadableOutput {
@@ -840,6 +1057,30 @@ private struct LeftClickOutput: Encodable, ReadableOutput {
 
     var readableText: String {
         "Posted left click to window \(windowId) at \(Int(point.x)),\(Int(point.y)) (pid \(pid))."
+    }
+}
+
+private struct PostCursorOutput: Encodable, ReadableOutput {
+    let command = "post-cursor"
+    let pid: pid_t
+    let windowId: CGWindowID
+    let point: PointOutput
+    let localPoint: PointOutput
+    let clicked: Bool
+
+    init(result: PostCursorResult) {
+        self.pid = result.pid
+        self.windowId = result.windowId
+        self.point = PointOutput(result.point)
+        self.localPoint = PointOutput(result.localPoint)
+        self.clicked = result.clicked
+    }
+
+    var readableText: String {
+        if clicked {
+            return "Posted cursor click to window \(windowId) at local \(Int(localPoint.x)),\(Int(localPoint.y)) / screen \(Int(point.x)),\(Int(point.y)) (pid \(pid))."
+        }
+        return "Post cursor exited at local \(Int(localPoint.x)),\(Int(localPoint.y)) / screen \(Int(point.x)),\(Int(point.y)) (pid \(pid))."
     }
 }
 
