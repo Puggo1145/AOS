@@ -58,6 +58,19 @@ public struct WindowMouseEventResult: Sendable, Equatable {
     }
 }
 
+/// Result of posting a pid-scoped keyboard event to a WindowServer window.
+public struct WindowKeyboardEventResult: Sendable, Equatable {
+    public let pid: pid_t
+    public let windowId: CGWindowID
+    public let event: BackgroundKeyboardEvent
+
+    public init(pid: pid_t, windowId: CGWindowID, event: BackgroundKeyboardEvent) {
+        self.pid = pid
+        self.windowId = windowId
+        self.event = event
+    }
+}
+
 /// WindowServer and app-active sampling stage around a background mouse event.
 public enum WindowMouseEventTraceStage: String, Sendable, Codable, Equatable {
     case before
@@ -138,6 +151,7 @@ public enum ComputerUseError: Error, CustomStringConvertible, Sendable {
     case captureUnavailable(String)
     case focusUnavailable(String)
     case mouseEventUnavailable(String)
+    case keyboardEventUnavailable(String)
     case payloadTooLarge(bytes: Int, limit: Int)
     case windowNotFound(windowId: CGWindowID)
 
@@ -157,6 +171,8 @@ public enum ComputerUseError: Error, CustomStringConvertible, Sendable {
             return "focus unavailable: \(message)"
         case .mouseEventUnavailable(let message):
             return "mouse event unavailable: \(message)"
+        case .keyboardEventUnavailable(let message):
+            return "keyboard event unavailable: \(message)"
         case .payloadTooLarge(let bytes, let limit):
             return "screenshot payload \(bytes) bytes exceeds raw limit \(limit) bytes after downscale retries"
         case .windowNotFound(let windowId):
@@ -188,11 +204,16 @@ public actor ComputerUseCore {
         BackgroundMouseEventDeliveryRoute,
         BackgroundMouseEventPostObserver?
     ) async throws -> Void
+    private let postKeyboardEventToPid: @Sendable (
+        BackgroundKeyboardEvent,
+        BackgroundKeyboardEventTarget
+    ) async throws -> Void
 
     public init() {
         let webAccessibilityActivator = AXWebAccessibilityActivator()
         let windowFocuser = SkyLightWindowFocuser.live()
         let mousePoster = MouseEventPoster.live()
+        let keyboardPoster = KeyboardEventPoster.live()
         let mouseDeliveryClassifier = BackgroundMouseEventDeliveryClassifier()
         let deliveryRouteForPID: @Sendable (pid_t) -> BackgroundMouseEventDeliveryRoute = { pid in
             let app = NSRunningApplication(processIdentifier: pid)
@@ -244,6 +265,9 @@ public actor ComputerUseCore {
                     deliveryRoute: deliveryRoute,
                     stageObserver: stageObserver
                 )
+            },
+            postKeyboardEvent: { event, target in
+                try keyboardPoster.post(event, to: target)
             }
         )
     }
@@ -275,6 +299,12 @@ public actor ComputerUseCore {
             BackgroundMouseEventPostObserver?
         ) async throws -> Void = { _, _, _, _ in
             throw ComputerUseError.mouseEventUnavailable("postMouseEvent dependency was not configured")
+        },
+        postKeyboardEvent: @escaping @Sendable (
+            BackgroundKeyboardEvent,
+            BackgroundKeyboardEventTarget
+        ) async throws -> Void = { _, _ in
+            throw ComputerUseError.keyboardEventUnavailable("postKeyboardEvent dependency was not configured")
         }
     ) {
         let snapshot = snapshot ?? AccessibilitySnapshot(webAccessibilityActivator: webAccessibilityActivator)
@@ -295,6 +325,7 @@ public actor ComputerUseCore {
         self.activeStateGuardDelays = activeStateGuardDelays
         self.sleepForActiveStateGuard = sleepForActiveStateGuard
         self.postMouseEventToRoute = postMouseEvent
+        self.postKeyboardEventToPid = postKeyboardEvent
     }
 
     public func listApps(mode: AppListMode) -> [AppInfo] {
@@ -402,6 +433,16 @@ public actor ComputerUseCore {
         )
     }
 
+    /// Posts a pid-scoped background keyboard event while preserving the
+    /// original front window state.
+    public func postKeyboardEvent(
+        pid: pid_t,
+        windowId: CGWindowID,
+        event: BackgroundKeyboardEvent
+    ) async throws -> WindowKeyboardEventResult {
+        try await performPostKeyboardEvent(pid: pid, windowId: windowId, event: event)
+    }
+
     private func performPostMouseEvent(
         pid: pid_t,
         windowId: CGWindowID,
@@ -499,6 +540,95 @@ public actor ComputerUseCore {
         } catch {
             try? await orderChangeObservation?.finish()
             throw error
+        }
+    }
+
+    private func performPostKeyboardEvent(
+        pid: pid_t,
+        windowId: CGWindowID,
+        event: BackgroundKeyboardEvent
+    ) async throws -> WindowKeyboardEventResult {
+        _ = try validateOwnership(pid: pid, windowId: windowId)
+        try validateKeyboardEvent(event)
+        let target = BackgroundKeyboardEventTarget(pid: pid, windowId: windowId)
+        let originalFrontWindow = frontmostWindowLookup()
+        let orderGuardian = try makeWindowOrderGuardian(targetWindowId: windowId)
+        let orderChangeObservation = try await startWindowOrderChangeGuard(
+            orderGuardian,
+            originalFrontWindow: originalFrontWindow,
+            targetWindowId: windowId,
+            targetPID: pid
+        )
+        var didFocusTarget = false
+
+        do {
+            try await focusWindowWithoutRaising(pid, windowId)
+            didFocusTarget = true
+            try await Task.sleep(nanoseconds: 5_000_000)
+            try await postKeyboardEventToPid(event, target)
+            try await runPostDispatchCleanup(
+                pid: pid,
+                windowId: windowId,
+                originalFrontWindow: originalFrontWindow,
+                orderGuardian: orderGuardian,
+                traceRecorder: nil
+            )
+            try await runActiveStateGuard(
+                orderGuardian,
+                originalFrontWindow: originalFrontWindow,
+                targetWindowId: windowId,
+                traceRecorder: nil,
+                targetPID: pid,
+                delays: activeStateGuardDelays
+            )
+            try await orderChangeObservation?.finish()
+            return WindowKeyboardEventResult(pid: pid, windowId: windowId, event: event)
+        } catch {
+            if didFocusTarget {
+                try? await runPostDispatchCleanup(
+                    pid: pid,
+                    windowId: windowId,
+                    originalFrontWindow: originalFrontWindow,
+                    orderGuardian: orderGuardian,
+                    traceRecorder: nil
+                )
+                try? await runActiveStateGuard(
+                    orderGuardian,
+                    originalFrontWindow: originalFrontWindow,
+                    targetWindowId: windowId,
+                    traceRecorder: nil,
+                    targetPID: pid,
+                    delays: activeStateGuardDelays
+                )
+            }
+            try? await orderChangeObservation?.finish()
+            throw error
+        }
+    }
+
+    private func validateKeyboardEvent(_ event: BackgroundKeyboardEvent) throws {
+        switch event {
+        case .text(let text, let delayMilliseconds):
+            guard !text.isEmpty else {
+                throw ComputerUseError.keyboardEventUnavailable("text input cannot be empty")
+            }
+            guard (0...200).contains(delayMilliseconds) else {
+                throw ComputerUseError.keyboardEventUnavailable(
+                    "text input delay must be between 0 and 200ms"
+                )
+            }
+        case .keyPress(_, _, let count):
+            guard count > 0 else {
+                throw ComputerUseError.keyboardEventUnavailable(
+                    "key press count must be greater than 0"
+                )
+            }
+        case .hotkey(let modifiers, _):
+            guard !modifiers.isEmpty else {
+                throw ComputerUseError.keyboardEventUnavailable(
+                    "hotkey requires at least one modifier"
+                )
+            }
         }
     }
 

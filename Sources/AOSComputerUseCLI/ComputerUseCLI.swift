@@ -125,6 +125,12 @@ public protocol ComputerUseCoreClient: Sendable {
         windowId: CGWindowID,
         event: BackgroundMouseEvent
     ) async throws -> WindowMouseEventTraceResult
+    /// Posts a pid-scoped background keyboard event in the pid/window pair.
+    func postKeyboardEvent(
+        pid: pid_t,
+        windowId: CGWindowID,
+        event: BackgroundKeyboardEvent
+    ) async throws -> WindowKeyboardEventResult
 }
 
 public enum PostCursorKey: Sendable, Equatable {
@@ -583,6 +589,14 @@ public struct ComputerUseCoreAdapter: ComputerUseCoreClient {
             event: event
         )
     }
+
+    public func postKeyboardEvent(
+        pid: pid_t,
+        windowId: CGWindowID,
+        event: BackgroundKeyboardEvent
+    ) async throws -> WindowKeyboardEventResult {
+        try await core.postKeyboardEvent(pid: pid, windowId: windowId, event: event)
+    }
 }
 
 public struct ComputerUseCLIResult: Sendable, Equatable {
@@ -707,6 +721,9 @@ public enum ComputerUseCLI {
           AOSComputerUseCLI left-click --pid <pid> --window-id <id> --coor <x,y> [--trace]
           AOSComputerUseCLI right-click --pid <pid> --window-id <id> --coor <x,y> [--trace]
           AOSComputerUseCLI drag --pid <pid> --window-id <id> --from <x,y> --to <x,y> [--button left|right] [--trace]
+          AOSComputerUseCLI type-text --pid <pid> --window-id <id> --text <text> [--delay-ms <ms>]
+          AOSComputerUseCLI press-key --pid <pid> --window-id <id> --key <key> [--modifiers <modifiers>] [--count <count>]
+          AOSComputerUseCLI hotkey --pid <pid> --window-id <id> --keys <modifiers,key>
           AOSComputerUseCLI measure-left-click-window-order --pid <pid> --window-id <id> --coor <x,y> [--runs <count>] [--duration-ms <ms>] [--interval-ms <ms>] [--pre-click-delay-ms <ms>] [--between-runs-ms <ms>]
           AOSComputerUseCLI observe-window-order --pid <pid> --window-id <id> [--duration-ms <ms>] [--interval-ms <ms>]
           AOSComputerUseCLI observe-mouse-events [--pid <pid>] [--window-id <id>] [--duration-ms <ms>] [--tap-location hid|session|annotated|all]
@@ -727,6 +744,9 @@ public enum ComputerUseCLI {
           right-click     Post a background right click to a local --coor point.
           drag            Post a web-content only background drag from local --from to local --to.
                           Use --trace on mouse-event commands to write per-stage diagnostics to stderr.
+          type-text       Type Unicode text into the target pid/window's focused field.
+          press-key       Press a single key with optional modifiers against the target pid/window.
+          hotkey          Press a keyboard shortcut, e.g. --keys cmd,shift,s.
           measure-left-click-window-order
                           Repeat a background click while measuring active/rank/protected-covered durations.
           observe-window-order
@@ -807,6 +827,13 @@ public enum ComputerUseCLI {
                 }
                 let result = try await runMouseEventCommand(request: request, core: core)
                 return try success(MouseEventPostOutput(request: request, result: result), format: parsed.outputFormat)
+            case .keyboardEventCommand(let request):
+                let result = try await core.postKeyboardEvent(
+                    pid: request.pid,
+                    windowId: request.windowId,
+                    event: request.event
+                )
+                return try success(KeyboardEventPostOutput(request: request, result: result), format: parsed.outputFormat)
             case .measureLeftClickWindowOrder(let request):
                 let runs = try await measureLeftClickWindowOrder(
                     request: request,
@@ -1351,6 +1378,7 @@ private struct ParsedCommand {
         case getAppState(AppStateRequest)
         case focusWindow(FocusWindowRequest)
         case mouseEventCommand(MouseEventCommandRequest)
+        case keyboardEventCommand(KeyboardEventCommandRequest)
         case measureLeftClickWindowOrder(LeftClickWindowOrderMeasurementRequest)
         case observeWindowOrder(WindowOrderObservationRequest)
         case observeMouseEvents(MouseEventObservationRequest)
@@ -1447,6 +1475,43 @@ private struct ParsedCommand {
                 windowId: windowId,
                 event: .drag(button: button, start: start, end: end),
                 trace: trace
+            ))
+        case "type-text":
+            let pid = try options.requiredPID("--pid")
+            let windowId = try options.requiredWindowID("--window-id")
+            let text = try options.requiredPublicString("--text")
+            let delayMilliseconds = try options.optionalInt("--delay-ms") ?? 30
+            try options.rejectUnused()
+            command = .keyboardEventCommand(KeyboardEventCommandRequest(
+                pid: pid,
+                windowId: windowId,
+                event: .text(text, delayMilliseconds: delayMilliseconds)
+            ))
+        case "press-key":
+            let pid = try options.requiredPID("--pid")
+            let windowId = try options.requiredWindowID("--window-id")
+            let key = try options.requiredPublicString("--key")
+            let modifiers = try options.optionalModifierList("--modifiers")
+            let count = try options.optionalPositiveInt("--count") ?? 1
+            try options.rejectUnused()
+            command = .keyboardEventCommand(KeyboardEventCommandRequest(
+                pid: pid,
+                windowId: windowId,
+                event: .keyPress(key: key, modifiers: modifiers, count: count)
+            ))
+        case "hotkey":
+            let pid = try options.requiredPID("--pid")
+            let windowId = try options.requiredWindowID("--window-id")
+            let keys = try options.requiredKeyList("--keys")
+            guard let key = keys.last else {
+                throw UsageError("missing required option --keys")
+            }
+            let modifiers = try keys.dropLast().map { try BackgroundKeyboardModifier.cliValue($0) }
+            try options.rejectUnused()
+            command = .keyboardEventCommand(KeyboardEventCommandRequest(
+                pid: pid,
+                windowId: windowId,
+                event: .hotkey(modifiers: modifiers, key: key)
             ))
         case "measure-left-click-window-order":
             let pid = try options.requiredPID("--pid")
@@ -1608,6 +1673,26 @@ private struct OptionCursor {
         try takeValue(name)
     }
 
+    mutating func requiredPublicString(_ name: String) throws -> String {
+        try requiredString(name)
+    }
+
+    mutating func optionalModifierList(_ name: String) throws -> [BackgroundKeyboardModifier] {
+        guard let raw = try takeValue(name) else {
+            return []
+        }
+        return try splitCommaList(raw).map { try BackgroundKeyboardModifier.cliValue($0) }
+    }
+
+    mutating func requiredKeyList(_ name: String) throws -> [String] {
+        let raw = try requiredString(name)
+        let keys = splitCommaList(raw)
+        guard keys.count >= 2 else {
+            throw UsageError("invalid value for \(name): \(raw); expected modifiers,key")
+        }
+        return keys
+    }
+
     mutating func takeFlag(_ name: String) throws -> Bool {
         guard let index = args.firstIndex(of: name) else { return false }
         args.remove(at: index)
@@ -1648,6 +1733,31 @@ private struct OptionCursor {
         args.remove(at: index)
         return value
     }
+
+    private func splitCommaList(_ raw: String) -> [String] {
+        raw.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+}
+
+private extension BackgroundKeyboardModifier {
+    static func cliValue(_ raw: String) throws -> BackgroundKeyboardModifier {
+        switch raw.lowercased() {
+        case "cmd", "command":
+            return .command
+        case "shift":
+            return .shift
+        case "option", "alt":
+            return .option
+        case "ctrl", "control":
+            return .control
+        case "fn", "function":
+            return .function
+        default:
+            throw UsageError("invalid keyboard modifier: \(raw)")
+        }
+    }
 }
 
 private struct UsageError: Error, CustomStringConvertible {
@@ -1686,6 +1796,12 @@ private struct MouseEventCommandRequest: Sendable {
     let windowId: CGWindowID
     let event: MouseEventCommand
     let trace: Bool
+}
+
+private struct KeyboardEventCommandRequest: Sendable {
+    let pid: pid_t
+    let windowId: CGWindowID
+    let event: BackgroundKeyboardEvent
 }
 
 private enum MouseEventCommand: Sendable, Equatable {
@@ -2025,6 +2141,35 @@ private struct MouseEventPostOutput: Encodable, ReadableOutput {
             return "\(button.rawValue) click"
         case .drag(let button, _, _):
             return "\(button.rawValue) drag"
+        }
+    }
+}
+
+private struct KeyboardEventPostOutput: Encodable, ReadableOutput {
+    let command: String
+    let pid: pid_t
+    let windowId: CGWindowID
+    let event: String
+
+    init(request: KeyboardEventCommandRequest, result: WindowKeyboardEventResult) {
+        self.command = Self.commandName(request.event)
+        self.pid = result.pid
+        self.windowId = result.windowId
+        self.event = result.event.description
+    }
+
+    var readableText: String {
+        "Posted keyboard event \(event) to window \(windowId) (pid \(pid))."
+    }
+
+    private static func commandName(_ event: BackgroundKeyboardEvent) -> String {
+        switch event {
+        case .text:
+            return "type-text"
+        case .keyPress:
+            return "press-key"
+        case .hotkey:
+            return "hotkey"
         }
     }
 }

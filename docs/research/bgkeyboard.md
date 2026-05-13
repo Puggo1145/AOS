@@ -1,0 +1,139 @@
+# Background Keyboard
+
+This document records AOS's current background keyboard event path. It builds
+on the same front-window preservation contract as `docs/research/bgclick.md`,
+but keyboard delivery is separate from mouse delivery.
+
+## Goal
+
+Given a visible target window, AOS can deliver keyboard input to the target
+process while preserving the user's current front app/window:
+
+- Type Unicode text into the target's currently focused field.
+- Press a single key with optional modifiers.
+- Press a shortcut such as `command+shift+s`.
+- Restore the original front window and clear target-side background active
+  state after dispatch.
+
+## Event Model
+
+File:
+
+- `Sources/AOSComputerUseKit/Input/BackgroundKeyboardEvent.swift`
+
+The model is intentionally separate from the poster implementation:
+
+```swift
+BackgroundKeyboardEvent.text("hello", delayMilliseconds: 30)
+BackgroundKeyboardEvent.keyPress(key: "return")
+BackgroundKeyboardEvent.keyPress(key: "delete", count: 5)
+BackgroundKeyboardEvent.hotkey(modifiers: [.command], key: "c")
+```
+
+Supported key names match the CUA driver vocabulary: `return`, `tab`,
+`escape`, arrows, `space`, `delete`, `home`, `end`, `pageup`, `pagedown`,
+`f1`-`f12`, letters, and digits.
+
+## Delivery Route
+
+File:
+
+- `Sources/AOSComputerUseKit/Input/KeyboardEventPoster.swift`
+
+Keyboard events are pid-scoped. AOS creates `CGEvent` keyboard down/up events
+and posts them to the target pid through:
+
+```text
+SLEventPostToPid(pid, event)
+```
+
+Before posting, AOS attaches a SkyLight authentication envelope:
+
+```text
+SLSEventAuthenticationMessage.messageWithEventRecord(eventRecord, pid, version: 0)
+SLEventSetAuthenticationMessage(event, message)
+```
+
+This mirrors the CUA keyboard route that reaches Chromium/Electron keyboard
+pipelines when public `CGEvent.postToPid` is insufficient. Unlike CUA, AOS
+does not silently fall back to the public route: missing private symbols,
+missing event records, or missing auth messages fail loudly as
+`ComputerUseError.keyboardEventUnavailable`.
+
+## Text Input
+
+Text input posts one key-down/key-up pair per Swift `Character`. Each event has
+virtual key code `0` and carries its UTF-16 payload through:
+
+```text
+CGEventKeyboardSetUnicodeString
+```
+
+This avoids layout-specific key mapping and supports accents, symbols, and
+emoji. The per-character delay is clamped to 0...200ms; the CLI default is
+30ms.
+
+## Shortcut Input
+
+Single key presses and hotkeys use virtual key codes from HIToolbox's `kVK_*`
+values. A single key press can specify a positive repeat count, which posts
+one key-down/key-up pair per count. Modifiers are represented as `CGEventFlags`
+on the key down/up event:
+
+- `command`
+- `shift`
+- `option`
+- `control`
+- `function`
+
+Hotkeys require at least one modifier and exactly one final non-modifier key.
+Unknown key names fail before any event is posted.
+
+## Core Chain
+
+File:
+
+- `Sources/AOSComputerUseKit/ComputerUseCore.swift`
+
+`ComputerUseCore.postKeyboardEvent` runs this chain:
+
+1. Validate pid/window ownership.
+2. Snapshot the original front layer-0 window.
+3. Start the same `WindowOrderGuardian` / order-change guard used by mouse.
+4. Focus the target window without raising it.
+5. Post the keyboard event to the target pid.
+6. Restore original front window focus.
+7. Deactivate only the target window if it was not originally front.
+8. Reactivate the original front app if needed.
+9. Run the delayed active-state guard.
+
+Keyboard dispatch does not validate coordinates because the event goes to the
+target process's focused element rather than a point inside the window.
+
+## CLI Surface
+
+```zsh
+.build/debug/AOSComputerUseCLI type-text --pid <pid> --window-id <windowId> --text "hello" --delay-ms 30
+.build/debug/AOSComputerUseCLI press-key --pid <pid> --window-id <windowId> --key return
+.build/debug/AOSComputerUseCLI press-key --pid <pid> --window-id <windowId> --key delete --count 5
+.build/debug/AOSComputerUseCLI press-key --pid <pid> --window-id <windowId> --key a --modifiers cmd,shift
+.build/debug/AOSComputerUseCLI hotkey --pid <pid> --window-id <windowId> --keys cmd,c
+```
+
+CLI modifier aliases:
+
+- `cmd` / `command`
+- `shift`
+- `option` / `alt`
+- `ctrl` / `control`
+- `fn` / `function`
+
+## Known Limits
+
+- The target window must be visible and owned by the requested pid.
+- Keyboard input goes to the target process's current focused element; AOS does
+  not yet provide element-index pre-focus for keyboard events.
+- Minimized windows are not supported for keyboard commit events.
+- Validation is unit-level. Live app validation should cover at least a native
+  AppKit text field and a Chromium/Electron text field before treating a target
+  class as production-stable.

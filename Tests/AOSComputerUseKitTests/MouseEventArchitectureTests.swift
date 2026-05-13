@@ -22,6 +22,14 @@ struct MouseEventArchitectureTests {
         #expect(!source.contains("typealias MouseClick"))
     }
 
+    @Test("keyboard event model is separate from the poster implementation")
+    func keyboardEventModelIsSeparateFromPosterImplementation() throws {
+        let source = try Self.source("Sources/AOSComputerUseKit/Input/KeyboardEventPoster.swift")
+
+        #expect(!source.contains("public enum BackgroundKeyboardEvent"))
+        #expect(!source.contains("public struct WindowKeyboardEventResult"))
+    }
+
     private static func source(_ path: String, file: String = #filePath) throws -> String {
         let url = URL(fileURLWithPath: file)
             .deletingLastPathComponent()

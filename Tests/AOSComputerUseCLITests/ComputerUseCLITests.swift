@@ -21,6 +21,9 @@ struct ComputerUseCLITests {
         #expect(output.contains("right-click"))
         #expect(output.contains("drag"))
         #expect(output.contains("web-content only"))
+        #expect(output.contains("type-text"))
+        #expect(output.contains("press-key"))
+        #expect(output.contains("hotkey"))
         #expect(!output.contains("post-left-click"))
         #expect(output.contains("measure-left-click-window-order"))
         #expect(!output.contains("target-down-window-local-offscreen"))
@@ -400,6 +403,68 @@ struct ComputerUseCLITests {
         #expect(result.stderr.contains("drag is only supported for web-content targets"))
         #expect(result.stderr.contains("Finder"))
         #expect(result.exitCode == 64)
+    }
+
+    @Test("type-text posts keyboard text event")
+    func typeTextPostsKeyboardTextEvent() async throws {
+        let fake = FakeComputerUseCore()
+
+        let result = try await ComputerUseCLI.run(
+            arguments: [
+                "type-text",
+                "--pid", "123",
+                "--window-id", "456",
+                "--text", "hello",
+                "--delay-ms", "40",
+            ],
+            core: fake,
+            permissions: FakePermissionClient()
+        )
+
+        #expect(await fake.requestedKeyboardEvent == .text("hello", delayMilliseconds: 40))
+        #expect(result.stdout.contains("Posted keyboard event text input 5 character(s) delay 40ms"))
+        #expect(result.exitCode == 0)
+    }
+
+    @Test("hotkey parses modifier aliases and final key")
+    func hotkeyParsesModifierAliasesAndFinalKey() async throws {
+        let fake = FakeComputerUseCore()
+
+        let result = try await ComputerUseCLI.run(
+            arguments: [
+                "hotkey",
+                "--pid", "123",
+                "--window-id", "456",
+                "--keys", "cmd,shift,s",
+            ],
+            core: fake,
+            permissions: FakePermissionClient()
+        )
+
+        #expect(await fake.requestedKeyboardEvent == .hotkey(modifiers: [.command, .shift], key: "s"))
+        #expect(result.stdout.contains("Posted keyboard event command+shift+s"))
+        #expect(result.exitCode == 0)
+    }
+
+    @Test("press-key parses count")
+    func pressKeyParsesCount() async throws {
+        let fake = FakeComputerUseCore()
+
+        let result = try await ComputerUseCLI.run(
+            arguments: [
+                "press-key",
+                "--pid", "123",
+                "--window-id", "456",
+                "--key", "delete",
+                "--count", "5",
+            ],
+            core: fake,
+            permissions: FakePermissionClient()
+        )
+
+        #expect(await fake.requestedKeyboardEvent == .keyPress(key: "delete", count: 5))
+        #expect(result.stdout.contains("Posted keyboard event delete x5"))
+        #expect(result.exitCode == 0)
     }
 
     @Test("left-click trace is opt-in and writes diagnostics to stderr")
@@ -1330,6 +1395,7 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
     private(set) var requestedMouseEvent: BackgroundMouseEvent?
     private(set) var requestedMouseEvents: [BackgroundMouseEvent] = []
     private(set) var requestedMouseEventTrace: BackgroundMouseEvent?
+    private(set) var requestedKeyboardEvent: BackgroundKeyboardEvent?
     private var leftClickTrace: WindowMouseEventTraceResult?
 
     func setApps(_ apps: [AppInfo]) {
@@ -1420,6 +1486,15 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
             result: WindowMouseEventResult(pid: pid, windowId: windowId, event: event),
             snapshots: []
         )
+    }
+
+    func postKeyboardEvent(
+        pid: pid_t,
+        windowId: CGWindowID,
+        event: BackgroundKeyboardEvent
+    ) async throws -> WindowKeyboardEventResult {
+        requestedKeyboardEvent = event
+        return WindowKeyboardEventResult(pid: pid, windowId: windowId, event: event)
     }
 
 }
