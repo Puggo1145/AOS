@@ -250,30 +250,28 @@ struct FocusWindowOutput: Encodable, ReadableOutput {
 struct StartAppSessionOutput: Encodable, ReadableOutput {
     let command = "start-app-session"
     let pid: pid_t
-    let windowId: CGWindowID
+    let focusedWindowId: CGWindowID
 
-    init(result: AppSessionResult) {
+    init(request: AppSessionTargetRequest, result: AppSessionResult) {
         self.pid = result.pid
-        self.windowId = result.windowId
+        self.focusedWindowId = request.windowId
     }
 
     var readableText: String {
-        "Started app session for window \(windowId) (pid \(pid))."
+        "Started app session for pid \(pid), focused window \(focusedWindowId)."
     }
 }
 
 struct StopAppSessionOutput: Encodable, ReadableOutput {
     let command = "stop-app-session"
     let pid: pid_t
-    let windowId: CGWindowID
 
     init(result: AppSessionResult) {
         self.pid = result.pid
-        self.windowId = result.windowId
     }
 
     var readableText: String {
-        "Stopped app session for window \(windowId) (pid \(pid))."
+        "Stopped app session for pid \(pid)."
     }
 }
 
@@ -391,8 +389,12 @@ struct LeftClickWindowOrderMeasurementOutput: Encodable, ReadableOutput {
     let maxProtectedCoveredContiguousMilliseconds: UInt64
     let runResults: [LeftClickWindowOrderMeasurementRun]
 
-    init(request: LeftClickWindowOrderMeasurementRequest, runs: [LeftClickWindowOrderMeasurementRun]) {
-        self.pid = request.pid
+    init(
+        request: LeftClickWindowOrderMeasurementRequest,
+        pid: pid_t,
+        runs: [LeftClickWindowOrderMeasurementRun]
+    ) {
+        self.pid = pid
         self.windowId = request.windowId
         self.coordinate = PointOutput(request.coordinate)
         self.runsRequested = request.runs

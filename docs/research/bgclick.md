@@ -166,10 +166,11 @@ startAppSession(pid:windowId:)
 stopAppSession()
 ```
 
-任意 `postMouseEvent` / `postKeyboardEvent` 都会自动视为 `startAppSession` 信号。同一
-target 会复用当前 session；不同 target 会先停止当前 session，再给新 target 开始 session。
+`startAppSession` 是唯一能开始或切换 current session 的入口。任意
+`postMouseEvent` / `postKeyboardEvent` 都必须在 active app session 内按 windowId 投放；
+事件投放使用 current session pid 校验 window ownership。
 
-只有 `stopAppSession` 或自动切换 target 时才执行 target-side deactive：
+只有 `stopAppSession` 或显式切换到不同 pid session 时才执行 target-side deactive：
 
 ```text
 SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: defocus))
@@ -177,12 +178,11 @@ SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: defocus))
 
 关键点：
 
-- 只对目标 pid/window 发 `.defocus`，不对用户原前台窗口发 defocus。
-- 先恢复原 front window focus，再 deactive target，然后进入 delayed active-state guard。
-  Chrome / Electron 可能在 target-side deactivation cleanup 后才执行 delayed order
-  compensation；deactivation 必须被同一个 guard window 覆盖，不能放在 guard 之后。
-- 如果目标窗口本来就是点击前的前台 active 窗口，则跳过 deactive；正常前台点击不应被降为 inactive。
-- app session 打开期间，active-state guard 仍保护 original front window 的 order/focus，
+- session 只记录 pid，不记录 target window id。
+- `stopAppSession` 现场读取 frontmost window，重新枚举 session pid 下当前所有窗口。
+- 只对 session pid 下非 frontmost 的窗口发 `.defocus`；如果用户当前 frontmost 正是
+  session pid 的某个窗口，则跳过该窗口。
+- 单次 event 投放期间，active-state guard 仍保护投放前 front window 的 order/focus，
   但不会因为 target app 仍 active 就 deactive 或 reactivate original app。
 - deactive 不负责 z-order preservation，只在 session 结束时撤掉目标窗口残留的 active/key
   状态，避免下一次后台投放触发 raise 闪动。
@@ -195,8 +195,8 @@ SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: defocus))
    让目标 AppKit 窗口相信自己可接收输入。
 2. **Event delivery**：pid-scoped `CGEvent.postToPid` 把鼠标事件送进目标进程，不碰全局 HID cursor。
 3. **Order drift detection**：`WindowOrderGuardian` 只观察 target 是否越过原 overlapping cover，不直接重排任何窗口。
-4. **App session cleanup**：target-side defocus 在 `stopAppSession` 时撤掉后台目标残留
-   的 active/key 状态，避免下一次投放被系统补偿 raise。
+4. **App session cleanup**：target-side defocus 在 `stopAppSession` 时撤掉 session app
+   的非 frontmost 窗口 active/key 状态，避免下一次投放被系统补偿 raise。
 
 因此用户看到的效果是：
 
@@ -212,16 +212,18 @@ SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: defocus))
 启动坐标 probe：
 
 ```zsh
-.build/debug/AOSComputerUseCLI open-coor-test
+.build/debug/AOSComputerUseCLI interactive
 ```
 
-向窗口 local coordinate 投放：
+然后在 Command 菜单选择 `open-coor-test`。
 
-```zsh
-.build/debug/AOSComputerUseCLI left-click --pid <pid> --window-id <windowId> --coor <x,y>
-.build/debug/AOSComputerUseCLI right-click --pid <pid> --window-id <windowId> --coor <x,y>
-.build/debug/AOSComputerUseCLI drag --pid <pid> --window-id <windowId> --from <x,y> --to <x,y> --button left
-```
+进入 interactive host 后，先显式开始 app session，再向当前 session 下的窗口 local coordinate 投放：
+
+1. 启动 `.build/debug/AOSComputerUseCLI interactive`。
+2. 在 Command 菜单选择 `start-app-session`，按 App / Window prompt 选择目标。
+3. 选择 `left-click` 或 `right-click`，在 Window 菜单选择当前 session 的目标窗口，并在 prompt 输入 `x,y`。
+4. 选择 `drag` 时，在 Window 菜单选择目标窗口，按 prompt 输入 start/end `x,y` 和 button。
+5. 最后选择 `stop-app-session`。
 
 CLI 坐标参数是目标窗口 top-left local point，CLI 会转换为 screen point，然后构造
 对应的 `BackgroundMouseEvent` 走同一条 background mouse event core path。
@@ -229,15 +231,14 @@ CLI 坐标参数是目标窗口 top-left local point，CLI 会转换为 screen p
 `right-click`。
 
 `start-app-session` / `stop-app-session` 是 core app session API 的 CLI surface。
-鼠标事件投放会自动 start 当前 target session；显式 stop 或后续不同 target 事件会触发
-core restore / deactivate path。成对 start/stop 需要调用方复用同一个
-`ComputerUseCore` lifetime；standalone executable 的两次 shell invocation 不共享
-active session。
+鼠标事件投放不再接收 pid，也不会自动切换 target session；调用方必须先在同一个
+`ComputerUseCore` lifetime 内显式 `start-app-session`。事件投放使用 current session
+pid 校验 window ownership，`stop-app-session` 重新枚举 session pid 下当前所有窗口并执行
+core deactivate cleanup，跳过 session pid 下当前 frontmost window。成对 start/stop 需要调用方复用同一个
+`ComputerUseCore` lifetime；当前 CLI 只保留 interactive host 来持有这个有状态 core。
 
-```zsh
-.build/debug/AOSComputerUseCLI start-app-session --pid <pid> --window-id <windowId>
-.build/debug/AOSComputerUseCLI stop-app-session
-```
+在 CLI 中执行 `.build/debug/AOSComputerUseCLI interactive` 后，通过 Command 菜单选择
+`start-app-session` 和 `stop-app-session`。
 
 ## Validation Targets
 

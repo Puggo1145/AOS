@@ -56,10 +56,9 @@ enum InteractiveCLICommandCatalog {
             return ["focus-window", "--pid", "\(target.pid)", "--window-id", "\(target.windowId)"]
         },
         command("left-click") { context in
-            let target = try await promptTarget(context)
+            let target = try await promptCurrentSessionWindow(context)
             var arguments = [
                 "left-click",
-                "--pid", "\(target.pid)",
                 "--window-id", "\(target.windowId)",
                 "--coor", try await context.io.promptRequired("Coordinate x,y: "),
             ]
@@ -69,10 +68,9 @@ enum InteractiveCLICommandCatalog {
             return arguments
         },
         command("right-click") { context in
-            let target = try await promptTarget(context)
+            let target = try await promptCurrentSessionWindow(context)
             var arguments = [
                 "right-click",
-                "--pid", "\(target.pid)",
                 "--window-id", "\(target.windowId)",
                 "--coor", try await context.io.promptRequired("Coordinate x,y: "),
             ]
@@ -82,11 +80,10 @@ enum InteractiveCLICommandCatalog {
             return arguments
         },
         command("drag") { context in
-            let target = try await promptTarget(context)
+            let target = try await promptCurrentSessionWindow(context)
             let button = try await select("Mouse button", options: BackgroundMouseButton.allCases, context: context)
             var arguments = [
                 "drag",
-                "--pid", "\(target.pid)",
                 "--window-id", "\(target.windowId)",
                 "--from", try await context.io.promptRequired("Start coordinate x,y: "),
                 "--to", try await context.io.promptRequired("End coordinate x,y: "),
@@ -98,10 +95,9 @@ enum InteractiveCLICommandCatalog {
             return arguments
         },
         command("type-text") { context in
-            let target = try await promptTarget(context)
+            let target = try await promptCurrentSessionWindow(context)
             var arguments = [
                 "type-text",
-                "--pid", "\(target.pid)",
                 "--window-id", "\(target.windowId)",
                 "--text", try await context.io.promptRequired("Text: "),
             ]
@@ -111,10 +107,9 @@ enum InteractiveCLICommandCatalog {
             return arguments
         },
         command("press-key") { context in
-            let target = try await promptTarget(context)
+            let target = try await promptCurrentSessionWindow(context)
             var arguments = [
                 "press-key",
-                "--pid", "\(target.pid)",
                 "--window-id", "\(target.windowId)",
                 "--key", try await context.io.promptRequired("Key: "),
             ]
@@ -127,19 +122,17 @@ enum InteractiveCLICommandCatalog {
             return arguments
         },
         command("hotkey") { context in
-            let target = try await promptTarget(context)
+            let target = try await promptCurrentSessionWindow(context)
             return [
                 "hotkey",
-                "--pid", "\(target.pid)",
                 "--window-id", "\(target.windowId)",
                 "--keys", try await context.io.promptRequired("Keys csv, e.g. cmd,shift,s: "),
             ]
         },
         command("measure-left-click-window-order") { context in
-            let target = try await promptTarget(context)
+            let target = try await promptCurrentSessionWindow(context)
             var arguments = [
                 "measure-left-click-window-order",
-                "--pid", "\(target.pid)",
                 "--window-id", "\(target.windowId)",
                 "--coor", try await context.io.promptRequired("Coordinate x,y: "),
             ]
@@ -187,10 +180,9 @@ enum InteractiveCLICommandCatalog {
             return arguments
         },
         command("post-cursor") { context in
-            let target = try await promptTarget(context)
+            let target = try await promptCurrentSessionWindow(context)
             var arguments = [
                 "post-cursor",
-                "--pid", "\(target.pid)",
                 "--window-id", "\(target.windowId)",
             ]
             if let coordinate = try await context.io.promptOptional("Initial coordinate x,y (empty for center): ") {
@@ -250,6 +242,24 @@ enum InteractiveCLICommandCatalog {
         ).select(using: context.io).nonZeroOrPrompt(context.io)
     }
 
+    private static func promptCurrentSessionWindow(_ context: InteractiveCLICommandContext) async throws -> AppSessionTargetRequest {
+        let session = try await context.core.currentAppSession()
+        let windows = try await context.core.listWindows(pid: session.pid)
+        guard !windows.isEmpty else {
+            throw UsageError("no windows available for active app session pid \(session.pid)")
+        }
+        let window = try await InteractiveSelectionMenu(
+            title: "Window",
+            options: windows.map {
+                InteractiveSelectionOption(
+                    title: "\($0.id) \($0.title.isEmpty ? "(untitled)" : $0.title) \($0.bounds.width)x\($0.bounds.height)",
+                    value: $0
+                )
+            }
+        ).select(using: context.io)
+        return AppSessionTargetRequest(pid: session.pid, windowId: window.id)
+    }
+
     private static func parsePID(_ raw: String) throws -> pid_t {
         guard let parsed = Int32(raw), parsed > 0 else {
             throw UsageError("invalid pid: \(raw)")
@@ -307,46 +317,74 @@ extension ComputerUseCLI {
             },
             allowsPrefixMatching: true
         )
-        await interactiveIO.write("AOS Computer Use interactive CLI. Use Up/Down, Enter to execute, Q to exit.\n")
-        while true {
-            let item: InteractiveCLICommandItem
-            do {
-                item = try await menu.select(using: interactiveIO)
-            } catch InteractiveCLISessionControl.cancelled {
-                await interactiveIO.write("Interactive CLI exited.\n")
-                return
-            }
-
-            do {
-                let arguments = try await item.buildArguments(InteractiveCLICommandContext(core: core, io: interactiveIO))
-                let result = try await run(
-                    arguments: arguments,
-                    core: core,
-                    appSessionPolicy: .persistentHost,
-                    permissions: permissions,
-                    coorTestTarget: coorTestTarget,
-                    postCursorIO: postCursorIO,
-                    postCursorOverlay: postCursorOverlay,
-                    interactiveIO: interactiveIO,
-                    windowOrderObserver: windowOrderObserver,
-                    mouseEventObserver: mouseEventObserver
-                )
-                let sections = [
-                    InteractiveOutputSection.render(title: "Output", text: result.stdout),
-                    InteractiveOutputSection.render(title: "Error", text: result.stderr),
-                ].filter { !$0.isEmpty }
-                if !sections.isEmpty {
-                    await outputRegion.replace(with: sections.joined(separator: "\n\n"), io: interactiveIO)
+        do {
+            await interactiveIO.write("AOS Computer Use interactive CLI. Use Up/Down, Enter to execute, Q to exit.\n")
+            commandLoop: while true {
+                let item: InteractiveCLICommandItem
+                do {
+                    item = try await menu.select(using: interactiveIO)
+                } catch InteractiveCLISessionControl.cancelled {
+                    await interactiveIO.write("Interactive CLI exited.\n")
+                    break commandLoop
                 }
-            } catch InteractiveCLISessionControl.cancelled {
-                await interactiveIO.write("Cancelled.\n")
-            } catch {
-                await outputRegion.replace(
-                    with: InteractiveOutputSection.render(title: "Error", text: String(describing: error)),
-                    io: interactiveIO
-                )
+
+                do {
+                    let arguments = try await item.buildArguments(InteractiveCLICommandContext(core: core, io: interactiveIO))
+                    let result = try await run(
+                        arguments: arguments,
+                        core: core,
+                        permissions: permissions,
+                        coorTestTarget: coorTestTarget,
+                        postCursorIO: postCursorIO,
+                        postCursorOverlay: postCursorOverlay,
+                        interactiveIO: interactiveIO,
+                        windowOrderObserver: windowOrderObserver,
+                        mouseEventObserver: mouseEventObserver
+                    )
+                    let sections = [
+                        InteractiveOutputSection.render(title: "Output", text: result.stdout),
+                        InteractiveOutputSection.render(title: "Error", text: result.stderr),
+                    ].filter { !$0.isEmpty }
+                    if !sections.isEmpty {
+                        await outputRegion.replace(with: sections.joined(separator: "\n\n"), io: interactiveIO)
+                    }
+                } catch InteractiveCLISessionControl.cancelled {
+                    await interactiveIO.write("Cancelled.\n")
+                } catch let error as CancellationError {
+                    throw error
+                } catch {
+                    await outputRegion.replace(
+                        with: InteractiveOutputSection.render(title: "Error", text: String(describing: error)),
+                        io: interactiveIO
+                    )
+                }
             }
+        } catch {
+            try await stopActiveAppSessionIfAvailable(core: core)
+            throw error
         }
+        try await stopActiveAppSessionIfAvailable(core: core)
+    }
+
+    static func stopActiveAppSessionIfAvailable(core: ComputerUseCoreClient) async throws {
+        do {
+            _ = try await core.currentAppSession()
+        } catch let error where isAppSessionUnavailable(error) {
+            return
+        }
+
+        do {
+            _ = try await core.stopAppSession()
+        } catch let error where isAppSessionUnavailable(error) {
+            return
+        }
+    }
+
+    private static func isAppSessionUnavailable(_ error: Error) -> Bool {
+        guard case ComputerUseError.appSessionUnavailable = error else {
+            return false
+        }
+        return true
     }
 }
 

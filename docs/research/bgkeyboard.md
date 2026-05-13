@@ -12,8 +12,8 @@ process while preserving the user's current front app/window:
 - Type Unicode text into the target's currently focused field.
 - Press a single key with optional modifiers.
 - Press a shortcut such as `command+shift+s`.
-- Restore the original front window and clear target-side background active
-  state after dispatch.
+- Keep the app session open after dispatch, then clear target-side background
+  active state when the session stops.
 
 ## Event Model
 
@@ -97,9 +97,8 @@ File:
 
 `ComputerUseCore.postKeyboardEvent` runs this chain:
 
-1. Validate pid/window ownership.
-2. Start or reuse the target app session, snapshotting the original front
-   layer-0 window when a new session begins.
+1. Require an active app session and validate current session pid/window ownership.
+2. Reuse the target app session, whose state records only the app pid.
 3. Start the same `WindowOrderGuardian` / order-change guard used by mouse.
 4. Focus the target window without raising it.
 5. Post the keyboard event to the target pid.
@@ -108,32 +107,30 @@ File:
 7. Run the delayed active-state guard while allowing the target app to remain
    active.
 
-`stopAppSession()` runs the cleanup path: restore original front window focus,
-deactivate only the target window if it was not originally front, reactivate
-the original front app if needed, then run the delayed active-state guard.
+`stopAppSession()` runs the cleanup path: read the current frontmost window,
+enumerate current windows for the session pid, and deactivate only session
+windows that are not frontmost.
 
 Keyboard dispatch does not validate coordinates because the event goes to the
 target process's focused element rather than a point inside the window.
 
 ## CLI Surface
 
-```zsh
-.build/debug/AOSComputerUseCLI type-text --pid <pid> --window-id <windowId> --text "hello" --delay-ms 30
-.build/debug/AOSComputerUseCLI press-key --pid <pid> --window-id <windowId> --key return
-.build/debug/AOSComputerUseCLI press-key --pid <pid> --window-id <windowId> --key delete --count 5
-.build/debug/AOSComputerUseCLI press-key --pid <pid> --window-id <windowId> --key a --modifiers cmd,shift
-.build/debug/AOSComputerUseCLI hotkey --pid <pid> --window-id <windowId> --keys cmd,c
-```
+启动 `.build/debug/AOSComputerUseCLI interactive` 后，在 palette 中执行：
+
+1. 选择 `start-app-session`，按 App / Window prompt 选择目标。
+2. 选择 `type-text`，在 Window 菜单选择当前 session 的目标窗口，并按 prompt 输入 text 和可选 delay。
+3. 选择 `press-key`，在 Window 菜单选择目标窗口，并按 prompt 输入 key、可选 modifiers、可选 count。
+4. 选择 `hotkey`，在 Window 菜单选择目标窗口，并按 prompt 输入 keys CSV，例如 `cmd,c`。
+5. 最后选择 `stop-app-session`。
 
 显式 session 命令也暴露在 CLI 中：
 
-```zsh
-.build/debug/AOSComputerUseCLI start-app-session --pid <pid> --window-id <windowId>
-.build/debug/AOSComputerUseCLI stop-app-session
-```
+在 CLI 中执行 `.build/debug/AOSComputerUseCLI interactive` 后，通过 Command 菜单选择
+`start-app-session` 和 `stop-app-session`。
 
-成对 start/stop 需要同一个 `ComputerUseCore` lifetime；standalone executable 的两次
-shell invocation 不共享 active session。
+成对 start/stop 需要同一个 `ComputerUseCore` lifetime；当前 CLI 只保留 interactive
+host 来持有这个有状态 core。
 
 CLI modifier aliases:
 

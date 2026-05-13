@@ -11,7 +11,8 @@ extension ComputerUseCLI {
         overlay: PostCursorOverlay
     ) async throws -> PostCursorResult {
         let movementStep: CGFloat = 10
-        let pid = try await resolvePostCursorPID(request.pid, core: core, io: io)
+        let session = try await core.currentAppSession()
+        let pid = session.pid
         let window = try await resolvePostCursorWindow(
             pid: pid,
             requestedWindowId: request.windowId,
@@ -52,7 +53,6 @@ extension ComputerUseCLI {
                             screenPoint: currentScreenPoint
                         )
                         let result = try await core.postMouseEvent(
-                            pid: pid,
                             windowId: window.id,
                             event: event
                         )
@@ -118,7 +118,6 @@ extension ComputerUseCLI {
                             to: currentScreenPoint
                         )
                         let result = try await core.postMouseEvent(
-                            pid: pid,
                             windowId: window.id,
                             event: event
                         )
@@ -224,33 +223,6 @@ extension ComputerUseCLI {
             postedEventCount: postedEventCount,
             lastEvent: lastEvent
         )
-    }
-
-    private static func resolvePostCursorPID(
-        _ requestedPID: pid_t?,
-        core: ComputerUseCoreClient,
-        io: PostCursorIO
-    ) async throws -> pid_t {
-        if let requestedPID {
-            return requestedPID
-        }
-
-        let apps = try await core.listApps(mode: .running).filter { $0.pid != nil }
-        if apps.isEmpty {
-            throw UsageError("no running apps with process ids are available")
-        }
-        await io.write("Apps\n")
-        for app in apps {
-            await io.write("\(app.name) pid \(app.pid!)\n")
-        }
-        let raw = try await io.readLine(prompt: "Select pid: ")
-        guard let selected = Int32(raw.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-            throw UsageError("invalid app selection: \(raw)")
-        }
-        guard selected > 0 else {
-            throw UsageError("invalid app selection: \(raw)")
-        }
-        return pid_t(selected)
     }
 
     private static func resolvePostCursorWindow(

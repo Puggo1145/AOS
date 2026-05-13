@@ -85,9 +85,8 @@ try await ComputerUseCore.focusWindowWithoutRaise(pid: pid, windowId: windowId)
 
 CLI:
 
-```bash
-.build/debug/AOSComputerUseCLI focus-window --pid <pid> --window-id <id>
-```
+Launch `.build/debug/AOSComputerUseCLI interactive`, select `focus-window`,
+then select the target app/window in the palette prompts.
 
 `ComputerUseCore` validates that `windowId` belongs to `pid` before it calls the
 focuser. A pid/window mismatch fails before any private event is posted.

@@ -89,31 +89,26 @@ struct ParsedCommand {
             try options.rejectUnused()
             command = .stopAppSession
         case "left-click":
-            let pid = try options.requiredPID("--pid")
             let windowId = try options.requiredWindowID("--window-id")
             let coordinate = try options.requiredPoint("--coor")
             let trace = try options.takeFlag("--trace")
             try options.rejectUnused()
             command = .mouseEventCommand(MouseEventCommandRequest(
-                pid: pid,
                 windowId: windowId,
                 event: .click(button: .left, coordinate: coordinate),
                 trace: trace
             ))
         case "right-click":
-            let pid = try options.requiredPID("--pid")
             let windowId = try options.requiredWindowID("--window-id")
             let coordinate = try options.requiredPoint("--coor")
             let trace = try options.takeFlag("--trace")
             try options.rejectUnused()
             command = .mouseEventCommand(MouseEventCommandRequest(
-                pid: pid,
                 windowId: windowId,
                 event: .click(button: .right, coordinate: coordinate),
                 trace: trace
             ))
         case "drag":
-            let pid = try options.requiredPID("--pid")
             let windowId = try options.requiredWindowID("--window-id")
             let start = try options.requiredPoint("--from")
             let end = try options.requiredPoint("--to")
@@ -121,36 +116,30 @@ struct ParsedCommand {
             let trace = try options.takeFlag("--trace")
             try options.rejectUnused()
             command = .mouseEventCommand(MouseEventCommandRequest(
-                pid: pid,
                 windowId: windowId,
                 event: .drag(button: button, start: start, end: end),
                 trace: trace
             ))
         case "type-text":
-            let pid = try options.requiredPID("--pid")
             let windowId = try options.requiredWindowID("--window-id")
             let text = try options.requiredPublicString("--text")
             let delayMilliseconds = try options.optionalInt("--delay-ms") ?? 30
             try options.rejectUnused()
             command = .keyboardEventCommand(KeyboardEventCommandRequest(
-                pid: pid,
                 windowId: windowId,
                 event: .text(text, delayMilliseconds: delayMilliseconds)
             ))
         case "press-key":
-            let pid = try options.requiredPID("--pid")
             let windowId = try options.requiredWindowID("--window-id")
             let key = try options.requiredPublicString("--key")
             let modifiers = try options.optionalModifierList("--modifiers")
             let count = try options.optionalPositiveInt("--count") ?? 1
             try options.rejectUnused()
             command = .keyboardEventCommand(KeyboardEventCommandRequest(
-                pid: pid,
                 windowId: windowId,
                 event: .keyPress(key: key, modifiers: modifiers, count: count)
             ))
         case "hotkey":
-            let pid = try options.requiredPID("--pid")
             let windowId = try options.requiredWindowID("--window-id")
             let keys = try options.requiredKeyList("--keys")
             guard let key = keys.last else {
@@ -159,12 +148,10 @@ struct ParsedCommand {
             let modifiers = try keys.dropLast().map { try BackgroundKeyboardModifier.cliValue($0) }
             try options.rejectUnused()
             command = .keyboardEventCommand(KeyboardEventCommandRequest(
-                pid: pid,
                 windowId: windowId,
                 event: .hotkey(modifiers: modifiers, key: key)
             ))
         case "measure-left-click-window-order":
-            let pid = try options.requiredPID("--pid")
             let windowId = try options.requiredWindowID("--window-id")
             let coordinate = try options.requiredPoint("--coor")
             let runs = try options.optionalPositiveInt("--runs") ?? 10
@@ -174,7 +161,6 @@ struct ParsedCommand {
             let betweenRunsMilliseconds = try options.optionalInt("--between-runs-ms") ?? 300
             try options.rejectUnused()
             command = .measureLeftClickWindowOrder(LeftClickWindowOrderMeasurementRequest(
-                pid: pid,
                 windowId: windowId,
                 coordinate: coordinate,
                 runs: runs,
@@ -208,11 +194,10 @@ struct ParsedCommand {
                 tapLocation: tapLocation
             ))
         case "post-cursor":
-            let pid = try options.optionalPID("--pid")
             let windowId = try options.optionalWindowID("--window-id")
             let coordinate = try options.optionalPoint("--coor")
             try options.rejectUnused()
-            command = .postCursor(PostCursorRequest(pid: pid, windowId: windowId, coordinate: coordinate))
+            command = .postCursor(PostCursorRequest(windowId: windowId, coordinate: coordinate))
         case "interactive":
             try options.rejectUnused()
             command = .interactive
@@ -446,14 +431,12 @@ struct AppSessionTargetRequest: Sendable {
 }
 
 struct MouseEventCommandRequest: Sendable {
-    let pid: pid_t
     let windowId: CGWindowID
     let event: MouseEventCommand
     let trace: Bool
 }
 
 struct KeyboardEventCommandRequest: Sendable {
-    let pid: pid_t
     let windowId: CGWindowID
     let event: BackgroundKeyboardEvent
 }
@@ -475,7 +458,6 @@ enum MouseEventCommand: Sendable, Equatable {
 }
 
 struct LeftClickWindowOrderMeasurementRequest: Sendable {
-    let pid: pid_t
     let windowId: CGWindowID
     let coordinate: CGPoint
     let runs: Int
@@ -486,7 +468,6 @@ struct LeftClickWindowOrderMeasurementRequest: Sendable {
 }
 
 struct PostCursorRequest: Sendable {
-    let pid: pid_t?
     let windowId: CGWindowID?
     let coordinate: CGPoint?
 }

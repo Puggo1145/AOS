@@ -19,21 +19,20 @@ public protocol ComputerUseCoreClient: Sendable {
     func startAppSession(pid: pid_t, windowId: CGWindowID) async throws -> AppSessionResult
     /// Stops the active app session and restores/deactivates according to the core session state.
     func stopAppSession() async throws -> AppSessionResult
-    /// Posts a coordinate-based background mouse event in the pid/window pair.
+    /// Returns the active app session without changing focus or window order.
+    func currentAppSession() async throws -> AppSessionResult
+    /// Posts a coordinate-based background mouse event in the active app session.
     func postMouseEvent(
-        pid: pid_t,
         windowId: CGWindowID,
         event: BackgroundMouseEvent
     ) async throws -> WindowMouseEventResult
     /// Posts a mouse event and returns diagnostic state captured around each event stage.
     func postMouseEventTrace(
-        pid: pid_t,
         windowId: CGWindowID,
         event: BackgroundMouseEvent
     ) async throws -> WindowMouseEventTraceResult
-    /// Posts a pid-scoped background keyboard event in the pid/window pair.
+    /// Posts a pid-scoped background keyboard event in the active app session.
     func postKeyboardEvent(
-        pid: pid_t,
         windowId: CGWindowID,
         event: BackgroundKeyboardEvent
     ) async throws -> WindowKeyboardEventResult
@@ -116,31 +115,31 @@ public struct ComputerUseCoreAdapter: ComputerUseCoreClient {
         try await core.stopAppSession()
     }
 
+    public func currentAppSession() async throws -> AppSessionResult {
+        try await core.currentAppSession()
+    }
+
     public func postMouseEvent(
-        pid: pid_t,
         windowId: CGWindowID,
         event: BackgroundMouseEvent
     ) async throws -> WindowMouseEventResult {
-        try await core.postMouseEvent(pid: pid, windowId: windowId, event: event)
+        try await core.postMouseEvent(windowId: windowId, event: event)
     }
 
     public func postMouseEventTrace(
-        pid: pid_t,
         windowId: CGWindowID,
         event: BackgroundMouseEvent
     ) async throws -> WindowMouseEventTraceResult {
         try await core.postMouseEventTrace(
-            pid: pid,
             windowId: windowId,
             event: event
         )
     }
 
     public func postKeyboardEvent(
-        pid: pid_t,
         windowId: CGWindowID,
         event: BackgroundKeyboardEvent
     ) async throws -> WindowKeyboardEventResult {
-        try await core.postKeyboardEvent(pid: pid, windowId: windowId, event: event)
+        try await core.postKeyboardEvent(windowId: windowId, event: event)
     }
 }

@@ -263,7 +263,7 @@ pixel click with an external AOS observer and determine whether it:
 - uses a different event target or trust path;
 - avoids raw mouse delivery for Chrome page content.
 
-To support that comparison, `AOSComputerUseCLI observe-mouse-events` now adds
+To support that comparison, interactive `observe-mouse-events` now adds
 a second passive diagnostic surface. It installs listen-only CGEvent taps and
 records the tap location (`hid`, `session`, `annotated`), mouse event type,
 screen location, source/target pids, standard mouse fields, and the raw fields
@@ -273,26 +273,14 @@ The first version only watched `.cgSessionEventTap`. Live Codex comparison on
 Chrome canvas returned `events: 0` while Codex still drew on the page, so that
 single tap was too narrow to prove anything. The diagnostic now defaults to
 `--tap-location all`, which opens HID, session, and annotated session taps and
-prints the layer that observed each event. The intended Codex comparison
-command is:
+prints the layer that observed each event. The intended Codex comparison flow
+now runs inside the interactive CLI host:
 
-```bash
-MOUSE=/tmp/aos-mouse-events.log
-
-.build/debug/AOSComputerUseCLI observe-mouse-events \
-  --pid 45785 \
-  --window-id 384636 \
-  --duration-ms 15000 \
-  --tap-location all > "$MOUSE" &
-
-mouse=$!
-sleep 2
-
-# Run the Codex Computer Use Chrome canvas click/drag here.
-
-wait "$mouse"
-cat "$MOUSE"
-```
+1. Launch `.build/debug/AOSComputerUseCLI interactive`.
+2. Select `observe-mouse-events`.
+3. Choose to filter to a target, then select pid `45785` and window `384636`.
+4. Enter `duration-ms=15000` and select tap location `all`.
+5. Run the Codex Computer Use Chrome canvas click/drag while the observation is active.
 
 If Codex's pid-targeted or WindowServer-routed mouse events pass through any
 ordinary CGEvent tap layer, this should expose the event field shape directly.

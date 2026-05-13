@@ -204,17 +204,12 @@ violation and reactivates the original front app if needed.
 
 Live Chrome validation used:
 
-```bash
-.build/debug/AOSComputerUseCLI measure-left-click-window-order \
-  --pid 45785 \
-  --window-id 384636 \
-  --coor 90,310 \
-  --runs 20 \
-  --duration-ms 500 \
-  --interval-ms 1 \
-  --pre-click-delay-ms 100 \
-  --between-runs-ms 100
-```
+1. Launch `.build/debug/AOSComputerUseCLI interactive`.
+2. Select `start-app-session`, then select pid `45785` and window `384636`.
+3. Select `measure-left-click-window-order`, choose window `384636`, and enter:
+   `coor=90,310`, `runs=20`, `duration-ms=500`, `interval-ms=1`,
+   `pre-click-delay-ms=100`, `between-runs-ms=100`.
+4. Select `stop-app-session`.
 
 Result from the earlier z-order-preservation prototype:
 
@@ -225,17 +220,12 @@ Summary: max active contiguous 15ms, max rank1 contiguous 0ms, max protected-cov
 
 Stress validation at a text-input point used:
 
-```bash
-.build/debug/AOSComputerUseCLI measure-left-click-window-order \
-  --pid 45785 \
-  --window-id 384636 \
-  --coor 500,490 \
-  --runs 100 \
-  --duration-ms 500 \
-  --interval-ms 1 \
-  --pre-click-delay-ms 50 \
-  --between-runs-ms 50
-```
+1. Launch `.build/debug/AOSComputerUseCLI interactive`.
+2. Select `start-app-session`, then select pid `45785` and window `384636`.
+3. Select `measure-left-click-window-order`, choose window `384636`, and enter:
+   `coor=500,490`, `runs=100`, `duration-ms=500`, `interval-ms=1`,
+   `pre-click-delay-ms=50`, `between-runs-ms=50`.
+4. Select `stop-app-session`.
 
 Result from the earlier z-order-preservation prototype:
 

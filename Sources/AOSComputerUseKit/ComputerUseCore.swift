@@ -45,14 +45,12 @@ public struct WindowFocusResult: Sendable, Equatable {
     }
 }
 
-/// Result of starting or stopping an app session for a WindowServer window.
+/// Result of starting or stopping a pid-scoped app session.
 public struct AppSessionResult: Sendable, Equatable {
     public let pid: pid_t
-    public let windowId: CGWindowID
 
-    public init(pid: pid_t, windowId: CGWindowID) {
+    public init(pid: pid_t) {
         self.pid = pid
-        self.windowId = windowId
     }
 }
 
@@ -93,8 +91,6 @@ public enum WindowMouseEventTraceStage: String, Sendable, Codable, Equatable {
     case afterTargetDown
     case afterTargetDragged
     case afterTargetUp
-    case afterRestoreOriginalFrontWindow
-    case afterTargetDeactivate
     case activeStateGuardTick
     case afterActiveStateGuard
     case afterTraceSettle50ms
@@ -198,21 +194,27 @@ public enum ComputerUseError: Error, CustomStringConvertible, Sendable {
 private struct ActiveAppSession: Sendable {
     let id: UInt64
     let pid: pid_t
-    let windowId: CGWindowID
-    let originalFrontWindow: WindowInfo?
-    let orderGuardian: WindowOrderGuardian?
 
     var result: AppSessionResult {
-        AppSessionResult(pid: pid, windowId: windowId)
+        AppSessionResult(pid: pid)
     }
 
-    func matches(pid: pid_t, windowId: CGWindowID) -> Bool {
-        self.pid == pid && self.windowId == windowId
+    init(
+        id: UInt64,
+        pid: pid_t
+    ) {
+        self.id = id
+        self.pid = pid
     }
 
     func isSameSession(as other: ActiveAppSession) -> Bool {
         id == other.id
     }
+
+    func isSameApp(pid: pid_t) -> Bool {
+        self.pid == pid
+    }
+
 }
 
 public actor ComputerUseCore {
@@ -221,6 +223,7 @@ public actor ComputerUseCore {
     private let cache: StateCache
     private let capture: WindowCapture
     private let windowLookup: @Sendable (CGWindowID) -> WindowInfo?
+    private let windowsForPIDLookup: @Sendable (pid_t) -> [WindowInfo]
     private let visibleWindowsLookup: @Sendable () -> [WindowInfo]
     private let frontmostWindowLookup: @Sendable () -> WindowInfo?
     private let mouseEventDeliveryRoute: @Sendable (pid_t) -> BackgroundMouseEventDeliveryRoute
@@ -265,6 +268,9 @@ public actor ComputerUseCore {
             capture: WindowCapture(),
             windowLookup: { windowId in
                 WindowEnumerator.window(forId: windowId)
+            },
+            windowsForPIDLookup: { pid in
+                WindowEnumerator.appWindows(forPid: pid)
             },
             visibleWindowsLookup: {
                 WindowEnumerator.visibleWindows()
@@ -314,6 +320,7 @@ public actor ComputerUseCore {
         cache: StateCache = StateCache(ttlSeconds: 30),
         capture: WindowCapture = WindowCapture(),
         windowLookup: @escaping @Sendable (CGWindowID) -> WindowInfo?,
+        windowsForPIDLookup: (@Sendable (pid_t) -> [WindowInfo])? = nil,
         visibleWindowsLookup: @escaping @Sendable () -> [WindowInfo] = { [] },
         frontmostWindowLookup: @escaping @Sendable () -> WindowInfo? = { nil },
         mouseEventDeliveryRoute: @escaping @Sendable (pid_t) -> BackgroundMouseEventDeliveryRoute = { _ in .appKit },
@@ -350,6 +357,9 @@ public actor ComputerUseCore {
         self.capture = capture
         self.windowLookup = windowLookup
         self.visibleWindowsLookup = visibleWindowsLookup
+        self.windowsForPIDLookup = windowsForPIDLookup ?? { pid in
+            visibleWindowsLookup().filter { $0.pid == pid && $0.layer == 0 }
+        }
         self.frontmostWindowLookup = frontmostWindowLookup
         self.mouseEventDeliveryRoute = mouseEventDeliveryRoute
         self.requiresPreEventFocus = requiresPreEventFocus
@@ -390,7 +400,7 @@ public actor ComputerUseCore {
     }
 
     public func listWindows(pid: pid_t) -> [WindowInfo] {
-        WindowEnumerator.appWindows(forPid: pid)
+        windowsForPIDLookup(pid)
     }
 
     public func getAppState(
@@ -472,47 +482,49 @@ public actor ComputerUseCore {
         return session.result
     }
 
-    /// Posts a coordinate-based background mouse event through the selected
-    /// delivery route while preserving the original front window state.
+    /// Returns the active app session without changing focus or window order.
+    public func currentAppSession() throws -> AppSessionResult {
+        try requireActiveAppSession().result
+    }
+
+    /// Posts a coordinate-based background mouse event to a window owned by
+    /// the active app session.
     public func postMouseEvent(
-        pid: pid_t,
         windowId: CGWindowID,
         event: BackgroundMouseEvent
     ) async throws -> WindowMouseEventResult {
-        try await performPostMouseEvent(pid: pid, windowId: windowId, event: event, tracing: false).result
+        try await performPostMouseEvent(windowId: windowId, event: event, tracing: false).result
     }
 
     /// Posts a background mouse event and returns per-stage WindowServer state
     /// for diagnosing activation and ordering side effects.
     public func postMouseEventTrace(
-        pid: pid_t,
         windowId: CGWindowID,
         event: BackgroundMouseEvent
     ) async throws -> WindowMouseEventTraceResult {
         try await performPostMouseEvent(
-            pid: pid,
             windowId: windowId,
             event: event,
             tracing: true
         )
     }
 
-    /// Posts a pid-scoped background keyboard event while preserving the
-    /// original front window state.
+    /// Posts a pid-scoped background keyboard event to a window owned by the
+    /// active app session.
     public func postKeyboardEvent(
-        pid: pid_t,
         windowId: CGWindowID,
         event: BackgroundKeyboardEvent
     ) async throws -> WindowKeyboardEventResult {
-        try await performPostKeyboardEvent(pid: pid, windowId: windowId, event: event)
+        try await performPostKeyboardEvent(windowId: windowId, event: event)
     }
 
     private func performPostMouseEvent(
-        pid: pid_t,
         windowId: CGWindowID,
         event: BackgroundMouseEvent,
         tracing: Bool
     ) async throws -> WindowMouseEventTraceResult {
+        let activeSession = try requireActiveAppSession()
+        let pid = activeSession.pid
         let window = try validateOwnership(pid: pid, windowId: windowId)
         try validateMouseEvent(event, isInside: window)
         let deliveryRoute = mouseEventDeliveryRoute(pid)
@@ -523,14 +535,14 @@ public actor ComputerUseCore {
         }
         let target = BackgroundMouseEventTarget(pid: pid, windowId: windowId, windowBounds: window.bounds)
         let traceRecorder = tracing ? WindowMouseEventTraceRecorder() : nil
-        let session = try await startAppSession(
-            pid: pid,
+        let orderGuardian = try makeWindowOrderGuardian(targetWindowId: windowId)
+        try await prepareActiveAppSessionWindow(
             windowId: windowId,
             shouldFocusTarget: requiresPreEventFocus(deliveryRoute, event),
+            orderGuardian: orderGuardian,
             traceRecorder: traceRecorder
         )
-        let originalFrontWindow = session.originalFrontWindow
-        let orderGuardian = session.orderGuardian
+        let originalFrontWindow = frontmostWindowLookup()
         let orderChangeObservation = try await startWindowOrderChangeGuard(
             orderGuardian,
             originalFrontWindow: originalFrontWindow,
@@ -597,21 +609,22 @@ public actor ComputerUseCore {
     }
 
     private func performPostKeyboardEvent(
-        pid: pid_t,
         windowId: CGWindowID,
         event: BackgroundKeyboardEvent
     ) async throws -> WindowKeyboardEventResult {
+        let activeSession = try requireActiveAppSession()
+        let pid = activeSession.pid
         _ = try validateOwnership(pid: pid, windowId: windowId)
         try validateKeyboardEvent(event)
         let target = BackgroundKeyboardEventTarget(pid: pid, windowId: windowId)
-        let session = try await startAppSession(
-            pid: pid,
+        let orderGuardian = try makeWindowOrderGuardian(targetWindowId: windowId)
+        try await prepareActiveAppSessionWindow(
             windowId: windowId,
             shouldFocusTarget: true,
+            orderGuardian: orderGuardian,
             traceRecorder: nil
         )
-        let originalFrontWindow = session.originalFrontWindow
-        let orderGuardian = session.orderGuardian
+        let originalFrontWindow = frontmostWindowLookup()
         let orderChangeObservation = try await startWindowOrderChangeGuard(
             orderGuardian,
             originalFrontWindow: originalFrontWindow,
@@ -693,26 +706,14 @@ public actor ComputerUseCore {
         traceRecorder: WindowMouseEventTraceRecorder?
     ) async throws -> ActiveAppSession {
         if let session = activeAppSession {
-            if session.matches(pid: pid, windowId: windowId) {
-                await recordTraceStage(
-                    .before,
-                    recorder: traceRecorder,
-                    targetPID: pid,
-                    targetWindowId: windowId,
-                    orderGuardian: session.orderGuardian
+            if session.isSameApp(pid: pid) {
+                try await prepareActiveAppSessionWindow(
+                    windowId: windowId,
+                    shouldFocusTarget: shouldFocusTarget,
+                    orderGuardian: nil,
+                    traceRecorder: traceRecorder
                 )
-                if shouldFocusTarget {
-                    try await focusWindowWithoutRaising(pid, windowId)
-                    try await Task.sleep(nanoseconds: 5_000_000)
-                    await recordTraceStage(
-                        .afterFocus,
-                        recorder: traceRecorder,
-                        targetPID: pid,
-                        targetWindowId: windowId,
-                        orderGuardian: session.orderGuardian
-                    )
-                }
-                return session
+                return try requireActiveAppSession()
             }
 
             try await stopAppSession(session)
@@ -721,13 +722,9 @@ public actor ComputerUseCore {
             }
         }
 
-        let orderGuardian = try makeWindowOrderGuardian(targetWindowId: windowId)
         let session = ActiveAppSession(
             id: nextAppSessionId,
-            pid: pid,
-            windowId: windowId,
-            originalFrontWindow: frontmostWindowLookup(),
-            orderGuardian: orderGuardian
+            pid: pid
         )
         nextAppSessionId += 1
         await recordTraceStage(
@@ -735,7 +732,7 @@ public actor ComputerUseCore {
             recorder: traceRecorder,
             targetPID: pid,
             targetWindowId: windowId,
-            orderGuardian: orderGuardian
+            orderGuardian: nil
         )
         if shouldFocusTarget {
             try await focusWindowWithoutRaising(pid, windowId)
@@ -746,7 +743,7 @@ public actor ComputerUseCore {
                 recorder: traceRecorder,
                 targetPID: pid,
                 targetWindowId: windowId,
-                orderGuardian: orderGuardian
+                orderGuardian: nil
             )
         } else {
             activeAppSession = session
@@ -754,23 +751,55 @@ public actor ComputerUseCore {
         return session
     }
 
+    private func prepareActiveAppSessionWindow(
+        windowId: CGWindowID,
+        shouldFocusTarget: Bool,
+        orderGuardian: WindowOrderGuardian?,
+        traceRecorder: WindowMouseEventTraceRecorder?
+    ) async throws {
+        let session = try requireActiveAppSession()
+        let pid = session.pid
+        await recordTraceStage(
+            .before,
+            recorder: traceRecorder,
+            targetPID: pid,
+            targetWindowId: windowId,
+            orderGuardian: orderGuardian
+        )
+        if shouldFocusTarget {
+            try await focusWindowWithoutRaising(pid, windowId)
+            try await Task.sleep(nanoseconds: 5_000_000)
+            await recordTraceStage(
+                .afterFocus,
+                recorder: traceRecorder,
+                targetPID: pid,
+                targetWindowId: windowId,
+                orderGuardian: orderGuardian
+            )
+        }
+    }
+
+    private func requireActiveAppSession() throws -> ActiveAppSession {
+        guard let session = activeAppSession else {
+            throw ComputerUseError.appSessionUnavailable("no active app session")
+        }
+        return session
+    }
+
     private func stopAppSession(_ session: ActiveAppSession) async throws {
-        try await runPostDispatchCleanup(
-            pid: session.pid,
-            windowId: session.windowId,
-            originalFrontWindow: session.originalFrontWindow,
-            orderGuardian: session.orderGuardian,
-            traceRecorder: nil
-        )
-        try await runActiveStateGuard(
-            session.orderGuardian,
-            originalFrontWindow: session.originalFrontWindow,
-            targetWindowId: session.windowId,
-            traceRecorder: nil,
-            targetPID: session.pid,
-            delays: activeStateGuardDelays,
-            allowsTargetActive: false
-        )
+        let windows = windowsForPIDLookup(session.pid)
+        let frontmostWindow = frontmostWindowLookup()
+        let protectedWindowId = frontmostWindow?.pid == session.pid ? frontmostWindow?.id : nil
+        let windowIds = windows
+            .map(\.id)
+            .filter { $0 != protectedWindowId }
+
+        for windowId in windowIds {
+            try await deactivateTargetWindowIfNeeded(
+                pid: session.pid,
+                windowId: windowId
+            )
+        }
     }
 
     private func restoreOriginalFrontWindow(
@@ -785,12 +814,8 @@ public actor ComputerUseCore {
 
     private func deactivateTargetWindowIfNeeded(
         pid: pid_t,
-        windowId: CGWindowID,
-        originalFrontWindow: WindowInfo?
+        windowId: CGWindowID
     ) async throws {
-        guard originalFrontWindow?.id != windowId else {
-            return
-        }
         try await deactivateWindowWithoutRaising(pid, windowId)
     }
 
@@ -802,39 +827,6 @@ public actor ComputerUseCore {
             return
         }
         _ = await activateApplication(originalFrontWindow.pid)
-    }
-
-    private func runPostDispatchCleanup(
-        pid: pid_t,
-        windowId: CGWindowID,
-        originalFrontWindow: WindowInfo?,
-        orderGuardian: WindowOrderGuardian?,
-        traceRecorder: WindowMouseEventTraceRecorder?
-    ) async throws {
-        try await restoreOriginalFrontWindow(originalFrontWindow, targetWindowId: windowId)
-        await recordTraceStage(
-            .afterRestoreOriginalFrontWindow,
-            recorder: traceRecorder,
-            targetPID: pid,
-            targetWindowId: windowId,
-            orderGuardian: orderGuardian
-        )
-        try await deactivateTargetWindowIfNeeded(
-            pid: pid,
-            windowId: windowId,
-            originalFrontWindow: originalFrontWindow
-        )
-        await reactivateOriginalFrontApplicationIfNeeded(
-            originalFrontWindow,
-            targetWindowId: windowId
-        )
-        await recordTraceStage(
-            .afterTargetDeactivate,
-            recorder: traceRecorder,
-            targetPID: pid,
-            targetWindowId: windowId,
-            orderGuardian: orderGuardian
-        )
     }
 
     private func makeWindowOrderGuardian(targetWindowId: CGWindowID) throws -> WindowOrderGuardian? {

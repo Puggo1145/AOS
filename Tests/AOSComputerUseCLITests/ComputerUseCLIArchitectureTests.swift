@@ -9,7 +9,6 @@ struct ComputerUseCLIArchitectureTests {
         let cliRoot = root.appendingPathComponent("Sources/AOSComputerUseCLI")
         let expectedFiles = [
             "ComputerUseCLI.swift",
-            "AppSessionPolicy.swift",
             "Types.swift",
             "Parser.swift",
             "Outputs.swift",

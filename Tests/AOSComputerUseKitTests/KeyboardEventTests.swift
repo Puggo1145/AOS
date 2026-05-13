@@ -16,6 +16,9 @@ struct KeyboardEventTests {
             windowLookup: { windowId in
                 [target, front].first { $0.id == windowId }
             },
+            windowsForPIDLookup: { pid in
+                pid == 123 ? [target] : []
+            },
             frontmostWindowLookup: {
                 front
             },
@@ -34,10 +37,12 @@ struct KeyboardEventTests {
             }
         )
 
-        let result = try await core.postKeyboardEvent(pid: 123, windowId: 456, event: event)
+        _ = try await core.startAppSession(pid: 123, windowId: 456)
+        let result = try await core.postKeyboardEvent(windowId: 456, event: event)
 
         #expect(result == WindowKeyboardEventResult(pid: 123, windowId: 456, event: event))
         #expect(await recorder.events == [
+            .focus(pid: 123, windowId: 456),
             .focus(pid: 123, windowId: 456),
             .keyboard(event: event, target: BackgroundKeyboardEventTarget(pid: 123, windowId: 456)),
         ])
@@ -53,6 +58,9 @@ struct KeyboardEventTests {
             windowLookup: { windowId in
                 [target, front].first { $0.id == windowId }
             },
+            windowsForPIDLookup: { pid in
+                pid == 123 ? [target] : []
+            },
             frontmostWindowLookup: {
                 front
             },
@@ -71,21 +79,22 @@ struct KeyboardEventTests {
             }
         )
 
-        _ = try await core.postKeyboardEvent(pid: 123, windowId: 456, event: event)
+        _ = try await core.startAppSession(pid: 123, windowId: 456)
+        _ = try await core.postKeyboardEvent(windowId: 456, event: event)
         #expect(await recorder.events == [
+            .focus(pid: 123, windowId: 456),
             .focus(pid: 123, windowId: 456),
             .keyboard(event: event, target: BackgroundKeyboardEventTarget(pid: 123, windowId: 456)),
         ])
 
         let stopped = try await core.stopAppSession()
 
-        #expect(stopped == AppSessionResult(pid: 123, windowId: 456))
+        #expect(stopped == AppSessionResult(pid: 123))
         #expect(await recorder.events == [
             .focus(pid: 123, windowId: 456),
+            .focus(pid: 123, windowId: 456),
             .keyboard(event: event, target: BackgroundKeyboardEventTarget(pid: 123, windowId: 456)),
-            .focus(pid: 777, windowId: 789),
             .deactivate(pid: 123, windowId: 456),
-            .activate(pid: 777),
         ])
     }
 
@@ -106,8 +115,8 @@ struct KeyboardEventTests {
         )
 
         await #expect(throws: ComputerUseError.self) {
-            try await core.postKeyboardEvent(
-                pid: 123,
+            _ = try await core.startAppSession(pid: 123, windowId: 456)
+            _ = try await core.postKeyboardEvent(
                 windowId: 456,
                 event: .keyPress(key: "return")
             )
@@ -135,13 +144,15 @@ struct KeyboardEventTests {
         )
 
         await #expect(throws: ComputerUseError.self) {
-            try await core.postKeyboardEvent(
-                pid: 123,
+            _ = try await core.startAppSession(pid: 123, windowId: 456)
+            _ = try await core.postKeyboardEvent(
                 windowId: 456,
                 event: .text("hello", delayMilliseconds: 1_000)
             )
         }
-        #expect(await recorder.events.isEmpty)
+        #expect(await recorder.events == [
+            .focus(pid: 123, windowId: 456),
+        ])
     }
 
     @Test("core leaves app session open when keyboard posting fails after focus")
@@ -153,6 +164,9 @@ struct KeyboardEventTests {
         let core = ComputerUseCore(
             windowLookup: { windowId in
                 [target, front].first { $0.id == windowId }
+            },
+            windowsForPIDLookup: { pid in
+                pid == 123 ? [target] : []
             },
             frontmostWindowLookup: {
                 front
@@ -173,16 +187,16 @@ struct KeyboardEventTests {
         )
 
         await #expect(throws: ComputerUseError.self) {
-            try await core.postKeyboardEvent(pid: 123, windowId: 456, event: event)
+            _ = try await core.startAppSession(pid: 123, windowId: 456)
+            _ = try await core.postKeyboardEvent(windowId: 456, event: event)
         }
         let stopped = try await core.stopAppSession()
 
-        #expect(stopped == AppSessionResult(pid: 123, windowId: 456))
+        #expect(stopped == AppSessionResult(pid: 123))
         #expect(await recorder.events == [
             .focus(pid: 123, windowId: 456),
-            .focus(pid: 777, windowId: 789),
+            .focus(pid: 123, windowId: 456),
             .deactivate(pid: 123, windowId: 456),
-            .activate(pid: 777),
         ])
     }
 
