@@ -15,6 +15,9 @@ struct ComputerUseCLITests {
         #expect(output.contains("get-app-type"))
         #expect(output.contains("get-app-state"))
         #expect(output.contains("focus-window"))
+        #expect(output.contains("start-app-session"))
+        #expect(output.contains("stop-app-session"))
+        #expect(output.contains("interactive"))
         #expect(output.contains("open-coor-test"))
         #expect(!output.contains("open-button"))
         #expect(output.contains("left-click"))
@@ -232,6 +235,297 @@ struct ComputerUseCLITests {
         #expect(result.exitCode == 0)
     }
 
+    @Test("start-app-session starts target app session")
+    func startAppSessionStartsTargetAppSession() async throws {
+        let fake = FakeComputerUseCore()
+
+        let result = try await ComputerUseCLI.run(
+            arguments: ["start-app-session", "--pid", "123", "--window-id", "456"],
+            core: fake,
+            permissions: FakePermissionClient()
+        )
+
+        #expect(await fake.requestedStartAppSessionPID == 123)
+        #expect(await fake.requestedStartAppSessionWindowID == 456)
+        #expect(result.stdout.contains("Started app session for window 456"))
+        #expect(result.stdout.contains("pid 123"))
+        #expect(result.stderr.isEmpty)
+        #expect(result.exitCode == 0)
+    }
+
+    @Test("stop-app-session stops active app session")
+    func stopAppSessionStopsActiveAppSession() async throws {
+        let fake = FakeComputerUseCore()
+        await fake.setStoppedAppSession(AppSessionResult(pid: 123, windowId: 456))
+
+        let result = try await ComputerUseCLI.run(
+            arguments: ["stop-app-session"],
+            core: fake,
+            permissions: FakePermissionClient()
+        )
+
+        #expect(await fake.stopAppSessionCallCount == 1)
+        #expect(result.stdout.contains("Stopped app session for window 456"))
+        #expect(result.stdout.contains("pid 123"))
+        #expect(result.stderr.isEmpty)
+        #expect(result.exitCode == 0)
+    }
+
+    @Test("interactive CLI uses arrow selection and reuses one core")
+    func interactiveCLIUsesArrowSelectionAndReusesOneCore() async throws {
+        let fake = FakeComputerUseCore()
+        await fake.setApps([
+            AppInfo(
+                pid: 111,
+                bundleId: "com.example.Other",
+                name: "Other",
+                path: "/Applications/Other.app",
+                running: true,
+                active: false
+            ),
+            AppInfo(
+                pid: 123,
+                bundleId: "com.example.Target",
+                name: "Target",
+                path: "/Applications/Target.app",
+                running: true,
+                active: false
+            ),
+        ])
+        await fake.setWindows([
+            WindowInfo(
+                id: 222,
+                pid: 123,
+                owner: "Target",
+                title: "Aux",
+                bounds: WindowBounds(x: 0, y: 0, width: 100, height: 100),
+                zIndex: 2,
+                isOnScreen: true,
+                layer: 0
+            ),
+            WindowInfo(
+                id: 456,
+                pid: 123,
+                owner: "Target",
+                title: "Main",
+                bounds: WindowBounds(x: 10, y: 20, width: 500, height: 400),
+                zIndex: 1,
+                isOnScreen: true,
+                layer: 0
+            ),
+        ])
+        await fake.setStoppedAppSession(AppSessionResult(pid: 123, windowId: 456))
+        let io = FakeInteractiveCLIIO(
+            lines: [],
+            keys: [
+                .confirm,
+                .down, .confirm,
+                .down, .confirm,
+                .down, .confirm,
+                .quit,
+            ]
+        )
+
+        let result = try await ComputerUseCLI.run(
+            arguments: ["interactive"],
+            core: fake,
+            permissions: FakePermissionClient(),
+            interactiveIO: io
+        )
+
+        #expect(await fake.requestedStartAppSessionPID == 123)
+        #expect(await fake.requestedStartAppSessionWindowID == 456)
+        #expect(await fake.stopAppSessionCallCount == 1)
+        #expect(await io.prompts.isEmpty)
+        #expect(await io.output.isEmpty)
+        #expect(await io.status.contains { $0.contains("Output") && $0.contains("Started app session for window 456") })
+        #expect(await io.status.contains { $0.contains("Output") && $0.contains("Stopped app session for window 456") })
+        #expect(await io.status.contains { $0.contains("> start-app-session") })
+        #expect(await io.status.contains { $0.contains("> Target pid 123") })
+        #expect(await io.status.contains { $0.contains("> 456 Main") })
+        #expect(await io.status.contains { $0.contains("> stop-app-session") })
+        #expect(result.stdout.isEmpty)
+        #expect(result.stderr.isEmpty)
+        #expect(result.exitCode == 0)
+    }
+
+    @Test("interactive selection menu redraws and clears its terminal region")
+    func interactiveSelectionMenuRedrawsAndClearsRegion() async throws {
+        let io = FakeInteractiveCLIIO(keys: [.down, .confirm])
+        let menu = InteractiveSelectionMenu(
+            title: "Command",
+            options: [
+                InteractiveSelectionOption(title: "first", value: 1),
+                InteractiveSelectionOption(title: "second", value: 2),
+            ]
+        )
+
+        let selected = try await menu.select(using: io)
+
+        let status = await io.status.joined()
+        #expect(selected == 2)
+        #expect(status.contains("\u{001B}[5A"))
+        #expect(status.contains("\u{001B}[2K"))
+        #expect(status.hasSuffix("\u{001B}[5A\u{001B}[2K\u{001B}[1B\u{001B}[2K\u{001B}[1B\u{001B}[2K\u{001B}[1B\u{001B}[2K\u{001B}[1B\u{001B}[2K\u{001B}[1B\u{001B}[5A"))
+    }
+
+    @Test("interactive selection menu renders a scrolling viewport")
+    func interactiveSelectionMenuRendersScrollingViewport() async throws {
+        let io = FakeInteractiveCLIIO(keys: Array(repeating: .down, count: 8) + [.confirm])
+        let menu = InteractiveSelectionMenu(
+            title: "Command",
+            options: (0..<12).map {
+                InteractiveSelectionOption(title: "item-\($0)", value: $0)
+            }
+        )
+
+        let selected = try await menu.select(using: io)
+
+        let firstRender = try #require(await io.status.first)
+        let renderAfterScroll = try #require(await io.status.last { $0.contains("> item-8") })
+        #expect(selected == 8)
+        #expect(firstRender.contains("Command\n-------"))
+        #expect(firstRender.contains("Showing 1-8 of 12"))
+        #expect(firstRender.contains("> item-0"))
+        #expect(firstRender.contains("  item-7"))
+        #expect(!firstRender.contains("item-8"))
+        #expect(renderAfterScroll.contains("Showing 2-9 of 12"))
+        #expect(renderAfterScroll.contains("> item-8"))
+        #expect(!renderAfterScroll.contains("item-0"))
+    }
+
+    @Test("interactive prompt input is cleared before rendering errors")
+    func interactivePromptInputIsClearedBeforeRenderingErrors() async throws {
+        let fake = FakeComputerUseCore()
+        await fake.setApps([
+            AppInfo(
+                pid: 123,
+                bundleId: "com.example.Target",
+                name: "Target",
+                path: "/Applications/Target.app",
+                running: true,
+                active: false
+            ),
+        ])
+        await fake.setWindows([
+            WindowInfo(
+                id: 456,
+                pid: 123,
+                owner: "Target",
+                title: "Main",
+                bounds: WindowBounds(x: 10, y: 20, width: 500, height: 400),
+                zIndex: 1,
+                isOnScreen: true,
+                layer: 0
+            ),
+        ])
+        let io = FakeInteractiveCLIIO(
+            lines: ["q"],
+            keys: Array(repeating: .down, count: 7) + [.confirm, .confirm, .confirm, .confirm, .quit]
+        )
+
+        let result = try await ComputerUseCLI.run(
+            arguments: ["interactive"],
+            core: fake,
+            permissions: FakePermissionClient(),
+            interactiveIO: io
+        )
+
+        #expect(await io.status.contains("\u{001B}[1A\u{001B}[2K"))
+        #expect(await io.status.contains { $0.contains("Error") && $0.contains("invalid value for --coor: q") })
+        #expect(result.exitCode == 0)
+    }
+
+    @Test("interactive command menu accepts typed prefix matching")
+    func interactiveCommandMenuAcceptsTypedPrefixMatching() async throws {
+        let fake = FakeComputerUseCore()
+        await fake.setApps([
+            AppInfo(
+                pid: 123,
+                bundleId: "com.example.Target",
+                name: "Target",
+                path: "/Applications/Target.app",
+                running: true,
+                active: false
+            ),
+        ])
+        let io = FakeInteractiveCLIIO(keys: [
+            .character("l"),
+            .character("i"),
+            .confirm,
+            .confirm,
+            .quit,
+        ])
+
+        let result = try await ComputerUseCLI.run(
+            arguments: ["interactive"],
+            core: fake,
+            permissions: FakePermissionClient(),
+            interactiveIO: io
+        )
+
+        #expect(await fake.requestedAppMode == .running)
+        #expect(await io.status.contains { $0.contains("Prefix: li") && $0.contains("> list-apps") })
+        #expect(await io.status.contains { $0.contains("Output") && $0.contains("Apps (running)") })
+        #expect(result.exitCode == 0)
+    }
+
+    @Test("interactive post-cursor always selects a target")
+    func interactivePostCursorAlwaysSelectsTarget() async throws {
+        let fake = FakeComputerUseCore()
+        await fake.setApps([
+            AppInfo(
+                pid: 123,
+                bundleId: "com.example.Target",
+                name: "Target",
+                path: "/Applications/Target.app",
+                running: true,
+                active: false
+            ),
+        ])
+        await fake.setWindows([
+            WindowInfo(
+                id: 456,
+                pid: 123,
+                owner: "Target",
+                title: "Main",
+                bounds: WindowBounds(x: 10, y: 20, width: 500, height: 400),
+                zIndex: 1,
+                isOnScreen: true,
+                layer: 0
+            ),
+        ])
+        let interactiveIO = FakeInteractiveCLIIO(
+            lines: [""],
+            keys: [
+                .character("p"),
+                .character("o"),
+                .confirm,
+                .confirm,
+                .confirm,
+                .quit,
+            ]
+        )
+        let postCursorIO = FakePostCursorIO(lines: ["left-click"], keys: [.quit])
+
+        let result = try await ComputerUseCLI.run(
+            arguments: ["interactive"],
+            core: fake,
+            permissions: FakePermissionClient(),
+            postCursorIO: postCursorIO,
+            postCursorOverlay: FakePostCursorOverlay(),
+            interactiveIO: interactiveIO
+        )
+
+        #expect(await fake.requestedAppMode == .running)
+        #expect(await fake.requestedWindowPID == 123)
+        #expect(await interactiveIO.status.contains { $0.contains("> Target pid 123") })
+        #expect(await interactiveIO.status.contains { $0.contains("> 456 Main") })
+        #expect(await !interactiveIO.status.contains { $0.contains("Attach to a target now?") })
+        #expect(await postCursorIO.prompts == ["Select mouse event (left-click/right-click/drag): "])
+        #expect(result.exitCode == 0)
+    }
+
     @Test("left-click requires a local coordinate")
     func leftClickRequiresLocalCoordinate() async throws {
         let fake = FakeComputerUseCore()
@@ -275,6 +569,37 @@ struct ComputerUseCLITests {
         #expect(await fake.requestedLeftClickTracePID == nil)
         #expect(await fake.requestedLeftClickWindowID == 456)
         #expect(await fake.requestedLeftClickPoint == CGPoint(x: 310, y: 250))
+        #expect(await fake.stopAppSessionCallCount == 1)
+        #expect(result.stdout.contains("Posted left click to window 456 at 310,250"))
+        #expect(result.stderr.isEmpty)
+        #expect(result.exitCode == 0)
+    }
+
+    @Test("persistent host event command keeps the app session open")
+    func persistentHostEventCommandKeepsTheAppSessionOpen() async throws {
+        let fake = FakeComputerUseCore()
+        await fake.setWindows([
+            WindowInfo(
+                id: 456,
+                pid: 123,
+                owner: "AOSCoordinateTarget",
+                title: "AOS Button Reliability Target",
+                bounds: WindowBounds(x: 50, y: 70, width: 520, height: 360),
+                zIndex: 1,
+                isOnScreen: true,
+                layer: 0
+            )
+        ])
+
+        let result = try await ComputerUseCLI.run(
+            arguments: ["left-click", "--pid", "123", "--window-id", "456", "--coor", "260,180"],
+            core: fake,
+            appSessionPolicy: .persistentHost,
+            permissions: FakePermissionClient()
+        )
+
+        #expect(await fake.requestedLeftClickPID == 123)
+        #expect(await fake.stopAppSessionCallCount == 0)
         #expect(result.stdout.contains("Posted left click to window 456 at 310,250"))
         #expect(result.stderr.isEmpty)
         #expect(result.exitCode == 0)
@@ -303,6 +628,7 @@ struct ComputerUseCLITests {
         )
 
         #expect(await fake.requestedMouseEvent == .click(button: .right, point: CGPoint(x: 310, y: 250)))
+        #expect(await fake.stopAppSessionCallCount == 1)
         #expect(result.stdout.contains("Posted right click to window 456 at 310,250"))
         #expect(result.stderr.isEmpty)
         #expect(result.exitCode == 0)
@@ -367,6 +693,7 @@ struct ComputerUseCLITests {
             to: CGPoint(x: 330, y: 280)
         ))
         #expect(await fake.requestedAppTypePID == 123)
+        #expect(await fake.stopAppSessionCallCount == 1)
         #expect(result.stdout.contains("Posted right drag to window 456 from 310,250 to 330,280"))
         #expect(result.stderr.isEmpty)
         #expect(result.exitCode == 0)
@@ -422,6 +749,7 @@ struct ComputerUseCLITests {
         )
 
         #expect(await fake.requestedKeyboardEvent == .text("hello", delayMilliseconds: 40))
+        #expect(await fake.stopAppSessionCallCount == 1)
         #expect(result.stdout.contains("Posted keyboard event text input 5 character(s) delay 40ms"))
         #expect(result.exitCode == 0)
     }
@@ -442,6 +770,7 @@ struct ComputerUseCLITests {
         )
 
         #expect(await fake.requestedKeyboardEvent == .hotkey(modifiers: [.command, .shift], key: "s"))
+        #expect(await fake.stopAppSessionCallCount == 1)
         #expect(result.stdout.contains("Posted keyboard event command+shift+s"))
         #expect(result.exitCode == 0)
     }
@@ -463,6 +792,7 @@ struct ComputerUseCLITests {
         )
 
         #expect(await fake.requestedKeyboardEvent == .keyPress(key: "delete", count: 5))
+        #expect(await fake.stopAppSessionCallCount == 1)
         #expect(result.stdout.contains("Posted keyboard event delete x5"))
         #expect(result.exitCode == 0)
     }
@@ -529,6 +859,7 @@ struct ComputerUseCLITests {
         #expect(await fake.requestedLeftClickTracePID == 123)
         #expect(await fake.requestedLeftClickTraceWindowID == 456)
         #expect(await fake.requestedLeftClickTracePoint == CGPoint(x: 310, y: 250))
+        #expect(await fake.stopAppSessionCallCount == 1)
         #expect(result.stdout.contains("Posted left click to window 456 at 310,250"))
         #expect(result.stderr.contains("Mouse event trace:"))
         #expect(result.stderr.contains("before: frontmost pid 999"))
@@ -942,6 +1273,7 @@ struct ComputerUseCLITests {
             CGPoint(x: 320, y: 260),
         ])
         #expect(await overlay.hidden == true)
+        #expect(await !io.writes.contains { $0.contains("cursor local") })
         #expect(result.stdout.contains("Post cursor exited after 1 left-click event(s) at local 270,190 / screen 320,260"))
         #expect(result.stderr.isEmpty)
         #expect(result.exitCode == 0)
@@ -1332,6 +1664,41 @@ private actor FakePostCursorOverlay: PostCursorOverlay {
     }
 }
 
+private actor FakeInteractiveCLIIO: InteractiveCLIIO {
+    private var lines: [String]
+    private var keys: [TerminalKey]
+    private(set) var status: [String] = []
+    private(set) var output: [String] = []
+    private(set) var error: [String] = []
+    private(set) var prompts: [String] = []
+
+    init(lines: [String] = [], keys: [TerminalKey]) {
+        self.lines = lines
+        self.keys = keys
+    }
+
+    func write(_ text: String) async {
+        status.append(text)
+    }
+
+    func writeOutput(_ text: String) async {
+        output.append(text)
+    }
+
+    func writeError(_ text: String) async {
+        error.append(text)
+    }
+
+    func readLine(prompt: String) async throws -> String {
+        prompts.append(prompt)
+        return lines.removeFirst()
+    }
+
+    func readKey() async throws -> TerminalKey {
+        keys.removeFirst()
+    }
+}
+
 private actor FakeWindowOrderObservationClient: WindowOrderObservationClient {
     private var sampleBatches: [[WindowOrderObservationSample]]
     private(set) var requested: WindowOrderObservationRequest?
@@ -1385,6 +1752,9 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
     private(set) var requestedMaxImageDimension: Int?
     private(set) var requestedFocusPID: pid_t?
     private(set) var requestedFocusWindowID: CGWindowID?
+    private(set) var requestedStartAppSessionPID: pid_t?
+    private(set) var requestedStartAppSessionWindowID: CGWindowID?
+    private(set) var stopAppSessionCallCount = 0
     private(set) var requestedLeftClickPID: pid_t?
     private(set) var requestedLeftClickWindowID: CGWindowID?
     private(set) var requestedLeftClickPoint: CGPoint?
@@ -1397,6 +1767,7 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
     private(set) var requestedMouseEventTrace: BackgroundMouseEvent?
     private(set) var requestedKeyboardEvent: BackgroundKeyboardEvent?
     private var leftClickTrace: WindowMouseEventTraceResult?
+    private var stoppedAppSession = AppSessionResult(pid: 0, windowId: 0)
 
     func setApps(_ apps: [AppInfo]) {
         self.apps = apps
@@ -1416,6 +1787,10 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
 
     func setLeftClickTrace(_ trace: WindowMouseEventTraceResult) {
         self.leftClickTrace = trace
+    }
+
+    func setStoppedAppSession(_ result: AppSessionResult) {
+        self.stoppedAppSession = result
     }
 
     func listApps(mode: AppListMode) async throws -> [AppInfo] {
@@ -1450,6 +1825,17 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
         requestedFocusPID = pid
         requestedFocusWindowID = windowId
         return WindowFocusResult(pid: pid, windowId: windowId)
+    }
+
+    func startAppSession(pid: pid_t, windowId: CGWindowID) async throws -> AppSessionResult {
+        requestedStartAppSessionPID = pid
+        requestedStartAppSessionWindowID = windowId
+        return AppSessionResult(pid: pid, windowId: windowId)
+    }
+
+    func stopAppSession() async throws -> AppSessionResult {
+        stopAppSessionCallCount += 1
+        return stoppedAppSession
     }
 
     func postMouseEvent(

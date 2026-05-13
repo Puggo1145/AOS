@@ -40,12 +40,14 @@ Production flow:
 3. It creates `WindowOrderGuardian` from the current visible window order.
 4. It starts `WindowOrderChangeObserver` so order changes can trigger the
    active-state guard immediately.
-5. It performs target-side focus without raise.
+5. It starts or reuses the target app session and performs target-side focus
+   without raise.
 6. It posts the web-content mouse event sequence.
 7. It runs the active-state guard after observable mouse-post stages.
-8. It restores original front focus, deactivates only the target window, and
-   reactivates the original front app if needed.
-9. It runs the delayed active-state guard for 300ms at 5ms cadence.
+8. It keeps the target app session open; target-side deactivation is deferred
+   until `stopAppSession` or an automatic switch to a different target.
+9. It runs the delayed active-state guard for 300ms at 5ms cadence while
+   allowing the target app to remain active.
 
 ## Route Selection
 
@@ -93,7 +95,7 @@ Important invariants:
 - Never raise or order the target window as part of focus.
 - Let private-symbol or OSStatus failures bubble up.
 
-After the click has been dispatched, cleanup uses a target-side defocus only:
+When the app session stops, cleanup uses a target-side defocus only:
 
 ```text
 SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: 0x02))
@@ -193,8 +195,10 @@ The active-state guard runs at three points:
   `afterTargetDown`, and `afterTargetUp`,
 - during the delayed guard: 0ms, then every 5ms until 300ms.
 
-The active-state guard also checks whether the target app is still active. If
-it is, AOS reactivates the original front app.
+While an app session is open, the active-state guard treats target-active state
+as allowed and only reacts to order/focus violations. When `stopAppSession`
+runs cleanup, the guard again treats lingering target-active state as a
+violation and reactivates the original front app if needed.
 
 ## Verified Behavior
 
@@ -262,8 +266,8 @@ run, not total duration.
 ## Files
 
 - `Sources/AOSComputerUseKit/ComputerUseCore.swift`
-  - Orchestrates validation, target focus, mouse dispatch, cleanup, and the
-    active-state guard.
+  - Orchestrates validation, app session, target focus, mouse dispatch,
+    cleanup, and the active-state guard.
 - `Sources/AOSComputerUseKit/Input/BackgroundMouseEvent.swift`
   - Defines coordinate mouse event intent, independent from delivery path.
 - `Sources/AOSComputerUseKit/Input/BackgroundMouseEventDelivery.swift`
@@ -276,6 +280,7 @@ run, not total duration.
 - `Sources/AOSComputerUseKit/Windows/WindowOrderGuardian.swift`
   - Defines protected windows and protected-covered diagnostics.
 - `Sources/AOSComputerUseCLI/ComputerUseCLI.swift`
-  - Provides `left-click`, `right-click`, web-content-only `drag`, `--trace`,
+  - Provides `start-app-session`, `stop-app-session`, `left-click`, `right-click`,
+    web-content-only `drag`, `--trace`,
     `observe-window-order`, and `measure-left-click-window-order` diagnostics
     for this path.

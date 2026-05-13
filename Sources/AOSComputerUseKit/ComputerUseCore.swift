@@ -45,6 +45,17 @@ public struct WindowFocusResult: Sendable, Equatable {
     }
 }
 
+/// Result of starting or stopping an app session for a WindowServer window.
+public struct AppSessionResult: Sendable, Equatable {
+    public let pid: pid_t
+    public let windowId: CGWindowID
+
+    public init(pid: pid_t, windowId: CGWindowID) {
+        self.pid = pid
+        self.windowId = windowId
+    }
+}
+
 /// Result of posting a coordinate-based mouse event to a WindowServer window.
 public struct WindowMouseEventResult: Sendable, Equatable {
     public let pid: pid_t
@@ -152,6 +163,7 @@ public enum ComputerUseError: Error, CustomStringConvertible, Sendable {
     case focusUnavailable(String)
     case mouseEventUnavailable(String)
     case keyboardEventUnavailable(String)
+    case appSessionUnavailable(String)
     case payloadTooLarge(bytes: Int, limit: Int)
     case windowNotFound(windowId: CGWindowID)
 
@@ -173,11 +185,33 @@ public enum ComputerUseError: Error, CustomStringConvertible, Sendable {
             return "mouse event unavailable: \(message)"
         case .keyboardEventUnavailable(let message):
             return "keyboard event unavailable: \(message)"
+        case .appSessionUnavailable(let message):
+            return "app session unavailable: \(message)"
         case .payloadTooLarge(let bytes, let limit):
             return "screenshot payload \(bytes) bytes exceeds raw limit \(limit) bytes after downscale retries"
         case .windowNotFound(let windowId):
             return "no window with id \(windowId)"
         }
+    }
+}
+
+private struct ActiveAppSession: Sendable {
+    let id: UInt64
+    let pid: pid_t
+    let windowId: CGWindowID
+    let originalFrontWindow: WindowInfo?
+    let orderGuardian: WindowOrderGuardian?
+
+    var result: AppSessionResult {
+        AppSessionResult(pid: pid, windowId: windowId)
+    }
+
+    func matches(pid: pid_t, windowId: CGWindowID) -> Bool {
+        self.pid == pid && self.windowId == windowId
+    }
+
+    func isSameSession(as other: ActiveAppSession) -> Bool {
+        id == other.id
     }
 }
 
@@ -208,6 +242,8 @@ public actor ComputerUseCore {
         BackgroundKeyboardEvent,
         BackgroundKeyboardEventTarget
     ) async throws -> Void
+    private var activeAppSession: ActiveAppSession?
+    private var nextAppSessionId: UInt64 = 1
 
     public init() {
         let webAccessibilityActivator = AXWebAccessibilityActivator()
@@ -408,6 +444,34 @@ public actor ComputerUseCore {
         return WindowFocusResult(pid: pid, windowId: windowId)
     }
 
+    /// Starts an app session for `windowId`, ending any active session for a
+    /// different target before focusing the requested window without raising it.
+    public func startAppSession(
+        pid: pid_t,
+        windowId: CGWindowID
+    ) async throws -> AppSessionResult {
+        _ = try validateOwnership(pid: pid, windowId: windowId)
+        let session = try await startAppSession(
+            pid: pid,
+            windowId: windowId,
+            shouldFocusTarget: true,
+            traceRecorder: nil
+        )
+        return session.result
+    }
+
+    /// Stops the active app session and runs the target deactivation cleanup.
+    public func stopAppSession() async throws -> AppSessionResult {
+        guard let session = activeAppSession else {
+            throw ComputerUseError.appSessionUnavailable("no active app session")
+        }
+        try await stopAppSession(session)
+        if activeAppSession?.isSameSession(as: session) == true {
+            activeAppSession = nil
+        }
+        return session.result
+    }
+
     /// Posts a coordinate-based background mouse event through the selected
     /// delivery route while preserving the original front window state.
     public func postMouseEvent(
@@ -458,42 +522,37 @@ public actor ComputerUseCore {
             )
         }
         let target = BackgroundMouseEventTarget(pid: pid, windowId: windowId, windowBounds: window.bounds)
-        let originalFrontWindow = frontmostWindowLookup()
-        let orderGuardian = try makeWindowOrderGuardian(targetWindowId: windowId)
         let traceRecorder = tracing ? WindowMouseEventTraceRecorder() : nil
+        let session = try await startAppSession(
+            pid: pid,
+            windowId: windowId,
+            shouldFocusTarget: requiresPreEventFocus(deliveryRoute, event),
+            traceRecorder: traceRecorder
+        )
+        let originalFrontWindow = session.originalFrontWindow
+        let orderGuardian = session.orderGuardian
         let orderChangeObservation = try await startWindowOrderChangeGuard(
             orderGuardian,
             originalFrontWindow: originalFrontWindow,
             targetWindowId: windowId,
-            targetPID: pid
+            targetPID: pid,
+            allowsTargetActive: true
         )
 
         do {
-            await recordTraceStage(
-                .before,
-                recorder: traceRecorder,
-                targetPID: pid,
-                targetWindowId: windowId,
-                orderGuardian: orderGuardian
-            )
-            if requiresPreEventFocus(deliveryRoute, event) {
-                try await focusWindowWithoutRaising(pid, windowId)
-                try await Task.sleep(nanoseconds: 5_000_000)
-                await recordTraceStage(
-                    .afterFocus,
-                    recorder: traceRecorder,
-                    targetPID: pid,
-                    targetWindowId: windowId,
-                    orderGuardian: orderGuardian
-                )
-            }
             try await postMouseEventToRoute(event, target, deliveryRoute) { [self] stage in
                 if stage.runsActiveStateGuard {
-                    try await self.runActiveStateGuardOnce(
+                    let orderDriftObserved = try await self.runActiveStateGuardOnce(
                         orderGuardian,
                         originalFrontWindow: originalFrontWindow,
                         targetWindowId: windowId
                     )
+                    if orderDriftObserved {
+                        await self.reactivateOriginalFrontApplicationIfNeeded(
+                            originalFrontWindow,
+                            targetWindowId: windowId
+                        )
+                    }
                 }
                 await self.recordTraceStage(
                     WindowMouseEventTraceStage(stage),
@@ -503,20 +562,14 @@ public actor ComputerUseCore {
                     orderGuardian: orderGuardian
                 )
             }
-            try await runPostDispatchCleanup(
-                pid: pid,
-                windowId: windowId,
-                originalFrontWindow: originalFrontWindow,
-                orderGuardian: orderGuardian,
-                traceRecorder: traceRecorder
-            )
             try await runActiveStateGuard(
                 orderGuardian,
                 originalFrontWindow: originalFrontWindow,
                 targetWindowId: windowId,
                 traceRecorder: traceRecorder,
                 targetPID: pid,
-                delays: activeStateGuardDelays
+                delays: activeStateGuardDelays,
+                allowsTargetActive: true
             )
             await recordTraceStage(
                 .afterActiveStateGuard,
@@ -551,56 +604,36 @@ public actor ComputerUseCore {
         _ = try validateOwnership(pid: pid, windowId: windowId)
         try validateKeyboardEvent(event)
         let target = BackgroundKeyboardEventTarget(pid: pid, windowId: windowId)
-        let originalFrontWindow = frontmostWindowLookup()
-        let orderGuardian = try makeWindowOrderGuardian(targetWindowId: windowId)
+        let session = try await startAppSession(
+            pid: pid,
+            windowId: windowId,
+            shouldFocusTarget: true,
+            traceRecorder: nil
+        )
+        let originalFrontWindow = session.originalFrontWindow
+        let orderGuardian = session.orderGuardian
         let orderChangeObservation = try await startWindowOrderChangeGuard(
             orderGuardian,
             originalFrontWindow: originalFrontWindow,
             targetWindowId: windowId,
-            targetPID: pid
+            targetPID: pid,
+            allowsTargetActive: true
         )
-        var didFocusTarget = false
 
         do {
-            try await focusWindowWithoutRaising(pid, windowId)
-            didFocusTarget = true
-            try await Task.sleep(nanoseconds: 5_000_000)
             try await postKeyboardEventToPid(event, target)
-            try await runPostDispatchCleanup(
-                pid: pid,
-                windowId: windowId,
-                originalFrontWindow: originalFrontWindow,
-                orderGuardian: orderGuardian,
-                traceRecorder: nil
-            )
             try await runActiveStateGuard(
                 orderGuardian,
                 originalFrontWindow: originalFrontWindow,
                 targetWindowId: windowId,
                 traceRecorder: nil,
                 targetPID: pid,
-                delays: activeStateGuardDelays
+                delays: activeStateGuardDelays,
+                allowsTargetActive: true
             )
             try await orderChangeObservation?.finish()
             return WindowKeyboardEventResult(pid: pid, windowId: windowId, event: event)
         } catch {
-            if didFocusTarget {
-                try? await runPostDispatchCleanup(
-                    pid: pid,
-                    windowId: windowId,
-                    originalFrontWindow: originalFrontWindow,
-                    orderGuardian: orderGuardian,
-                    traceRecorder: nil
-                )
-                try? await runActiveStateGuard(
-                    orderGuardian,
-                    originalFrontWindow: originalFrontWindow,
-                    targetWindowId: windowId,
-                    traceRecorder: nil,
-                    targetPID: pid,
-                    delays: activeStateGuardDelays
-                )
-            }
             try? await orderChangeObservation?.finish()
             throw error
         }
@@ -651,6 +684,93 @@ public actor ComputerUseCore {
             throw ComputerUseError.windowMismatch(pid: pid, windowId: windowId, ownerPid: info.pid)
         }
         return info
+    }
+
+    private func startAppSession(
+        pid: pid_t,
+        windowId: CGWindowID,
+        shouldFocusTarget: Bool,
+        traceRecorder: WindowMouseEventTraceRecorder?
+    ) async throws -> ActiveAppSession {
+        if let session = activeAppSession {
+            if session.matches(pid: pid, windowId: windowId) {
+                await recordTraceStage(
+                    .before,
+                    recorder: traceRecorder,
+                    targetPID: pid,
+                    targetWindowId: windowId,
+                    orderGuardian: session.orderGuardian
+                )
+                if shouldFocusTarget {
+                    try await focusWindowWithoutRaising(pid, windowId)
+                    try await Task.sleep(nanoseconds: 5_000_000)
+                    await recordTraceStage(
+                        .afterFocus,
+                        recorder: traceRecorder,
+                        targetPID: pid,
+                        targetWindowId: windowId,
+                        orderGuardian: session.orderGuardian
+                    )
+                }
+                return session
+            }
+
+            try await stopAppSession(session)
+            if activeAppSession?.isSameSession(as: session) == true {
+                activeAppSession = nil
+            }
+        }
+
+        let orderGuardian = try makeWindowOrderGuardian(targetWindowId: windowId)
+        let session = ActiveAppSession(
+            id: nextAppSessionId,
+            pid: pid,
+            windowId: windowId,
+            originalFrontWindow: frontmostWindowLookup(),
+            orderGuardian: orderGuardian
+        )
+        nextAppSessionId += 1
+        await recordTraceStage(
+            .before,
+            recorder: traceRecorder,
+            targetPID: pid,
+            targetWindowId: windowId,
+            orderGuardian: orderGuardian
+        )
+        if shouldFocusTarget {
+            try await focusWindowWithoutRaising(pid, windowId)
+            activeAppSession = session
+            try await Task.sleep(nanoseconds: 5_000_000)
+            await recordTraceStage(
+                .afterFocus,
+                recorder: traceRecorder,
+                targetPID: pid,
+                targetWindowId: windowId,
+                orderGuardian: orderGuardian
+            )
+        } else {
+            activeAppSession = session
+        }
+        return session
+    }
+
+    private func stopAppSession(_ session: ActiveAppSession) async throws {
+        try await runPostDispatchCleanup(
+            pid: session.pid,
+            windowId: session.windowId,
+            originalFrontWindow: session.originalFrontWindow,
+            orderGuardian: session.orderGuardian,
+            traceRecorder: nil
+        )
+        try await runActiveStateGuard(
+            session.orderGuardian,
+            originalFrontWindow: session.originalFrontWindow,
+            targetWindowId: session.windowId,
+            traceRecorder: nil,
+            targetPID: session.pid,
+            delays: activeStateGuardDelays,
+            allowsTargetActive: false
+        )
     }
 
     private func restoreOriginalFrontWindow(
@@ -731,7 +851,8 @@ public actor ComputerUseCore {
         _ orderGuardian: WindowOrderGuardian?,
         originalFrontWindow: WindowInfo?,
         targetWindowId: CGWindowID,
-        targetPID: pid_t
+        targetPID: pid_t,
+        allowsTargetActive: Bool
     ) async throws -> WindowOrderChangeObservation? {
         guard let orderGuardian, let windowOrderChangeObserver else {
             return nil
@@ -744,7 +865,8 @@ public actor ComputerUseCore {
                 originalFrontWindow: originalFrontWindow,
                 targetWindowId: targetWindowId,
                 targetPID: targetPID,
-                delays: [0]
+                delays: [0],
+                allowsTargetActive: allowsTargetActive
             )
         }
     }
@@ -755,7 +877,8 @@ public actor ComputerUseCore {
         targetWindowId: CGWindowID,
         traceRecorder: WindowMouseEventTraceRecorder? = nil,
         targetPID: pid_t? = nil,
-        delays: [UInt64]
+        delays: [UInt64],
+        allowsTargetActive: Bool = false
     ) async throws {
         var elapsed: UInt64 = 0
         for (attempt, delay) in delays.enumerated() {
@@ -768,11 +891,13 @@ public actor ComputerUseCore {
                 originalFrontWindow: originalFrontWindow,
                 targetWindowId: targetWindowId
             )
-            let targetActive = await targetApplicationIsActive(
-                targetPID,
-                originalFrontWindow: originalFrontWindow,
-                targetWindowId: targetWindowId
-            )
+            let targetActive = allowsTargetActive
+                ? false
+                : await targetApplicationIsActive(
+                    targetPID,
+                    originalFrontWindow: originalFrontWindow,
+                    targetWindowId: targetWindowId
+                )
             let corrected = orderDriftObserved || targetActive
             if corrected {
                 await reactivateOriginalFrontApplicationIfNeeded(

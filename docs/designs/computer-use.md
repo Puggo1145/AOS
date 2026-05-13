@@ -48,7 +48,10 @@ Sources/AOSComputerUseKit/
 - `listWindows(pid:) -> [WindowInfo]`
 - `getAppState(pid:windowId:captureMode:maxImageDimension:) -> AppStateBundle`
 - `focusWindowWithoutRaise(pid:windowId:) -> WindowFocusResult`
+- `startAppSession(pid:windowId:) -> AppSessionResult`
+- `stopAppSession() -> AppSessionResult`
 - `postMouseEvent(pid:windowId:event:) -> WindowMouseEventResult`
+- `postKeyboardEvent(pid:windowId:event:) -> WindowKeyboardEventResult`
 
 `getAppState` 支持两种 capture mode。AX tree 每次都会构建并返回：
 
@@ -57,8 +60,9 @@ Sources/AOSComputerUseKit/
 
 `BackgroundMouseEvent` 是鼠标行为层，当前表达 click 和 drag。`BackgroundMouseEventDeliveryRoute`
 是投放路径层，当前将 AppKit route 和 web-content SkyLight route 分开。`ComputerUseCore`
-只编排 validation、focus、event post、window-order guard 和 cleanup，不保留 left-click
-兼容包装。
+只编排 validation、app session、focus、event post、window-order guard 和 cleanup，不保留
+left-click 兼容包装。任意 mouse / keyboard event post 会自动 `startAppSession`；
+只有显式 `stopAppSession` 或切换到不同 target 时才执行 target deactivation cleanup。
 
 AppKit route 只支持 left/right click。Drag 仍是鼠标行为层的一种 event，但只由
 web-content route 承接。
@@ -75,6 +79,21 @@ AOSComputerUseCLI -> AOSComputerUseKit -> AOSAXSupport
 
 `AOSComputerUseKit` 不依赖 CLI、Shell、Sidecar 或 RPC。
 
+CLI target 内部按职责拆分：
+
+- `AOSComputerUseCLIExecutable.swift`：短生命周期 executable 入口。
+- `ComputerUseCLI.swift`：command facade、dispatch、shared command helpers。
+- `AppSessionPolicy.swift`：standalone one-shot event cleanup 与 long-lived host lease policy。
+- `Types.swift`：shared CLI result types。
+- `Parser.swift`：argv parsing、usage errors、command request models。
+- `Outputs.swift`：stdout / JSON output DTO 和 readable formatting。
+- `CoreAdapter.swift`：CLI-facing core interface 和 live adapter。
+- `DiagnosticClients.swift`：window-order / mouse-event diagnostic observers。
+- `Permissions.swift`：permission prompt client。
+- `CoordinateTarget.swift`：coordinate probe process launcher。
+- `InteractiveCommand.swift` / `InteractiveRuntime.swift`：long-lived interactive command palette、bounded scrolling selection viewport、Output/Error section rendering、command argument collection。
+- `PostCursor.swift` / `PostCursorRuntime.swift`：interactive cursor command 和 terminal / overlay runtime。
+
 支持命令：
 
 - `swift run AOSComputerUseCLI --help`
@@ -83,11 +102,36 @@ AOSComputerUseCLI -> AOSComputerUseKit -> AOSAXSupport
 - `swift run AOSComputerUseCLI list-windows --pid <pid>`
 - `swift run AOSComputerUseCLI get-app-state --pid <pid> --window-id <id> [--mode vision|ax] [--max-image-dimension <pixels>] [--screenshot-output <path>]`
 - `swift run AOSComputerUseCLI focus-window --pid <pid> --window-id <id>`
+- `swift run AOSComputerUseCLI start-app-session --pid <pid> --window-id <id>`
+- `swift run AOSComputerUseCLI stop-app-session`
 - `swift run AOSComputerUseCLI left-click --pid <pid> --window-id <id> --coor <x,y> [--trace]`
 - `swift run AOSComputerUseCLI right-click --pid <pid> --window-id <id> --coor <x,y> [--trace]`
 - `swift run AOSComputerUseCLI drag --pid <pid> --window-id <id> --from <x,y> --to <x,y> [--button left|right] [--trace]` — web-content only
+- `swift run AOSComputerUseCLI interactive`
 
 成功默认输出人类可读文本到 stdout。传 `--json` 时输出机器可读 JSON。错误输出到 stderr，并返回非 0 exit code。`get-app-state --json` 默认把 screenshot base64 放进 JSON；如果传 `--screenshot-output`，CLI 把截图写入指定路径，JSON 只返回截图 metadata 和 `outputPath`。
+
+`start-app-session` / `stop-app-session` 直接暴露 `ComputerUseCore.startAppSession` 和
+`ComputerUseCore.stopAppSession`。standalone executable 每次 invocation 都创建新的
+`ComputerUseCoreAdapter`，所以跨 invocation 的成对 start/stop 不共享 session state。
+standalone event commands（mouse / keyboard / trace / measurement / posted post-cursor）
+使用 one-shot policy：事件投放由 core 自动启动 app session，命令结束前由 CLI host
+自动 `stopAppSession` 走恢复路径。lease 语义只用于同一个 long-lived core lifetime，
+例如 Shell、`interactive`，或测试/诊断 host 直接复用 `ComputerUseCLI.run`。
+
+`interactive` 是 CLI 内置的 long-lived host：进入后创建一次 `ComputerUseCoreAdapter`，
+所有后续 command palette 操作都复用这个 core。所有 interactive UI 区域都使用
+`Title` + underline 的 section 形态，例如 `Command` / `-------`、`Output` / `------`、
+`Error` / `-----`。主菜单和枚举值选择使用 Up/Down/Enter/Q，并以固定高度 viewport
+滚动显示，避免长列表一次性展开污染 terminal 历史。Command 菜单还支持直接输入前缀，
+按 command title 做 case-insensitive prefix match；Backspace 删除前缀字符。pid/window、坐标、文本等开放值仍通过
+prompt 输入，输入完成后会清理 prompt 行。命令结果统一输出在可替换的 `Output` / `Error`
+section，随后 command palette 在自己的可清理区域重绘。该模式用于本地诊断 app session lease：
+可以先 `start-app-session`，继续投放 mouse / keyboard event 或观察状态，最后显式
+`stop-app-session` 走恢复路径。
+
+`post-cursor` 保留 terminal 初始说明、drag stage 提示、posted event summary 和最终结果；
+方向键移动过程中只更新 overlay，不再输出 `cursor local ...` 位置日志。
 
 `grant-permissions` 会请求 Computer Use core 所需的两项权限：
 

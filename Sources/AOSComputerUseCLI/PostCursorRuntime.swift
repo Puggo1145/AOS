@@ -18,7 +18,7 @@ public struct LivePostCursorIO: PostCursorIO {
         return line
     }
 
-    public func readKey() async throws -> PostCursorKey {
+    public func readKey() async throws -> TerminalKey {
         try TerminalRawMode.withRawInput {
             while true {
                 let byte = try readByte()
@@ -39,8 +39,12 @@ public struct LivePostCursorIO: PostCursorIO {
                     throw PostCursorRuntimeError("unsupported escape key sequence ESC \(second) \(third)")
                 case 0x0A, 0x0D:
                     return .confirm
+                case 0x7F, 0x08:
+                    return .backspace
                 case 0x51, 0x71:
                     return .quit
+                case 0x20...0x7E:
+                    return .character(String(UnicodeScalar(byte)))
                 default:
                     continue
                 }
@@ -54,6 +58,34 @@ public struct LivePostCursorIO: PostCursorIO {
             throw PostCursorRuntimeError("stdin closed while reading cursor key")
         }
         return byte
+    }
+}
+
+public struct LiveInteractiveCLIIO: InteractiveCLIIO {
+    public init() {}
+
+    public func write(_ text: String) async {
+        FileHandle.standardError.write(Data(text.utf8))
+    }
+
+    public func writeOutput(_ text: String) async {
+        FileHandle.standardOutput.write(Data(text.utf8))
+    }
+
+    public func writeError(_ text: String) async {
+        FileHandle.standardError.write(Data(text.utf8))
+    }
+
+    public func readLine(prompt: String) async throws -> String {
+        FileHandle.standardError.write(Data(prompt.utf8))
+        guard let line = Swift.readLine() else {
+            throw PostCursorRuntimeError("stdin closed while reading \(prompt)")
+        }
+        return line
+    }
+
+    public func readKey() async throws -> TerminalKey {
+        try await LivePostCursorIO().readKey()
     }
 }
 

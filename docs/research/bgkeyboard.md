@@ -98,14 +98,19 @@ File:
 `ComputerUseCore.postKeyboardEvent` runs this chain:
 
 1. Validate pid/window ownership.
-2. Snapshot the original front layer-0 window.
+2. Start or reuse the target app session, snapshotting the original front
+   layer-0 window when a new session begins.
 3. Start the same `WindowOrderGuardian` / order-change guard used by mouse.
 4. Focus the target window without raising it.
 5. Post the keyboard event to the target pid.
-6. Restore original front window focus.
-7. Deactivate only the target window if it was not originally front.
-8. Reactivate the original front app if needed.
-9. Run the delayed active-state guard.
+6. Keep the target app session open so focus/caret state remains visible for
+   follow-up observation or input.
+7. Run the delayed active-state guard while allowing the target app to remain
+   active.
+
+`stopAppSession()` runs the cleanup path: restore original front window focus,
+deactivate only the target window if it was not originally front, reactivate
+the original front app if needed, then run the delayed active-state guard.
 
 Keyboard dispatch does not validate coordinates because the event goes to the
 target process's focused element rather than a point inside the window.
@@ -119,6 +124,16 @@ target process's focused element rather than a point inside the window.
 .build/debug/AOSComputerUseCLI press-key --pid <pid> --window-id <windowId> --key a --modifiers cmd,shift
 .build/debug/AOSComputerUseCLI hotkey --pid <pid> --window-id <windowId> --keys cmd,c
 ```
+
+显式 session 命令也暴露在 CLI 中：
+
+```zsh
+.build/debug/AOSComputerUseCLI start-app-session --pid <pid> --window-id <windowId>
+.build/debug/AOSComputerUseCLI stop-app-session
+```
+
+成对 start/stop 需要同一个 `ComputerUseCore` lifetime；standalone executable 的两次
+shell invocation 不共享 active session。
 
 CLI modifier aliases:
 

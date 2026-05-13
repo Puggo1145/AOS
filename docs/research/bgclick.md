@@ -148,18 +148,28 @@ window:   300ms
 Codex 是常驻进程，能在观察到 order change 后开始 5ms retry。AOS CLI 是短命命令，
 只能从点击前/点击后开始轮询，所以 guard window 放宽到 300ms。
 
-### 5. Target Deactivate After Dispatch
+### 5. App Session Cleanup
 
 文件：
 
 - `Sources/AOSComputerUseKit/Windows/SkyLightWindowFocuser.swift`
 - `Sources/AOSComputerUseKit/ComputerUseCore.swift`
 
-pid-scoped mouse event 投放后，目标窗口可能停留在“后台 active/key”的状态。这个状态
-不会改变 `NSWorkspace.frontmostApplication`，但如果下一次继续对这个 active target 投放
-鼠标事件，WindowServer / AppKit 可能瞬间把它补偿 raise 到前台，造成闪动。
+pid-scoped mouse event 投放后，目标窗口会作为当前 app session 保持“后台 active/key”
+状态。这个状态用于让输入框 focus、caret、右键菜单等 transient UI 在视觉 snapshot 和
+后续操作之间继续可见。
 
-因此 `ComputerUseCore.postMouseEvent` 在完整投放链路收口时执行 target-side deactive：
+`ComputerUseCore` 暴露两个显式 session interface：
+
+```text
+startAppSession(pid:windowId:)
+stopAppSession()
+```
+
+任意 `postMouseEvent` / `postKeyboardEvent` 都会自动视为 `startAppSession` 信号。同一
+target 会复用当前 session；不同 target 会先停止当前 session，再给新 target 开始 session。
+
+只有 `stopAppSession` 或自动切换 target 时才执行 target-side deactive：
 
 ```text
 SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: defocus))
@@ -172,7 +182,10 @@ SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: defocus))
   Chrome / Electron 可能在 target-side deactivation cleanup 后才执行 delayed order
   compensation；deactivation 必须被同一个 guard window 覆盖，不能放在 guard 之后。
 - 如果目标窗口本来就是点击前的前台 active 窗口，则跳过 deactive；正常前台点击不应被降为 inactive。
-- deactive 不负责 z-order preservation，只撤掉目标窗口残留的 active/key 状态，避免下一次后台投放触发 raise 闪动。
+- app session 打开期间，active-state guard 仍保护 original front window 的 order/focus，
+  但不会因为 target app 仍 active 就 deactive 或 reactivate original app。
+- deactive 不负责 z-order preservation，只在 session 结束时撤掉目标窗口残留的 active/key
+  状态，避免下一次后台投放触发 raise 闪动。
 
 ## Why This Works
 
@@ -182,14 +195,16 @@ SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: defocus))
    让目标 AppKit 窗口相信自己可接收输入。
 2. **Event delivery**：pid-scoped `CGEvent.postToPid` 把鼠标事件送进目标进程，不碰全局 HID cursor。
 3. **Order drift detection**：`WindowOrderGuardian` 只观察 target 是否越过原 overlapping cover，不直接重排任何窗口。
-4. **Active-state cleanup**：target-side defocus 撤掉后台目标残留的 active/key 状态，避免下一次投放被系统补偿 raise。
+4. **App session cleanup**：target-side defocus 在 `stopAppSession` 时撤掉后台目标残留
+   的 active/key 状态，避免下一次投放被系统补偿 raise。
 
 因此用户看到的效果是：
 
 - 当前使用的窗口始终 frontmost。
 - 目标后台窗口可以响应鼠标点击。
 - 目标窗口可能在后台压过非 active cover，但不会把用户当前 active/front 窗口留下切走。
-- 目标后台窗口不会在点击链路结束后继续保持 active/key 状态。
+- 目标后台窗口会在 app session 打开期间保持 active/key 状态，直到显式 `stopAppSession`
+  或切换到不同 target。
 - 在已验证的 AppKit apps 上没有可见 flicker。
 
 ## CLI Surface
@@ -212,6 +227,17 @@ CLI 坐标参数是目标窗口 top-left local point，CLI 会转换为 screen p
 对应的 `BackgroundMouseEvent` 走同一条 background mouse event core path。
 `drag` 是 web-content-only command；AppKit route 只接受 `left-click` 和
 `right-click`。
+
+`start-app-session` / `stop-app-session` 是 core app session API 的 CLI surface。
+鼠标事件投放会自动 start 当前 target session；显式 stop 或后续不同 target 事件会触发
+core restore / deactivate path。成对 start/stop 需要调用方复用同一个
+`ComputerUseCore` lifetime；standalone executable 的两次 shell invocation 不共享
+active session。
+
+```zsh
+.build/debug/AOSComputerUseCLI start-app-session --pid <pid> --window-id <windowId>
+.build/debug/AOSComputerUseCLI stop-app-session
+```
 
 ## Validation Targets
 
@@ -250,7 +276,7 @@ CLI 坐标参数是目标窗口 top-left local point，CLI 会转换为 screen p
 
 - `SkyLightWindowFocuser`
   - standard target-side focus record for mouse routing and explicit focus.
-  - target-side defocus record for post-dispatch background active cleanup.
+  - target-side defocus record for `stopAppSession` background active cleanup.
 
 - `BackgroundMouseEvent`
   - describes coordinate mouse behavior separately from the delivery path.
@@ -268,12 +294,14 @@ CLI 坐标参数是目标窗口 top-left local point，CLI 会转换为 screen p
   - capture protected overlapping windows before click.
   - report whether target crossed a previously covering protected window.
 
-- `ComputerUseCore.postMouseEvent`
-  - orchestrates validation, focus, event post, immediate guard, delayed guard,
-    and target deactive cleanup for background mouse events.
+- `ComputerUseCore`
+  - exposes `startAppSession` / `stopAppSession`.
+  - orchestrates validation, app session, focus, event post, immediate guard,
+    delayed guard, and target deactive cleanup for background mouse events.
 
 - `AOSComputerUseCLI`
-  - exposes the current diagnostic commands, including `left-click`,
-    `right-click`, `drag`, and `open-coor-test`.
+  - exposes the current diagnostic commands, including `start-app-session`,
+    `stop-app-session`, `left-click`, `right-click`, `drag`, and
+    `open-coor-test`.
   - mouse-event commands construct `BackgroundMouseEvent` values before calling
     `ComputerUseCore.postMouseEvent`.

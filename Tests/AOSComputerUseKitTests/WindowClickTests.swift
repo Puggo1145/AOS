@@ -284,9 +284,6 @@ struct WindowClickTests {
                 point: CGPoint(x: 150, y: 50),
                 windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
             ),
-            .focus(pid: 10, windowId: 100),
-            .deactivate(pid: 30, windowId: 300),
-            .activate(pid: 10),
         ])
     }
 
@@ -347,6 +344,219 @@ struct WindowClickTests {
         ])
     }
 
+    @Test("startAppSession focuses target and stopAppSession restores and deactivates it")
+    func startAppSessionFocusesTargetAndStopAppSessionRestoresAndDeactivatesIt() async throws {
+        let recorder = ClickChainRecorder()
+        let target = Self.window(id: 456, pid: 123, owner: "Calculator", zIndex: 2)
+        let front = Self.window(id: 789, pid: 777, owner: "Ghostty", zIndex: 3)
+        let core = ComputerUseCore(
+            windowLookup: { windowId in
+                [target, front].first { $0.id == windowId }
+            },
+            frontmostWindowLookup: {
+                front
+            },
+            focusWindowWithoutRaising: { pid, windowId in
+                await recorder.recordFocus(pid: pid, windowId: windowId)
+            },
+            deactivateWindowWithoutRaising: { pid, windowId in
+                await recorder.recordDeactivate(pid: pid, windowId: windowId)
+            },
+            activateApplication: { pid in
+                await recorder.recordActivate(pid: pid)
+                return true
+            }
+        )
+
+        let started = try await core.startAppSession(pid: 123, windowId: 456)
+        let stopped = try await core.stopAppSession()
+
+        #expect(started == AppSessionResult(pid: 123, windowId: 456))
+        #expect(stopped == AppSessionResult(pid: 123, windowId: 456))
+        #expect(await recorder.events == [
+            .focus(pid: 123, windowId: 456),
+            .focus(pid: 777, windowId: 789),
+            .deactivate(pid: 123, windowId: 456),
+            .activate(pid: 777),
+        ])
+    }
+
+    @Test("postMouseEvent keeps the app session open until explicit stopAppSession")
+    func postMouseEventKeepsAppSessionOpenUntilExplicitStopAppSession() async throws {
+        let recorder = ClickChainRecorder()
+        let target = Self.window(id: 456, pid: 123, owner: "Calculator", zIndex: 2)
+        let front = Self.window(id: 789, pid: 777, owner: "Ghostty", zIndex: 3)
+        let core = ComputerUseCore(
+            windowLookup: { windowId in
+                [target, front].first { $0.id == windowId }
+            },
+            frontmostWindowLookup: {
+                front
+            },
+            focusWindowWithoutRaising: { pid, windowId in
+                await recorder.recordFocus(pid: pid, windowId: windowId)
+            },
+            deactivateWindowWithoutRaising: { pid, windowId in
+                await recorder.recordDeactivate(pid: pid, windowId: windowId)
+            },
+            activateApplication: { pid in
+                await recorder.recordActivate(pid: pid)
+                return true
+            },
+            postMouseEvent: { event, target, _, _ in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
+                await recorder.recordClick(
+                    pid: pid,
+                    windowId: windowId,
+                    point: point,
+                    windowBounds: windowBounds
+                )
+            }
+        )
+
+        _ = try await core.postTestClick(pid: 123, windowId: 456, point: CGPoint(x: 150, y: 50))
+        #expect(await recorder.events == [
+            .focus(pid: 123, windowId: 456),
+            .click(
+                pid: 123,
+                windowId: 456,
+                point: CGPoint(x: 150, y: 50),
+                windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
+            ),
+        ])
+
+        let stopped = try await core.stopAppSession()
+
+        #expect(stopped == AppSessionResult(pid: 123, windowId: 456))
+        #expect(await recorder.events == [
+            .focus(pid: 123, windowId: 456),
+            .click(
+                pid: 123,
+                windowId: 456,
+                point: CGPoint(x: 150, y: 50),
+                windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
+            ),
+            .focus(pid: 777, windowId: 789),
+            .deactivate(pid: 123, windowId: 456),
+            .activate(pid: 777),
+        ])
+    }
+
+    @Test("startAppSession cancellation after focus still leaves a stoppable session")
+    func startAppSessionCancellationAfterFocusStillLeavesAStoppableSession() async throws {
+        let recorder = ClickChainRecorder()
+        let focusGate = FocusGate()
+        let target = Self.window(id: 456, pid: 123, owner: "Calculator", zIndex: 2)
+        let front = Self.window(id: 789, pid: 777, owner: "Ghostty", zIndex: 3)
+        let core = ComputerUseCore(
+            windowLookup: { windowId in
+                [target, front].first { $0.id == windowId }
+            },
+            frontmostWindowLookup: {
+                front
+            },
+            focusWindowWithoutRaising: { pid, windowId in
+                await recorder.recordFocus(pid: pid, windowId: windowId)
+                await focusGate.markFocused()
+            },
+            deactivateWindowWithoutRaising: { pid, windowId in
+                await recorder.recordDeactivate(pid: pid, windowId: windowId)
+            },
+            activateApplication: { pid in
+                await recorder.recordActivate(pid: pid)
+                return true
+            }
+        )
+
+        let task = Task {
+            try await core.startAppSession(pid: 123, windowId: 456)
+        }
+        await focusGate.waitUntilFocused()
+        task.cancel()
+
+        await #expect(throws: CancellationError.self) {
+            _ = try await task.value
+        }
+
+        let stopped = try await core.stopAppSession()
+
+        #expect(stopped == AppSessionResult(pid: 123, windowId: 456))
+        #expect(await recorder.events == [
+            .focus(pid: 123, windowId: 456),
+            .focus(pid: 777, windowId: 789),
+            .deactivate(pid: 123, windowId: 456),
+            .activate(pid: 777),
+        ])
+    }
+
+    @Test("postMouseEvent stops the current app session before starting a different target")
+    func postMouseEventStopsCurrentAppSessionBeforeStartingDifferentTarget() async throws {
+        let recorder = ClickChainRecorder()
+        let firstTarget = Self.window(id: 456, pid: 123, owner: "Calculator", zIndex: 2)
+        let secondTarget = Self.window(id: 333, pid: 222, owner: "Notes", zIndex: 1)
+        let front = Self.window(id: 789, pid: 777, owner: "Ghostty", zIndex: 3)
+        let core = ComputerUseCore(
+            windowLookup: { windowId in
+                [firstTarget, secondTarget, front].first { $0.id == windowId }
+            },
+            frontmostWindowLookup: {
+                front
+            },
+            focusWindowWithoutRaising: { pid, windowId in
+                await recorder.recordFocus(pid: pid, windowId: windowId)
+            },
+            deactivateWindowWithoutRaising: { pid, windowId in
+                await recorder.recordDeactivate(pid: pid, windowId: windowId)
+            },
+            activateApplication: { pid in
+                await recorder.recordActivate(pid: pid)
+                return true
+            },
+            postMouseEvent: { event, target, _, _ in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
+                await recorder.recordClick(
+                    pid: pid,
+                    windowId: windowId,
+                    point: point,
+                    windowBounds: windowBounds
+                )
+            }
+        )
+
+        _ = try await core.postTestClick(pid: 123, windowId: 456, point: CGPoint(x: 150, y: 50))
+        _ = try await core.postTestClick(pid: 222, windowId: 333, point: CGPoint(x: 150, y: 50))
+
+        #expect(await recorder.events == [
+            .focus(pid: 123, windowId: 456),
+            .click(
+                pid: 123,
+                windowId: 456,
+                point: CGPoint(x: 150, y: 50),
+                windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
+            ),
+            .focus(pid: 777, windowId: 789),
+            .deactivate(pid: 123, windowId: 456),
+            .activate(pid: 777),
+            .focus(pid: 222, windowId: 333),
+            .click(
+                pid: 222,
+                windowId: 333,
+                point: CGPoint(x: 150, y: 50),
+                windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
+            ),
+        ])
+    }
+
     @Test("rejects an explicit click point outside the target window")
     func rejectsExplicitPointOutsideWindow() async {
         let recorder = ClickChainRecorder()
@@ -394,8 +604,8 @@ struct WindowClickTests {
         #expect(await recorder.events.isEmpty)
     }
 
-    @Test("restores the original front window focus after posting the click")
-    func restoresOriginalFrontWindowFocusAfterClick() async throws {
+    @Test("restores the original front window focus when stopping the app session")
+    func restoresOriginalFrontWindowFocusWhenStoppingAppSession() async throws {
         let recorder = ClickChainRecorder()
         let core = ComputerUseCore(
             windowLookup: { windowId in
@@ -460,6 +670,7 @@ struct WindowClickTests {
         )
 
         _ = try await core.postTestClick(pid: 123, windowId: 456, point: CGPoint(x: 160, y: 70))
+        _ = try await core.stopAppSession()
 
         #expect(await recorder.events == [
             .focus(pid: 123, windowId: 456),
@@ -473,8 +684,8 @@ struct WindowClickTests {
         ])
     }
 
-    @Test("deactivates the target window after completing the background click chain")
-    func deactivatesTargetWindowAfterCompletingBackgroundClickChain() async throws {
+    @Test("deactivates the target window when stopping the app session")
+    func deactivatesTargetWindowWhenStoppingAppSession() async throws {
         let recorder = ClickChainRecorder()
         let target = Self.window(id: 456, pid: 123, owner: "Calculator", zIndex: 2)
         let front = Self.window(id: 789, pid: 777, owner: "Ghostty", zIndex: 3)
@@ -508,6 +719,7 @@ struct WindowClickTests {
         )
 
         _ = try await core.postTestClick(pid: 123, windowId: 456, point: CGPoint(x: 150, y: 50))
+        _ = try await core.stopAppSession()
 
         #expect(await recorder.events == [
             .focus(pid: 123, windowId: 456),
@@ -568,8 +780,8 @@ struct WindowClickTests {
         ])
     }
 
-    @Test("reactivates the original front application after target deactivation")
-    func reactivatesOriginalFrontApplicationAfterTargetDeactivation() async throws {
+    @Test("reactivates the original front application when stopping the app session")
+    func reactivatesOriginalFrontApplicationWhenStoppingAppSession() async throws {
         let recorder = ClickChainRecorder()
         let target = Self.window(id: 456, pid: 123, owner: "Chrome", zIndex: 2)
         let front = Self.window(id: 789, pid: 777, owner: "Ghostty", zIndex: 3)
@@ -607,6 +819,7 @@ struct WindowClickTests {
         )
 
         _ = try await core.postTestClick(pid: 123, windowId: 456, point: CGPoint(x: 150, y: 50))
+        _ = try await core.stopAppSession()
 
         #expect(await recorder.events == [
             .focus(pid: 123, windowId: 456),
@@ -681,15 +894,12 @@ struct WindowClickTests {
                 windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
             ),
             .focus(pid: 10, windowId: 100),
-            .deactivate(pid: 30, windowId: 300),
-            .activate(pid: 10),
-            .focus(pid: 10, windowId: 100),
             .activate(pid: 10),
         ])
     }
 
-    @Test("reactivates the original front application when delayed guard sees target still active")
-    func reactivatesOriginalFrontApplicationWhenDelayedGuardSeesTargetStillActive() async throws {
+    @Test("allows target-active state while the app session is open")
+    func allowsTargetActiveStateWhileAppSessionIsOpen() async throws {
         let recorder = ClickChainRecorder()
         let target = Self.window(id: 300, pid: 30, owner: "Chrome", zIndex: 1)
         let protected = Self.window(id: 100, pid: 10, owner: "Ghostty", zIndex: 2)
@@ -749,10 +959,6 @@ struct WindowClickTests {
                 point: CGPoint(x: 150, y: 50),
                 windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
             ),
-            .focus(pid: 10, windowId: 100),
-            .deactivate(pid: 30, windowId: 300),
-            .activate(pid: 10),
-            .activate(pid: 10),
         ])
     }
 
@@ -762,6 +968,7 @@ struct WindowClickTests {
         let target = Self.window(id: 300, pid: 30, owner: "Chrome", zIndex: 1)
         let protected = Self.window(id: 100, pid: 10, owner: "Ghostty", zIndex: 2)
         let snapshots = WindowSnapshotScript([
+            [protected, target],
             [protected, target],
             [target, protected],
         ])
@@ -800,6 +1007,7 @@ struct WindowClickTests {
         )
 
         _ = try await core.postTestClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
+        _ = try await core.stopAppSession()
 
         #expect(await recorder.events == [
             .focus(pid: 30, windowId: 300),
@@ -815,12 +1023,14 @@ struct WindowClickTests {
         ])
     }
 
-    @Test("runs post-dispatch cleanup before delayed active-state guard")
-    func runsPostDispatchCleanupBeforeDelayedActiveStateGuard() async throws {
+    @Test("stopAppSession runs cleanup before delayed active-state guard")
+    func stopAppSessionRunsCleanupBeforeDelayedActiveStateGuard() async throws {
         let recorder = ClickChainRecorder()
         let target = Self.window(id: 300, pid: 30, owner: "Chrome", zIndex: 1)
         let protected = Self.window(id: 100, pid: 10, owner: "Ghostty", zIndex: 2)
         let snapshots = WindowSnapshotScript([
+            [protected, target],
+            [protected, target],
             [protected, target],
             [protected, target],
             [target, protected],
@@ -866,6 +1076,7 @@ struct WindowClickTests {
         )
 
         _ = try await core.postTestClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
+        _ = try await core.stopAppSession()
 
         #expect(await recorder.events == [
             .focus(pid: 30, windowId: 300),
@@ -883,8 +1094,8 @@ struct WindowClickTests {
         ])
     }
 
-    @Test("uses the active-state guard cadence after post-dispatch cleanup")
-    func usesActiveStateGuardCadenceAfterPostDispatchCleanup() async throws {
+    @Test("uses the active-state guard cadence while the app session is open")
+    func usesActiveStateGuardCadenceWhileAppSessionIsOpen() async throws {
         let recorder = ClickChainRecorder()
         let target = Self.window(id: 300, pid: 30, owner: "Chrome", zIndex: 1)
         let protected = Self.window(id: 100, pid: 10, owner: "Ghostty", zIndex: 2)
@@ -945,15 +1156,12 @@ struct WindowClickTests {
                 windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
             ),
             .focus(pid: 10, windowId: 100),
-            .deactivate(pid: 30, windowId: 300),
-            .activate(pid: 10),
-            .focus(pid: 10, windowId: 100),
             .activate(pid: 10),
         ])
     }
 
-    @Test("guards active state from a window-order notification before post-dispatch cleanup")
-    func guardsActiveStateFromWindowOrderNotificationBeforePostDispatchCleanup() async throws {
+    @Test("guards active state from a window-order notification while app session is open")
+    func guardsActiveStateFromWindowOrderNotificationWhileAppSessionIsOpen() async throws {
         let recorder = ClickChainRecorder()
         let orderObserver = ManualWindowOrderChangeObserver()
         let target = Self.window(id: 300, pid: 30, owner: "Chrome", zIndex: 1)
@@ -1014,9 +1222,6 @@ struct WindowClickTests {
                 windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
             ),
             .focus(pid: 10, windowId: 100),
-            .activate(pid: 10),
-            .focus(pid: 10, windowId: 100),
-            .deactivate(pid: 30, windowId: 300),
             .activate(pid: 10),
         ])
     }
@@ -1083,7 +1288,7 @@ struct WindowClickTests {
 
         #expect(guardTicks.map(\.guardAttempt) == [0, 1])
         #expect(guardTicks.map(\.elapsedNanoseconds) == [0, 1])
-        #expect(guardTicks.map(\.corrected) == [false, true])
+        #expect(guardTicks.map(\.corrected) == [false, false])
         #expect(trace.snapshots.contains(where: { $0.stage == .afterTraceSettle50ms }))
         #expect(trace.snapshots.contains(where: { $0.stage == .afterTraceSettle200ms }))
         #expect(trace.snapshots.contains(where: { $0.stage == .afterTraceSettle1s }))
@@ -1147,7 +1352,6 @@ struct WindowClickTests {
                 windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
             ),
             .focus(pid: 10, windowId: 100),
-            .focus(pid: 10, windowId: 100),
         ])
     }
 
@@ -1205,7 +1409,6 @@ struct WindowClickTests {
                 point: CGPoint(x: 150, y: 50),
                 windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
             ),
-            .focus(pid: 10, windowId: 100),
             .focus(pid: 10, windowId: 100),
         ])
     }
@@ -1265,7 +1468,6 @@ struct WindowClickTests {
                 point: CGPoint(x: 150, y: 50),
                 windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
             ),
-            .focus(pid: 10, windowId: 100),
             .focus(pid: 10, windowId: 100),
         ])
     }
@@ -1329,7 +1531,6 @@ struct WindowClickTests {
                 point: CGPoint(x: 150, y: 50),
                 windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
             ),
-            .focus(pid: 20, windowId: 200),
         ])
     }
 
@@ -1391,7 +1592,6 @@ struct WindowClickTests {
                 point: CGPoint(x: 150, y: 50),
                 windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
             ),
-            .focus(pid: 10, windowId: 100),
         ])
     }
 
@@ -1455,7 +1655,6 @@ struct WindowClickTests {
                 windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
             ),
             .focus(pid: 10, windowId: 100),
-            .focus(pid: 10, windowId: 100),
         ])
     }
 
@@ -1514,7 +1713,6 @@ struct WindowClickTests {
                 point: CGPoint(x: 150, y: 50),
                 windowBounds: WindowBounds(x: 0, y: 0, width: 300, height: 100)
             ),
-            .focus(pid: 10, windowId: 100),
             .focus(pid: 10, windowId: 100),
             .focus(pid: 10, windowId: 100),
         ])
@@ -2083,6 +2281,29 @@ private actor ClickChainRecorder {
 
     func recordActivate(pid: pid_t) {
         recordedEvents.append(.activate(pid: pid))
+    }
+}
+
+private actor FocusGate {
+    private var focused = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func markFocused() {
+        focused = true
+        let continuations = waiters
+        waiters.removeAll()
+        for continuation in continuations {
+            continuation.resume()
+        }
+    }
+
+    func waitUntilFocused() async {
+        if focused {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
     }
 }
 

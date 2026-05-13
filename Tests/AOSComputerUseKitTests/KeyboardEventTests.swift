@@ -6,8 +6,8 @@ import Testing
 
 @Suite("ComputerUseCore background keyboard events")
 struct KeyboardEventTests {
-    @Test("core focuses target, posts keyboard event, then restores front window")
-    func coreFocusesTargetPostsKeyboardEventThenRestoresFrontWindow() async throws {
+    @Test("core focuses target and posts keyboard event while keeping app session open")
+    func coreFocusesTargetAndPostsKeyboardEventWhileKeepingAppSessionOpen() async throws {
         let recorder = KeyboardChainRecorder()
         let target = Self.window(id: 456, pid: 123, owner: "Chrome", zIndex: 2)
         let front = Self.window(id: 789, pid: 777, owner: "Ghostty", zIndex: 3)
@@ -37,6 +37,49 @@ struct KeyboardEventTests {
         let result = try await core.postKeyboardEvent(pid: 123, windowId: 456, event: event)
 
         #expect(result == WindowKeyboardEventResult(pid: 123, windowId: 456, event: event))
+        #expect(await recorder.events == [
+            .focus(pid: 123, windowId: 456),
+            .keyboard(event: event, target: BackgroundKeyboardEventTarget(pid: 123, windowId: 456)),
+        ])
+    }
+
+    @Test("core keeps keyboard app session open until explicit stopAppSession")
+    func coreKeepsKeyboardAppSessionOpenUntilExplicitStopAppSession() async throws {
+        let recorder = KeyboardChainRecorder()
+        let target = Self.window(id: 456, pid: 123, owner: "Chrome", zIndex: 2)
+        let front = Self.window(id: 789, pid: 777, owner: "Ghostty", zIndex: 3)
+        let event = BackgroundKeyboardEvent.text("hello", delayMilliseconds: 30)
+        let core = ComputerUseCore(
+            windowLookup: { windowId in
+                [target, front].first { $0.id == windowId }
+            },
+            frontmostWindowLookup: {
+                front
+            },
+            focusWindowWithoutRaising: { pid, windowId in
+                await recorder.record(.focus(pid: pid, windowId: windowId))
+            },
+            deactivateWindowWithoutRaising: { pid, windowId in
+                await recorder.record(.deactivate(pid: pid, windowId: windowId))
+            },
+            activateApplication: { pid in
+                await recorder.record(.activate(pid: pid))
+                return true
+            },
+            postKeyboardEvent: { event, target in
+                await recorder.record(.keyboard(event: event, target: target))
+            }
+        )
+
+        _ = try await core.postKeyboardEvent(pid: 123, windowId: 456, event: event)
+        #expect(await recorder.events == [
+            .focus(pid: 123, windowId: 456),
+            .keyboard(event: event, target: BackgroundKeyboardEventTarget(pid: 123, windowId: 456)),
+        ])
+
+        let stopped = try await core.stopAppSession()
+
+        #expect(stopped == AppSessionResult(pid: 123, windowId: 456))
         #expect(await recorder.events == [
             .focus(pid: 123, windowId: 456),
             .keyboard(event: event, target: BackgroundKeyboardEventTarget(pid: 123, windowId: 456)),
@@ -101,8 +144,8 @@ struct KeyboardEventTests {
         #expect(await recorder.events.isEmpty)
     }
 
-    @Test("core restores front window when keyboard posting fails after focus")
-    func coreRestoresFrontWindowWhenKeyboardPostingFailsAfterFocus() async {
+    @Test("core leaves app session open when keyboard posting fails after focus")
+    func coreLeavesAppSessionOpenWhenKeyboardPostingFailsAfterFocus() async throws {
         let recorder = KeyboardChainRecorder()
         let target = Self.window(id: 456, pid: 123, owner: "Chrome", zIndex: 2)
         let front = Self.window(id: 789, pid: 777, owner: "Ghostty", zIndex: 3)
@@ -132,6 +175,9 @@ struct KeyboardEventTests {
         await #expect(throws: ComputerUseError.self) {
             try await core.postKeyboardEvent(pid: 123, windowId: 456, event: event)
         }
+        let stopped = try await core.stopAppSession()
+
+        #expect(stopped == AppSessionResult(pid: 123, windowId: 456))
         #expect(await recorder.events == [
             .focus(pid: 123, windowId: 456),
             .focus(pid: 777, windowId: 789),
