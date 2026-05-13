@@ -171,12 +171,28 @@ struct AXElementEventPoster: Sendable {
             return
         }
 
-        guard let scrollBar = scrollBar(for: element, direction: direction) else {
+        let scrollBars = scrollBars(for: element, direction: direction)
+        guard !scrollBars.isEmpty else {
             throw ComputerUseError.axElementEventUnavailable(
                 "element does not advertise a \(direction.rawValue) scroll action or expose a scroll bar"
             )
         }
-        try writeScrollBar(scrollBar, direction: direction, pages: pages)
+
+        for scrollBar in scrollBars {
+            guard let range = scrollBarRange(scrollBar) else { continue }
+            try writeScrollBar(scrollBar, range: range, direction: direction, pages: pages)
+            return
+        }
+
+        for scrollBar in scrollBars {
+            guard let range = normalizedScrollBarRange(scrollBar) else { continue }
+            try writeScrollBar(scrollBar, range: range, direction: direction, pages: pages)
+            return
+        }
+
+        throw ComputerUseError.axElementEventUnavailable(
+            "element exposes scroll bars, but none have a valid min/max range or numeric AXValue"
+        )
     }
 
     private func scrollAction(
@@ -208,48 +224,62 @@ struct AXElementEventPoster: Sendable {
 
     private func writeScrollBar(
         _ scrollBar: AXUIElement,
+        range: (current: Double, min: Double, max: Double),
         direction: AXScrollDirection,
         pages: Double
     ) throws {
-        guard let current = readDouble(scrollBar, "AXValue"),
-              let min = readDouble(scrollBar, "AXMinValue"),
-              let max = readDouble(scrollBar, "AXMaxValue")
-        else {
-            throw ComputerUseError.axElementEventUnavailable("scroll bar is missing AXValue/AXMinValue/AXMaxValue")
-        }
-        guard max > min else {
-            throw ComputerUseError.axElementEventUnavailable("scroll bar has invalid min/max range")
-        }
         let sign: Double
         switch direction {
         case .down, .right: sign = 1
         case .up, .left: sign = -1
         }
-        let next = Swift.max(min, Swift.min(max, current + sign * pages * (max - min)))
+        let delta = sign * pages * (range.max - range.min)
+        let next = Swift.max(range.min, Swift.min(range.max, range.current + delta))
         try setRequiredAttribute("AXValue", on: scrollBar, value: next as CFTypeRef)
     }
 
-    private func scrollBar(for element: AXUIElement, direction: AXScrollDirection) -> AXUIElement? {
+    private func scrollBarRange(_ scrollBar: AXUIElement) -> (current: Double, min: Double, max: Double)? {
+        guard let current = readDouble(scrollBar, "AXValue"),
+              let min = readDouble(scrollBar, "AXMinValue"),
+              let max = readDouble(scrollBar, "AXMaxValue"),
+              max > min
+        else {
+            return nil
+        }
+        return (current: current, min: min, max: max)
+    }
+
+    private func normalizedScrollBarRange(_ scrollBar: AXUIElement) -> (current: Double, min: Double, max: Double)? {
+        guard let current = readDouble(scrollBar, "AXValue") else { return nil }
+        return (current: current, min: 0, max: 1)
+    }
+
+    private func scrollBars(for element: AXUIElement, direction: AXScrollDirection) -> [AXUIElement] {
         var current: AXUIElement? = element
+        var scrollBars: [AXUIElement] = []
         for _ in 0..<12 {
-            guard let node = current else { return nil }
+            guard let node = current else { return scrollBars }
             if role(of: node) == "AXScrollBar", scrollBarMatches(node, direction: direction) {
-                return node
+                appendUnique(node, to: &scrollBars)
             }
             let attribute = (direction == .up || direction == .down)
                 ? "AXVerticalScrollBar"
                 : "AXHorizontalScrollBar"
             if let direct = axElementAttribute(node, attribute), scrollBarMatches(direct, direction: direction) {
-                return direct
+                appendUnique(direct, to: &scrollBars)
             }
-            if let child = children(of: node).first(where: {
-                role(of: $0) == "AXScrollBar" && scrollBarMatches($0, direction: direction)
-            }) {
-                return child
+            for child in children(of: node)
+                where role(of: child) == "AXScrollBar" && scrollBarMatches(child, direction: direction) {
+                appendUnique(child, to: &scrollBars)
             }
             current = axElementAttribute(node, "AXParent")
         }
-        return nil
+        return scrollBars
+    }
+
+    private func appendUnique(_ element: AXUIElement, to elements: inout [AXUIElement]) {
+        guard elements.contains(where: { CFEqual($0, element) }) == false else { return }
+        elements.append(element)
     }
 
     private func scrollBarMatches(_ element: AXUIElement, direction: AXScrollDirection) -> Bool {

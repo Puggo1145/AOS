@@ -339,6 +339,138 @@ struct AXElementEventTests {
         #expect(recorder.setValues == [0.8])
     }
 
+    @Test("AX poster scroll skips invalid target scrollbar and writes ancestor scrollbar")
+    func axPosterScrollSkipsInvalidTargetScrollbarAndWritesAncestorScrollbar() async throws {
+        let element = AXUIElementCreateApplication(1_001)
+        let parent = AXUIElementCreateApplication(1_002)
+        let ancestorScrollBar = AXUIElementCreateApplication(1_003)
+        let recorder = AXPosterRecorder()
+        let poster = AXElementEventPoster(
+            webAccessibilityActivator: Self.disabledActivator(),
+            copyAttribute: { target, attribute, value in
+                let name = attribute as String
+                if CFEqual(target, element) {
+                    switch name {
+                    case "AXRole":
+                        value.pointee = "AXScrollBar" as CFTypeRef
+                    case "AXOrientation":
+                        value.pointee = "AXVerticalOrientation" as CFTypeRef
+                    case "AXValue", "AXMinValue", "AXMaxValue":
+                        value.pointee = 0.0 as CFTypeRef
+                    case "AXParent":
+                        value.pointee = parent
+                    default:
+                        return .attributeUnsupported
+                    }
+                    return .success
+                }
+                if CFEqual(target, parent), name == "AXVerticalScrollBar" {
+                    value.pointee = ancestorScrollBar
+                    return .success
+                }
+                if CFEqual(target, ancestorScrollBar) {
+                    switch name {
+                    case "AXRole":
+                        value.pointee = "AXScrollBar" as CFTypeRef
+                    case "AXOrientation":
+                        value.pointee = "AXVerticalOrientation" as CFTypeRef
+                    case "AXValue":
+                        value.pointee = 0.25 as CFTypeRef
+                    case "AXMinValue":
+                        value.pointee = 0.0 as CFTypeRef
+                    case "AXMaxValue":
+                        value.pointee = 1.0 as CFTypeRef
+                    default:
+                        return .attributeUnsupported
+                    }
+                    return .success
+                }
+                return .attributeUnsupported
+            },
+            setAttribute: { target, attribute, value in
+                if CFEqual(target, ancestorScrollBar), (attribute as String) == "AXValue" {
+                    recorder.recordSetValue(value as! NSNumber)
+                }
+                return .success
+            },
+            copyActionNames: { _, names in
+                names.pointee = [] as CFArray
+                return .success
+            },
+            isProcessTrusted: { true }
+        )
+
+        try await poster.post(
+            .scroll(direction: .down, pages: 0.5),
+            to: AXElementEventTarget(
+                pid: 123,
+                windowId: 456,
+                stateId: StateID("state"),
+                elementIndex: 0,
+                element: element
+            )
+        )
+
+        #expect(recorder.setValues == [0.75])
+    }
+
+    @Test("AX poster scroll writes normalized scrollbar value when min max range is invalid")
+    func axPosterScrollWritesNormalizedScrollbarValueWhenMinMaxRangeIsInvalid() async throws {
+        let element = AXUIElementCreateApplication(1_101)
+        let scrollBar = AXUIElementCreateApplication(1_102)
+        let recorder = AXPosterRecorder()
+        let poster = AXElementEventPoster(
+            webAccessibilityActivator: Self.disabledActivator(),
+            copyAttribute: { target, attribute, value in
+                let name = attribute as String
+                if CFEqual(target, element), name == "AXVerticalScrollBar" {
+                    value.pointee = scrollBar
+                    return .success
+                }
+                if CFEqual(target, scrollBar) {
+                    switch name {
+                    case "AXRole":
+                        value.pointee = "AXScrollBar" as CFTypeRef
+                    case "AXOrientation":
+                        value.pointee = "AXVerticalOrientation" as CFTypeRef
+                    case "AXValue":
+                        value.pointee = 0.0 as CFTypeRef
+                    case "AXMinValue", "AXMaxValue":
+                        value.pointee = 0.0 as CFTypeRef
+                    default:
+                        return .attributeUnsupported
+                    }
+                    return .success
+                }
+                return .attributeUnsupported
+            },
+            setAttribute: { target, attribute, value in
+                if CFEqual(target, scrollBar), (attribute as String) == "AXValue" {
+                    recorder.recordSetValue(value as! NSNumber)
+                }
+                return .success
+            },
+            copyActionNames: { _, names in
+                names.pointee = [] as CFArray
+                return .success
+            },
+            isProcessTrusted: { true }
+        )
+
+        try await poster.post(
+            .scroll(direction: .down, pages: 0.4),
+            to: AXElementEventTarget(
+                pid: 123,
+                windowId: 456,
+                stateId: StateID("state"),
+                elementIndex: 0,
+                element: element
+            )
+        )
+
+        #expect(recorder.setValues == [0.4])
+    }
+
     private static func aliveElement() -> AXUIElement {
         AXUIElementCreateApplication(getpid())
     }

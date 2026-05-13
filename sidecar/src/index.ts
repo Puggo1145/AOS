@@ -17,7 +17,9 @@ import { registerSessionHandlers } from "./agent/session/handlers";
 import { registerProviderHandlers } from "./auth/register";
 import { registerConfigHandlers } from "./config/handlers";
 import { registerBuiltinTools } from "./agent/tools";
+import { toolRegistry } from "./agent/tools";
 import { registerTodoTool } from "./agent/tools/todo";
+import { registerComputerUseTools } from "./agent/tools/computer-use";
 import { registerBuiltinAmbient } from "./agent/ambient";
 import { ensureWorkspace } from "./agent/workspace";
 import { logger } from "./log";
@@ -41,6 +43,7 @@ async function main(): Promise<void> {
 
   const transport = new StdioTransport();
   const dispatcher = new Dispatcher(transport);
+  registerComputerUseTools(toolRegistry, dispatcher);
 
   // Single process-wide SessionManager. Manager starts EMPTY; the Shell
   // issues `session.create` after `rpc.hello` to obtain its bootstrap

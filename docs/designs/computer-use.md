@@ -5,12 +5,12 @@
 Computer Use 现在保留 macOS app/window/snapshot/capture foundation，并提供
 in-process non-raising focus、background mouse/keyboard event foundation，以及
 基于 app-state `stateId + elementIndex` 的 AX element semantic event foundation。
-它不再暴露给 Sidecar，也不包含 Sidecar tool 级 app 操作能力。
+Shell 通过 `computerUse.*` JSON-RPC request handler 把明确批准的业务 surface
+暴露给 Sidecar agent tool 系统；Sidecar tool 只做薄 RPC 包装，不包含额外操作语义或 fallback。
 
 已移除：
 
-- Shell `computerUse.*` JSON-RPC handler
-- Sidecar `computer_use_*` tools
+- 旧的宽泛 Shell `computerUse.*` handler / Sidecar `computer_use_*` tool surface
 - Keyboard injection / VisualCursor
 - Dev Mode 操作 workbench 与 coordinate reliability target
 
@@ -111,7 +111,35 @@ focus suppression：先做 Chromium/Electron AX activation，再用临时 synthe
 `AXHorizontalScrollBar` 并写 scrollbar `AXValue`；没有明确 AX scroll 能力时直接失败，
 不自动退回 keyboard scroll。
 
-这些 API 是 in-process Swift API。当前没有 JSON-RPC schema、Sidecar tool schema 或 Shell handler 绑定 Computer Use event 投放。Dev Mode 可以直接注入 `ComputerUseCore`，并通过 `core.diagnostics` 做本地 diagnostics。
+## Sidecar tool surface
+
+Sidecar agent 只暴露以下业务工具名，并一一映射到 `ComputerUseCore` 业务接口：
+
+- `list_apps` -> `listApps(mode:)`
+- `list_windows` -> `listWindows(pid:)`
+- `get_app_state` -> `getAppState(pid:windowId:captureMode:maxImageDimension:)`
+- `start_app_session` -> `startAppSession(pid:windowId:)`
+- `stop_app_session` -> `stopAppSession()`
+- `use_mouse` -> `postMouseEvent(windowId:event:)`
+- `use_keyboard` -> `postKeyboardEvent(windowId:event:)`
+- `perform_AX_action` -> `postEventToAXElement(pid:windowId:stateId:elementIndex:event:)`
+
+Shell owns the live `ComputerUseCore` instance and registers `computerUse.*`
+request handlers on the stdio JSON-RPC channel. `Sources/AOSRPCSchema/ComputerUse.swift`
+defines the wire DTOs; `Sources/AOSShell/Agent/ComputerUseRPCService.swift` maps
+those DTOs into Kit value types. Sidecar registers the eight tools in
+`sidecar/src/agent/tools/computer-use.ts` after the live `Dispatcher` is available.
+
+Not exposed as agent business tools:
+
+- `getAppType(pid:)`
+- `currentAppSession()`
+- `core.diagnostics.*`
+- CLI-only diagnostics such as coordinate target, post-cursor, window-order measurement,
+  and mouse-event observation.
+
+Dev Mode can still inject `ComputerUseCore` directly and use `core.diagnostics`
+for local diagnostics.
 
 ## CLI
 
@@ -228,11 +256,10 @@ flowchart TD
 
 ## 约束
 
-- 不做 Sidecar tool 级 app 操作。
+- Sidecar tool 只暴露上述 8 个业务入口。
 - 只通过显式 background mouse / keyboard event API 投放输入事件。
 - 不抢占用户前台应用焦点。
-- 不注册 Sidecar tool。
-- 不通过 JSON-RPC 暴露 Computer Use。
-- 不保留操作相关 fallback 或 stub。
+- 不通过 Sidecar 暴露 diagnostics surface。
+- 不保留操作相关 fallback 或 stub；core 或 RPC 映射错误直接失败并冒泡。
 
-未来重写 app 操作能力时，应在这个 foundation 上新增明确边界，而不是重新引入隐式 handler 或半可用 tool surface。
+未来扩展 app 操作能力时，应在这个 foundation 上新增明确边界，而不是重新引入隐式 handler 或半可用 tool surface。

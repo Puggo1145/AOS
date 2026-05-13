@@ -33,6 +33,7 @@ public final class CompositionRoot {
     public private(set) var sessionService: SessionService?
     public private(set) var providerService: ProviderService?
     public private(set) var configService: ConfigService?
+    private(set) var computerUseRPCService: ComputerUseRPCService?
     public private(set) var devContextService: DevContextService?
     public private(set) var devModeWindowController: DevModeWindowController?
     private var devModeOpenObserver: NSObjectProtocol?
@@ -92,6 +93,10 @@ public final class CompositionRoot {
         self.providerService = provider
         let config = ConfigService(rpc: client)
         self.configService = config
+        self.computerUseRPCService = ComputerUseRPCService(
+            rpc: client,
+            core: LiveShellComputerUseClient(core: computerUseCore)
+        )
         let session = SessionService(rpc: client)
         self.sessionService = session
         let store = SessionStore(rpc: client, sessionService: session)
@@ -240,6 +245,7 @@ public final class CompositionRoot {
         rpcClient = nil
         providerService = nil
         configService = nil
+        computerUseRPCService = nil
         agentService = nil
         sessionService = nil
         sidecarProcess.terminate()

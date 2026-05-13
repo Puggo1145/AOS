@@ -14,6 +14,7 @@ import { test, expect } from "bun:test";
 import { StdioTransport, type ByteSink, type ByteSource } from "../src/rpc/transport";
 import { Dispatcher, RPCMethodError, DispatcherStopped } from "../src/rpc/dispatcher";
 import { RPCErrorCode } from "../src/rpc/rpc-types";
+import { directionOf } from "../src/rpc/method-catalog";
 
 // ---------------------------------------------------------------------------
 // In-memory bidirectional pipe between two transports.
@@ -132,6 +133,10 @@ test("outbound direction enforcement: Bun cannot initiate agent.*", async () => 
   }
   expect(String(caught)).toContain("Bun cannot initiate");
   close();
+});
+
+test("method catalog marks computerUse.* as Bun to Shell", () => {
+  expect(directionOf("computerUse.listApps")).toBe("bunToShell");
 });
 
 test("inbound ui.* request triggers MethodNotFound (low-level)", async () => {

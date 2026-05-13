@@ -130,6 +130,14 @@ export const RPCMethod = {
   configSet: "config.set",
   configSetEffort: "config.setEffort",
   configMarkOnboardingCompleted: "config.markOnboardingCompleted",
+  computerUseListApps: "computerUse.listApps",
+  computerUseListWindows: "computerUse.listWindows",
+  computerUseGetAppState: "computerUse.getAppState",
+  computerUseStartAppSession: "computerUse.startAppSession",
+  computerUseStopAppSession: "computerUse.stopAppSession",
+  computerUsePostMouseEvent: "computerUse.postMouseEvent",
+  computerUsePostKeyboardEvent: "computerUse.postKeyboardEvent",
+  computerUsePostEventToAXElement: "computerUse.postEventToAXElement",
   devContextGet: "dev.context.get",
   devContextChanged: "dev.context.changed",
   sessionCreate: "session.create",
@@ -225,6 +233,182 @@ export interface AgentCompactResult {
   /// Number of turns folded into the summary on success. Omitted when
   /// the call short-circuits (no prior history to compact).
   compactedTurnCount?: number;
+}
+
+// ---------------------------------------------------------------------------
+// computerUse.* — Sidecar → Shell
+// ---------------------------------------------------------------------------
+
+export type ComputerUseAppListMode = "running" | "all";
+export type ComputerUseCaptureMode = "vision" | "ax";
+
+export interface ComputerUsePoint {
+  x: number;
+  y: number;
+}
+
+export interface ComputerUseBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface ComputerUseAppInfo {
+  pid?: number;
+  bundleId?: string;
+  name: string;
+  path?: string;
+  running: boolean;
+  active: boolean;
+  identity: string;
+}
+
+export interface ComputerUseWindowInfo {
+  windowId: number;
+  pid: number;
+  owner: string;
+  title: string;
+  bounds: ComputerUseBounds;
+  zIndex: number;
+  isOnScreen: boolean;
+  layer: number;
+}
+
+export interface ComputerUsePixelSize {
+  width: number;
+  height: number;
+}
+
+export interface ComputerUseCoordinateSpace {
+  windowFrame: ComputerUseBounds;
+  windowBounds: ComputerUseBounds;
+  pixelSize: ComputerUsePixelSize;
+}
+
+export interface ComputerUseScreenshot {
+  imageBase64: string;
+  format: string;
+  width: number;
+  height: number;
+  scaleFactor: number;
+  coordinateSpace: ComputerUseCoordinateSpace;
+  originalWidth?: number;
+  originalHeight?: number;
+}
+
+export interface ComputerUseListAppsParams {
+  mode: ComputerUseAppListMode;
+}
+
+export interface ComputerUseListAppsResult {
+  apps: ComputerUseAppInfo[];
+}
+
+export interface ComputerUseListWindowsParams {
+  pid: number;
+}
+
+export interface ComputerUseListWindowsResult {
+  windows: ComputerUseWindowInfo[];
+}
+
+export interface ComputerUseGetAppStateParams {
+  pid: number;
+  windowId: number;
+  captureMode: ComputerUseCaptureMode;
+  maxImageDimension: number;
+}
+
+export interface ComputerUseGetAppStateResult {
+  stateId: string;
+  treeMarkdown: string;
+  elementCount: number;
+  screenshot?: ComputerUseScreenshot;
+  bundleId?: string;
+  appName?: string;
+}
+
+export interface ComputerUseStartAppSessionParams {
+  pid: number;
+  windowId: number;
+}
+
+export type ComputerUseStopAppSessionParams = Record<string, never>;
+
+export interface ComputerUseAppSessionResult {
+  pid: number;
+}
+
+export type ComputerUseMouseButton = "left" | "right";
+
+export type ComputerUseMouseEvent =
+  | { kind: "click"; button: ComputerUseMouseButton; point: ComputerUsePoint; count?: number }
+  | { kind: "drag"; button: ComputerUseMouseButton; from: ComputerUsePoint; to: ComputerUsePoint };
+
+export interface ComputerUsePostMouseEventParams {
+  windowId: number;
+  event: ComputerUseMouseEvent;
+}
+
+export interface ComputerUsePostMouseEventResult {
+  pid: number;
+  windowId: number;
+  event: ComputerUseMouseEvent;
+}
+
+export type ComputerUseKeyboardModifier = "command" | "shift" | "option" | "control" | "function";
+
+export type ComputerUseKeyboardEvent =
+  | { kind: "text"; text: string; delayMilliseconds?: number }
+  | { kind: "keyPress"; key: string; modifiers?: ComputerUseKeyboardModifier[]; count?: number }
+  | { kind: "hotkey"; modifiers: ComputerUseKeyboardModifier[]; key: string };
+
+export interface ComputerUsePostKeyboardEventParams {
+  windowId: number;
+  event: ComputerUseKeyboardEvent;
+}
+
+export interface ComputerUsePostKeyboardEventResult {
+  pid: number;
+  windowId: number;
+  event: ComputerUseKeyboardEvent;
+}
+
+export type ComputerUseAXElementAction =
+  | "press"
+  | "showMenu"
+  | "pick"
+  | "confirm"
+  | "cancel"
+  | "open"
+  | "increment"
+  | "decrement"
+  | "scrollToVisible";
+
+export type ComputerUseAXScrollDirection = "up" | "down" | "left" | "right";
+
+export type ComputerUseAXElementEvent =
+  | { kind: "action"; action: ComputerUseAXElementAction }
+  | { kind: "setValue"; value: string }
+  | { kind: "setSelectedText"; value: string }
+  | { kind: "focus" }
+  | { kind: "scroll"; direction: ComputerUseAXScrollDirection; pages: number };
+
+export interface ComputerUsePostEventToAXElementParams {
+  pid: number;
+  windowId: number;
+  stateId: string;
+  elementIndex: number;
+  event: ComputerUseAXElementEvent;
+}
+
+export interface ComputerUsePostEventToAXElementResult {
+  pid: number;
+  windowId: number;
+  stateId: string;
+  elementIndex: number;
+  event: ComputerUseAXElementEvent;
 }
 
 // ---------------------------------------------------------------------------
