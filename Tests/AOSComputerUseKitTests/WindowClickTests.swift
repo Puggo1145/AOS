@@ -21,7 +21,7 @@ struct WindowClickTests {
                 await recorder.recordDeactivate(pid: pid, windowId: windowId)
             },
             postMouseEvent: { event, target, _, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 await recorder.recordClick(
@@ -71,7 +71,7 @@ struct WindowClickTests {
                 return true
             },
             postMouseEvent: { event, target, _, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 await recorder.recordClick(
@@ -191,7 +191,7 @@ struct WindowClickTests {
                 await recorder.recordDeactivate(pid: pid, windowId: windowId)
             },
             postMouseEvent: { event, target, _, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 await recorder.recordClick(
@@ -358,7 +358,7 @@ struct WindowClickTests {
             deactivateWindowWithoutRaising: { _, _ in
             },
             postMouseEvent: { event, target, _, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -413,7 +413,7 @@ struct WindowClickTests {
             deactivateWindowWithoutRaising: { _, _ in
             },
             postMouseEvent: { event, target, _, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -473,7 +473,7 @@ struct WindowClickTests {
                 return true
             },
             postMouseEvent: { event, target, _, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -528,7 +528,7 @@ struct WindowClickTests {
             deactivateWindowWithoutRaising: { _, _ in
             },
             postMouseEvent: { event, target, deliveryRoute, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -623,7 +623,7 @@ struct WindowClickTests {
                 return true
             },
             postMouseEvent: { event, target, _, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -748,7 +748,7 @@ struct WindowClickTests {
                 return true
             },
             postMouseEvent: { event, target, _, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -809,7 +809,7 @@ struct WindowClickTests {
             deactivateWindowWithoutRaising: { _, _ in
             },
             postMouseEvent: { event, target, _, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -901,7 +901,7 @@ struct WindowClickTests {
             deactivateWindowWithoutRaising: { _, _ in
             },
             postMouseEvent: { event, target, _, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -953,7 +953,7 @@ struct WindowClickTests {
                 await recorder.recordDeactivate(pid: pid, windowId: windowId)
             },
             postMouseEvent: { event, target, _, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -1005,7 +1005,7 @@ struct WindowClickTests {
                 await recorder.recordDeactivate(pid: pid, windowId: windowId)
             },
             postMouseEvent: { event, target, _, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -1061,7 +1061,7 @@ struct WindowClickTests {
                 return true
             },
             postMouseEvent: { event, target, _, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -1125,7 +1125,7 @@ struct WindowClickTests {
             activeStateGuardDelays: [0],
             sleepForActiveStateGuard: { _ in },
             postMouseEvent: { event, target, _, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -1192,7 +1192,7 @@ struct WindowClickTests {
             activeStateGuardDelays: [0],
             sleepForActiveStateGuard: { _ in },
             postMouseEvent: { event, target, _, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -1250,7 +1250,7 @@ struct WindowClickTests {
             activeStateGuardDelays: [0],
             sleepForActiveStateGuard: { _ in },
             postMouseEvent: { event, target, _, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -1317,7 +1317,7 @@ struct WindowClickTests {
             activeStateGuardDelays: [0, 1],
             sleepForActiveStateGuard: { _ in },
             postMouseEvent: { event, target, _, stageObserver in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -1384,7 +1384,7 @@ struct WindowClickTests {
             activeStateGuardDelays: [0, 1, 1],
             sleepForActiveStateGuard: { _ in },
             postMouseEvent: { event, target, _, stageObserver in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -1450,7 +1450,7 @@ struct WindowClickTests {
             activeStateGuardDelays: [],
             sleepForActiveStateGuard: { _ in },
             postMouseEvent: { event, target, _, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -1521,7 +1521,7 @@ struct WindowClickTests {
             activeStateGuardDelays: [0, 1],
             sleepForActiveStateGuard: { _ in },
             postMouseEvent: { event, target, _, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -1583,7 +1583,7 @@ struct WindowClickTests {
             activeStateGuardDelays: [0, 1],
             sleepForActiveStateGuard: { _ in },
             postMouseEvent: { event, target, _, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -1641,7 +1641,7 @@ struct WindowClickTests {
             activeStateGuardDelays: [0],
             sleepForActiveStateGuard: { _ in },
             postMouseEvent: { event, target, _, stageObserver in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -1702,7 +1702,7 @@ struct WindowClickTests {
             activeStateGuardDelays: [0, 1],
             sleepForActiveStateGuard: { _ in },
             postMouseEvent: { event, target, _, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -1766,7 +1766,7 @@ struct WindowClickTests {
             activeStateGuardDelays: [0],
             sleepForActiveStateGuard: { _ in },
             postMouseEvent: { event, target, _, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -1828,7 +1828,7 @@ struct WindowClickTests {
             activeStateGuardDelays: [0],
             sleepForActiveStateGuard: { _ in },
             postMouseEvent: { event, target, _, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -1891,7 +1891,7 @@ struct WindowClickTests {
             activeStateGuardDelays: [0],
             sleepForActiveStateGuard: { _ in },
             postMouseEvent: { event, target, _, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -1951,7 +1951,7 @@ struct WindowClickTests {
             activeStateGuardDelays: [0, 1, 1],
             sleepForActiveStateGuard: { _ in },
             postMouseEvent: { event, target, _, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -2004,7 +2004,7 @@ struct WindowClickTests {
             deactivateWindowWithoutRaising: { _, _ in
             },
             postMouseEvent: { event, target, _, _ in
-                guard case .click(_, let point) = event else {
+                guard case .click(_, let point, _) = event else {
                     throw ComputerUseError.mouseEventUnavailable("expected click event")
                 }
                 let pid = target.pid
@@ -2150,6 +2150,64 @@ struct WindowClickTests {
         ])
         #expect(recorder.stages == [
             .afterMouseMoved,
+            .afterTargetDown,
+            .afterTargetUp,
+        ])
+    }
+
+    @Test("mouse poster posts repeated AppKit clicks with increasing click state")
+    func mousePosterPostsRepeatedAppKitClicksWithIncreasingClickState() async throws {
+        let recorder = MousePostRecorder()
+        let poster = MouseEventPoster(
+            postPublicEventToPID: { event, pid in
+                recorder.recordPublicPost(event: event, pid: pid)
+            },
+            postSkyLightEventToPID: { event, pid in
+                recorder.recordSkyLightPost(event: event, pid: pid)
+            },
+            setWindowLocation: { _, point in
+                recorder.recordWindowLocation(point)
+            },
+            setIntegerField: { _, field, value in
+                recorder.recordIntegerField(field: field, value: value)
+            },
+            sleep: { interval in
+                recorder.recordSleep(interval)
+            }
+        )
+
+        try await poster.post(
+            .click(button: .left, point: CGPoint(x: 160, y: 70), count: 2),
+            to: BackgroundMouseEventTarget(
+                pid: 123,
+                windowId: 456,
+                windowBounds: WindowBounds(x: 10, y: 20, width: 300, height: 100)
+            ),
+            deliveryRoute: .appKit,
+            stageObserver: { stage in
+                recorder.recordStage(stage)
+            }
+        )
+
+        #expect(recorder.publicPosts.map(\.type) == [
+            .mouseMoved,
+            .leftMouseDown,
+            .leftMouseUp,
+            .leftMouseDown,
+            .leftMouseUp,
+        ])
+        #expect(recorder.publicPosts.map(\.clickState) == [0, 1, 1, 2, 2])
+        #expect(recorder.windowLocations == [
+            CGPoint(x: 150, y: 50),
+            CGPoint(x: 150, y: 50),
+            CGPoint(x: 150, y: 50),
+            CGPoint(x: 150, y: 50),
+            CGPoint(x: 150, y: 50),
+        ])
+        #expect(recorder.stages == [
+            .afterMouseMoved,
+            .afterTargetDown,
+            .afterTargetUp,
             .afterTargetDown,
             .afterTargetUp,
         ])
@@ -2417,6 +2475,72 @@ struct WindowClickTests {
         ])
     }
 
+    @Test("webContent delivery route repeats target click after one primer")
+    func webContentDeliveryRouteRepeatsTargetClickAfterOnePrimer() async throws {
+        let recorder = MousePostRecorder()
+        let poster = MouseEventPoster(
+            postPublicEventToPID: { event, pid in
+                recorder.recordPublicPost(event: event, pid: pid)
+            },
+            postSkyLightEventToPID: { event, pid in
+                recorder.recordSkyLightPost(event: event, pid: pid)
+            },
+            setWindowLocation: { _, point in
+                recorder.recordWindowLocation(point)
+            },
+            setIntegerField: { _, field, value in
+                recorder.recordIntegerField(field: field, value: value)
+            },
+            sleep: { interval in
+                recorder.recordSleep(interval)
+            }
+        )
+
+        try await poster.post(
+            .click(button: .left, point: CGPoint(x: 160, y: 70), count: 2),
+            to: BackgroundMouseEventTarget(
+                pid: 123,
+                windowId: 456,
+                windowBounds: WindowBounds(x: 10, y: 20, width: 300, height: 100)
+            ),
+            deliveryRoute: .webContent,
+            stageObserver: { stage in
+                recorder.recordStage(stage)
+            }
+        )
+
+        #expect(recorder.publicPosts.isEmpty)
+        #expect(recorder.skyLightPosts.map(\.type) == [
+            .mouseMoved,
+            .leftMouseDown,
+            .leftMouseUp,
+            .leftMouseDown,
+            .leftMouseUp,
+            .leftMouseDown,
+            .leftMouseUp,
+        ])
+        #expect(recorder.skyLightPosts.map(\.location) == [
+            CGPoint(x: 160, y: 70),
+            CGPoint(x: 9, y: 119),
+            CGPoint(x: 9, y: 119),
+            CGPoint(x: 160, y: 70),
+            CGPoint(x: 160, y: 70),
+            CGPoint(x: 160, y: 70),
+            CGPoint(x: 160, y: 70),
+        ])
+        #expect(recorder.skyLightPosts.map(\.clickState) == [0, 1, 1, 1, 1, 2, 2])
+        #expect(recorder.stages == [
+            .afterMouseMoved,
+            .afterPrimerDown,
+            .afterPrimerUp,
+            .afterPrimerGap,
+            .afterTargetDown,
+            .afterTargetUp,
+            .afterTargetDown,
+            .afterTargetUp,
+        ])
+    }
+
     @Test("webContent delivery route posts drag through SkyLight primer sequence")
     func webContentDeliveryRoutePostsDragThroughSkyLightPrimerSequence() async throws {
         let recorder = MousePostRecorder()
@@ -2634,7 +2758,7 @@ private extension ComputerUseCore {
 
 private extension WindowMouseEventResult {
     var clickPoint: CGPoint? {
-        guard case .click(_, let point) = event else {
+        guard case .click(_, let point, _) = event else {
             return nil
         }
         return point
@@ -2773,6 +2897,7 @@ private final class MousePostRecorder: @unchecked Sendable {
         let windowUnderMousePointer: Int64
         let windowUnderMousePointerThatCanHandleThisEvent: Int64
         let buttonNumber: Int64
+        let clickState: Int64
         let rawField58: Int64
     }
 
@@ -2837,6 +2962,7 @@ private final class MousePostRecorder: @unchecked Sendable {
                 .mouseEventWindowUnderMousePointerThatCanHandleThisEvent
             ),
             buttonNumber: event.getIntegerValueField(.mouseEventButtonNumber),
+            clickState: event.getIntegerValueField(.mouseEventClickState),
             rawField58: event.getIntegerValueField(CGEventField(rawValue: 58)!)
         ))
     }
@@ -2853,6 +2979,7 @@ private final class MousePostRecorder: @unchecked Sendable {
                 .mouseEventWindowUnderMousePointerThatCanHandleThisEvent
             ),
             buttonNumber: event.getIntegerValueField(.mouseEventButtonNumber),
+            clickState: event.getIntegerValueField(.mouseEventClickState),
             rawField58: event.getIntegerValueField(CGEventField(rawValue: 58)!)
         ))
     }

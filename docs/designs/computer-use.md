@@ -130,6 +130,10 @@ interactive command palette 支持：
 - `post-cursor`
 - `open-coor-test`
 
+`left-click` and `right-click` accept `--count`; the default is 1. Counts above
+1 are delivered as repeated down/up pairs at the same coordinate, with the
+target pair's click state increasing from 1 through `count`.
+
 成功默认输出人类可读文本到 stdout。传 `--json` 时输出机器可读 JSON。错误输出到 stderr，并返回非 0 exit code。`get-app-state --json` 默认把 screenshot base64 放进 JSON；如果传 `--screenshot-output`，CLI 把截图写入指定路径，JSON 只返回截图 metadata 和 `outputPath`。
 
 `start-app-session` / `stop-app-session` 直接暴露 `ComputerUseCore.startAppSession` 和

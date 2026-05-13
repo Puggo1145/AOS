@@ -276,10 +276,11 @@ public enum ComputerUseCLI {
         core: ComputerUseCoreClient
     ) async throws -> BackgroundMouseEvent {
         switch request.event {
-        case .click(let button, let coordinate):
+        case .click(let button, let coordinate, let count):
             return try await .click(
                 button: button,
-                point: screenPoint(windowId: request.windowId, coordinate: coordinate, core: core)
+                point: screenPoint(windowId: request.windowId, coordinate: coordinate, core: core),
+                count: count
             )
         case .drag(let button, let start, let end):
             return try await .drag(
@@ -308,7 +309,7 @@ public enum ComputerUseCLI {
     }
 
     static func leftClickPoint(from result: WindowMouseEventResult) throws -> CGPoint {
-        guard case .click(.left, let point) = result.event else {
+        guard case .click(.left, let point, _) = result.event else {
             throw ComputerUseCLIInvariantError("left-click diagnostic received \(result.event)")
         }
         return point

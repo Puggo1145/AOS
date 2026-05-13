@@ -62,6 +62,9 @@ enum InteractiveCLICommandCatalog {
                 "--window-id", "\(target.windowId)",
                 "--coor", try await context.io.promptRequired("Coordinate x,y: "),
             ]
+            if let count = try await context.io.promptOptional("Count (empty for 1): ") {
+                arguments += ["--count", count]
+            }
             if try await select("Trace mouse event?", options: Bool.interactiveOptions, context: context) {
                 arguments.append("--trace")
             }
@@ -74,6 +77,9 @@ enum InteractiveCLICommandCatalog {
                 "--window-id", "\(target.windowId)",
                 "--coor", try await context.io.promptRequired("Coordinate x,y: "),
             ]
+            if let count = try await context.io.promptOptional("Count (empty for 1): ") {
+                arguments += ["--count", count]
+            }
             if try await select("Trace mouse event?", options: Bool.interactiveOptions, context: context) {
                 arguments.append("--trace")
             }

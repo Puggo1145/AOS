@@ -512,7 +512,7 @@ struct ComputerUseCLITests {
             ),
         ])
         let io = FakeInteractiveCLIIO(
-            lines: ["q"],
+            lines: ["q", ""],
             keys: Array(repeating: .down, count: 7) + [.confirm, .confirm, .confirm, .quit]
         )
 
@@ -664,6 +664,37 @@ struct ComputerUseCLITests {
         #expect(result.exitCode == 0)
     }
 
+    @Test("left-click parses count")
+    func leftClickParsesCount() async throws {
+        let fake = FakeComputerUseCore()
+        await fake.setWindows([
+            WindowInfo(
+                id: 456,
+                pid: 123,
+                owner: "AOSCoordinateTarget",
+                title: "AOS Button Reliability Target",
+                bounds: WindowBounds(x: 50, y: 70, width: 520, height: 360),
+                zIndex: 1,
+                isOnScreen: true,
+                layer: 0
+            )
+        ])
+
+        let result = try await ComputerUseCLI.run(
+            arguments: ["left-click", "--window-id", "456", "--coor", "260,180", "--count", "2"],
+            core: fake,
+            permissions: FakePermissionClient()
+        )
+
+        #expect(await fake.requestedMouseEvent == .click(
+            button: .left,
+            point: CGPoint(x: 310, y: 250),
+            count: 2
+        ))
+        #expect(result.stderr.isEmpty)
+        #expect(result.exitCode == 0)
+    }
+
     @Test("event command keeps the app session open")
     func eventCommandKeepsTheAppSessionOpen() async throws {
         let fake = FakeComputerUseCore()
@@ -720,6 +751,52 @@ struct ComputerUseCLITests {
         #expect(result.stdout.contains("Posted right click to window 456 at 310,250"))
         #expect(result.stderr.isEmpty)
         #expect(result.exitCode == 0)
+    }
+
+    @Test("right-click parses count")
+    func rightClickParsesCount() async throws {
+        let fake = FakeComputerUseCore()
+        await fake.setWindows([
+            WindowInfo(
+                id: 456,
+                pid: 123,
+                owner: "AOSCoordinateTarget",
+                title: "AOS Button Reliability Target",
+                bounds: WindowBounds(x: 50, y: 70, width: 520, height: 360),
+                zIndex: 1,
+                isOnScreen: true,
+                layer: 0
+            )
+        ])
+
+        let result = try await ComputerUseCLI.run(
+            arguments: ["right-click", "--window-id", "456", "--coor", "260,180", "--count", "3"],
+            core: fake,
+            permissions: FakePermissionClient()
+        )
+
+        #expect(await fake.requestedMouseEvent == .click(
+            button: .right,
+            point: CGPoint(x: 310, y: 250),
+            count: 3
+        ))
+        #expect(result.stderr.isEmpty)
+        #expect(result.exitCode == 0)
+    }
+
+    @Test("left-click rejects zero count")
+    func leftClickRejectsZeroCount() async throws {
+        let fake = FakeComputerUseCore()
+
+        let result = try await ComputerUseCLI.run(
+            arguments: ["left-click", "--window-id", "456", "--coor", "260,180", "--count", "0"],
+            core: fake,
+            permissions: FakePermissionClient()
+        )
+
+        #expect(await fake.requestedMouseEvent == nil)
+        #expect(result.stderr.contains("invalid value for --count: 0"))
+        #expect(result.exitCode != 0)
     }
 
     @Test("scroll command is not accepted")
@@ -1947,7 +2024,7 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
         let pid = try await currentAppSession().pid
         requestedMouseEvent = event
         requestedMouseEvents.append(event)
-        if case .click(.left, let point) = event {
+        if case .click(.left, let point, _) = event {
             requestedLeftClickPID = pid
             requestedLeftClickWindowID = windowId
             requestedLeftClickPoint = point
@@ -1962,7 +2039,7 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
     ) async throws -> WindowMouseEventTraceResult {
         let pid = try await currentAppSession().pid
         requestedMouseEventTrace = event
-        if case .click(.left, let point) = event {
+        if case .click(.left, let point, _) = event {
             requestedLeftClickTracePID = pid
             requestedLeftClickTraceWindowID = windowId
             requestedLeftClickTracePoint = point

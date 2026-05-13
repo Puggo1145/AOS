@@ -221,12 +221,14 @@ SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: defocus))
 
 1. 启动 `.build/debug/AOSComputerUseCLI interactive`。
 2. 在 Command 菜单选择 `start-app-session`，按 App / Window prompt 选择目标。
-3. 选择 `left-click` 或 `right-click`，在 Window 菜单选择当前 session 的目标窗口，并在 prompt 输入 `x,y`。
+3. 选择 `left-click` 或 `right-click`，在 Window 菜单选择当前 session 的目标窗口，并在 prompt 输入 `x,y` 和可选 `count`。
 4. 选择 `drag` 时，在 Window 菜单选择目标窗口，按 prompt 输入 start/end `x,y` 和 button。
 5. 最后选择 `stop-app-session`。
 
 CLI 坐标参数是目标窗口 top-left local point，CLI 会转换为 screen point，然后构造
 对应的 `BackgroundMouseEvent` 走同一条 background mouse event core path。
+`left-click` / `right-click` 的 `count` 默认为 1；大于 1 时，同一坐标会生成连续
+down/up click sequence，并把第 N 次目标 down/up 的 `.mouseEventClickState` 设为 N。
 `drag` 是 web-content-only command；AppKit route 只接受 `left-click` 和
 `right-click`。
 

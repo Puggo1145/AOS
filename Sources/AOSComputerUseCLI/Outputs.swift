@@ -290,7 +290,7 @@ struct MouseEventPostOutput: Encodable, ReadableOutput {
         self.windowId = result.windowId
         self.event = Self.eventName(result.event)
         switch result.event {
-        case .click(_, let point):
+        case .click(_, let point, _):
             self.point = PointOutput(point)
             self.from = nil
             self.to = nil
@@ -314,8 +314,9 @@ struct MouseEventPostOutput: Encodable, ReadableOutput {
 
     private static func eventName(_ event: BackgroundMouseEvent) -> String {
         switch event {
-        case .click(let button, _):
-            return "\(button.rawValue) click"
+        case .click(let button, _, let count):
+            let base = "\(button.rawValue) click"
+            return count == 1 ? base : "\(base) x\(count)"
         case .drag(let button, _, _):
             return "\(button.rawValue) drag"
         }

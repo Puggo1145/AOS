@@ -679,6 +679,13 @@ public actor ComputerUseCore {
     }
 
     private func validateMouseEvent(_ event: BackgroundMouseEvent, isInside window: WindowInfo) throws {
+        if case .click(_, _, let count) = event {
+            guard count > 0 else {
+                throw ComputerUseError.mouseEventUnavailable(
+                    "click count must be greater than 0"
+                )
+            }
+        }
         for point in event.screenPoints {
             guard window.bounds.cgRect.contains(point) else {
                 throw ComputerUseError.mouseEventUnavailable(

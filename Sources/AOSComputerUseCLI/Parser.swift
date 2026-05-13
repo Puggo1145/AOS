@@ -91,21 +91,23 @@ struct ParsedCommand {
         case "left-click":
             let windowId = try options.requiredWindowID("--window-id")
             let coordinate = try options.requiredPoint("--coor")
+            let count = try options.optionalPositiveInt("--count") ?? 1
             let trace = try options.takeFlag("--trace")
             try options.rejectUnused()
             command = .mouseEventCommand(MouseEventCommandRequest(
                 windowId: windowId,
-                event: .click(button: .left, coordinate: coordinate),
+                event: .click(button: .left, coordinate: coordinate, count: count),
                 trace: trace
             ))
         case "right-click":
             let windowId = try options.requiredWindowID("--window-id")
             let coordinate = try options.requiredPoint("--coor")
+            let count = try options.optionalPositiveInt("--count") ?? 1
             let trace = try options.takeFlag("--trace")
             try options.rejectUnused()
             command = .mouseEventCommand(MouseEventCommandRequest(
                 windowId: windowId,
-                event: .click(button: .right, coordinate: coordinate),
+                event: .click(button: .right, coordinate: coordinate, count: count),
                 trace: trace
             ))
         case "drag":
@@ -442,14 +444,14 @@ struct KeyboardEventCommandRequest: Sendable {
 }
 
 enum MouseEventCommand: Sendable, Equatable {
-    case click(button: BackgroundMouseButton, coordinate: CGPoint)
+    case click(button: BackgroundMouseButton, coordinate: CGPoint, count: Int = 1)
     case drag(button: BackgroundMouseButton, start: CGPoint, end: CGPoint)
 
     var commandName: String {
         switch self {
-        case .click(.left, _):
+        case .click(.left, _, _):
             return "left-click"
-        case .click(.right, _):
+        case .click(.right, _, _):
             return "right-click"
         case .drag:
             return "drag"

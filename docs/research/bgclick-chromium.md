@@ -124,7 +124,8 @@ Each event is stamped with:
 - `.mouseEventButtonNumber` = the event button number. The off-edge primer is
   always a left-button pair.
 - `.mouseEventSubtype` = 3.
-- `.mouseEventClickState` = 1.
+- `.mouseEventClickState` = 0 for move events; target down/up events use the
+  current click count, starting at 1.
 - `.mouseEventWindowUnderMousePointer` = target window id.
 - `.mouseEventWindowUnderMousePointerThatCanHandleThisEvent` = target window id.
 - private field `40` = target pid.
@@ -139,13 +140,16 @@ leftMouseDown(primer point)
 sleep 1ms
 leftMouseUp(primer point)
 sleep 100ms
-leftMouseDown(target point)
+leftMouseDown(target point, clickState: 1)
 sleep 1ms
-leftMouseUp(target point)
+leftMouseUp(target point, clickState: 1)
 ```
 
 For right-click and drag, the target down/drag/up events use the requested
 button while the primer remains left-button.
+For `left-click` / `right-click` calls with `count > 1`, the primer still runs
+once, then the target down/up pair repeats at the requested coordinate with
+click states `1...count`.
 
 The primer point is intentionally just outside the left edge of the target
 window while still stamped as target-window local state:

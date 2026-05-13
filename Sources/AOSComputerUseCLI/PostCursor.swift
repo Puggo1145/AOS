@@ -293,7 +293,7 @@ extension ComputerUseCLI {
 
     private static func postCursorEventName(_ event: BackgroundMouseEvent) -> String {
         switch event {
-        case .click(let button, _):
+        case .click(let button, _, _):
             "\(button.rawValue)-click"
         case .drag(let button, _, _):
             "\(button.rawValue)-drag"

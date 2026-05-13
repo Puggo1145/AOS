@@ -63,20 +63,22 @@ struct MouseEventPoster: Sendable {
         stageObserver: BackgroundMouseEventPostObserver? = nil
     ) async throws {
         switch (deliveryRoute, event) {
-        case (.appKit, .click(let button, let point)):
+        case (.appKit, .click(let button, let point, let count)):
             try await postAppKitClick(
                 button: button,
                 target: target,
                 point: point,
+                count: count,
                 stageObserver: stageObserver
             )
         case (.appKit, .drag):
             throw ComputerUseError.mouseEventUnavailable("appKit route does not support \(event)")
-        case (.webContent, .click(let button, let point)):
+        case (.webContent, .click(let button, let point, let count)):
             try await postWebContentClick(
                 button: button,
                 target: target,
                 point: point,
+                count: count,
                 stageObserver: stageObserver
             )
         case (.webContent, .drag(let button, let start, let end)):
@@ -94,23 +96,17 @@ struct MouseEventPoster: Sendable {
         button: BackgroundMouseButton,
         target: BackgroundMouseEventTarget,
         point: CGPoint,
+        count: Int,
         stageObserver: BackgroundMouseEventPostObserver? = nil
     ) async throws {
+        guard count > 0 else {
+            throw ComputerUseError.mouseEventUnavailable("click count must be greater than 0")
+        }
         let windowLocalPoint = target.windowLocalPoint(for: point)
         let move = try makeMouseEvent(
             type: .mouseMoved,
             windowId: target.windowId,
             clickCount: 0
-        )
-        let down = try makeMouseEvent(
-            type: button.downEventType,
-            windowId: target.windowId,
-            clickCount: 1
-        )
-        let up = try makeMouseEvent(
-            type: button.upEventType,
-            windowId: target.windowId,
-            clickCount: 1
         )
 
         try stamp(
@@ -118,25 +114,8 @@ struct MouseEventPoster: Sendable {
             pid: target.pid,
             windowId: target.windowId,
             button: button,
+            clickState: 0,
             mouseEventNumber: 2,
-            screenPoint: point,
-            windowLocalPoint: windowLocalPoint
-        )
-        try stamp(
-            down,
-            pid: target.pid,
-            windowId: target.windowId,
-            button: button,
-            mouseEventNumber: 3,
-            screenPoint: point,
-            windowLocalPoint: windowLocalPoint
-        )
-        try stamp(
-            up,
-            pid: target.pid,
-            windowId: target.windowId,
-            button: button,
-            mouseEventNumber: 3,
             screenPoint: point,
             windowLocalPoint: windowLocalPoint
         )
@@ -144,64 +123,113 @@ struct MouseEventPoster: Sendable {
         try postPublic(move, pid: target.pid)
         try await stageObserver?(.afterMouseMoved)
         sleep(15_000)
-        try postPublic(down, pid: target.pid)
-        try await stageObserver?(.afterTargetDown)
-        sleep(1_000)
-        try postPublic(up, pid: target.pid)
-        try await stageObserver?(.afterTargetUp)
+        for clickState in 1...count {
+            let down = try makeMouseEvent(
+                type: button.downEventType,
+                windowId: target.windowId,
+                clickCount: clickState
+            )
+            let up = try makeMouseEvent(
+                type: button.upEventType,
+                windowId: target.windowId,
+                clickCount: clickState
+            )
+            try stamp(
+                down,
+                pid: target.pid,
+                windowId: target.windowId,
+                button: button,
+                clickState: clickState,
+                mouseEventNumber: 3,
+                screenPoint: point,
+                windowLocalPoint: windowLocalPoint
+            )
+            try stamp(
+                up,
+                pid: target.pid,
+                windowId: target.windowId,
+                button: button,
+                clickState: clickState,
+                mouseEventNumber: 3,
+                screenPoint: point,
+                windowLocalPoint: windowLocalPoint
+            )
+            try postPublic(down, pid: target.pid)
+            try await stageObserver?(.afterTargetDown)
+            sleep(1_000)
+            try postPublic(up, pid: target.pid)
+            try await stageObserver?(.afterTargetUp)
+        }
     }
 
     private func postWebContentClick(
         button: BackgroundMouseButton,
         target: BackgroundMouseEventTarget,
         point: CGPoint,
+        count: Int,
         stageObserver: BackgroundMouseEventPostObserver? = nil
     ) async throws {
+        guard count > 0 else {
+            throw ComputerUseError.mouseEventUnavailable("click count must be greater than 0")
+        }
         let primer = try makeWebContentPrimer(target: target)
         let targetWindowLocalPoint = target.windowLocalPoint(for: point)
         let gestureTimestamp = uptimeSeconds()
 
         let move = try makeMouseEvent(type: .mouseMoved, windowId: target.windowId, clickCount: 0)
-        let targetDown = try makeMouseEvent(type: button.downEventType, windowId: target.windowId, clickCount: 1)
-        let targetUp = try makeMouseEvent(type: button.upEventType, windowId: target.windowId, clickCount: 1)
 
         try stamp(
             move,
             pid: target.pid,
             windowId: target.windowId,
             button: button,
+            clickState: 0,
             mouseEventNumber: 0,
             screenPoint: point,
             windowLocalPoint: targetWindowLocalPoint
         )
         try stampWebContentPrimer(primer, target: target)
-        try stamp(
-            targetDown,
-            pid: target.pid,
-            windowId: target.windowId,
-            button: button,
-            mouseEventNumber: 1,
-            screenPoint: point,
-            windowLocalPoint: targetWindowLocalPoint
-        )
-        try stamp(
-            targetUp,
-            pid: target.pid,
-            windowId: target.windowId,
-            button: button,
-            mouseEventNumber: 1,
-            screenPoint: point,
-            windowLocalPoint: targetWindowLocalPoint
-        )
 
         try postSkyLight(move, pid: target.pid, timestamp: gestureTimestamp)
         try await stageObserver?(.afterMouseMoved)
         try await postWebContentPrimer(primer, pid: target.pid, timestamp: gestureTimestamp, stageObserver: stageObserver)
-        try postSkyLight(targetDown, pid: target.pid, timestamp: gestureTimestamp)
-        try await stageObserver?(.afterTargetDown)
-        sleep(1_000)
-        try postSkyLight(targetUp, pid: target.pid, timestamp: gestureTimestamp)
-        try await stageObserver?(.afterTargetUp)
+        for clickState in 1...count {
+            let targetDown = try makeMouseEvent(
+                type: button.downEventType,
+                windowId: target.windowId,
+                clickCount: clickState
+            )
+            let targetUp = try makeMouseEvent(
+                type: button.upEventType,
+                windowId: target.windowId,
+                clickCount: clickState
+            )
+            try stamp(
+                targetDown,
+                pid: target.pid,
+                windowId: target.windowId,
+                button: button,
+                clickState: clickState,
+                mouseEventNumber: 1,
+                screenPoint: point,
+                windowLocalPoint: targetWindowLocalPoint
+            )
+            try stamp(
+                targetUp,
+                pid: target.pid,
+                windowId: target.windowId,
+                button: button,
+                clickState: clickState,
+                mouseEventNumber: 1,
+                screenPoint: point,
+                windowLocalPoint: targetWindowLocalPoint
+            )
+            try postSkyLight(targetDown, pid: target.pid, timestamp: gestureTimestamp)
+            try await stageObserver?(.afterTargetDown)
+            sleep(1_000)
+            try postSkyLight(targetUp, pid: target.pid, timestamp: gestureTimestamp)
+            try await stageObserver?(.afterTargetUp)
+        }
     }
 
     private func postWebContentDrag(
@@ -226,6 +254,7 @@ struct MouseEventPoster: Sendable {
             pid: target.pid,
             windowId: target.windowId,
             button: button,
+            clickState: 0,
             mouseEventNumber: 0,
             screenPoint: start,
             windowLocalPoint: startWindowLocalPoint
@@ -357,13 +386,14 @@ struct MouseEventPoster: Sendable {
         pid: pid_t,
         windowId: CGWindowID,
         button: BackgroundMouseButton,
+        clickState: Int = 1,
         mouseEventNumber: Int64,
         screenPoint: CGPoint,
         windowLocalPoint: CGPoint
     ) throws {
         event.setIntegerValueField(.mouseEventButtonNumber, value: button.buttonNumber)
         event.setIntegerValueField(.mouseEventSubtype, value: 3)
-        event.setIntegerValueField(.mouseEventClickState, value: 1)
+        event.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
         try stampWindowTarget(
             event,
             pid: pid,
