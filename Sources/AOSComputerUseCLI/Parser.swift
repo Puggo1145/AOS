@@ -20,6 +20,7 @@ struct ParsedCommand {
         case stopAppSession
         case mouseEventCommand(MouseEventCommandRequest)
         case keyboardEventCommand(KeyboardEventCommandRequest)
+        case axElementEventCommand(AXElementEventCommandRequest)
         case measureLeftClickWindowOrder(LeftClickWindowOrderMeasurementRequest)
         case observeWindowOrder(WindowOrderObservationRequest)
         case observeMouseEvents(MouseEventObservationRequest)
@@ -153,6 +154,20 @@ struct ParsedCommand {
                 windowId: windowId,
                 event: .hotkey(modifiers: modifiers, key: key)
             ))
+        case "post-ax-event":
+            let pid = try options.requiredPID("--pid")
+            let windowId = try options.requiredWindowID("--window-id")
+            let stateId = try options.requiredStateID("--state-id")
+            let elementIndex = try options.requiredElementIndex("--element-index")
+            let event = try options.requiredAXElementEvent()
+            try options.rejectUnused()
+            command = .axElementEventCommand(AXElementEventCommandRequest(
+                pid: pid,
+                windowId: windowId,
+                stateId: stateId,
+                elementIndex: elementIndex,
+                event: event
+            ))
         case "measure-left-click-window-order":
             let windowId = try options.requiredWindowID("--window-id")
             let coordinate = try options.requiredPoint("--coor")
@@ -270,6 +285,14 @@ private struct OptionCursor {
         return parsed
     }
 
+    mutating func optionalPositiveDouble(_ name: String) throws -> Double? {
+        guard let value = try takeValue(name) else { return nil }
+        guard let parsed = Double(value), parsed.isFinite, parsed > 0 else {
+            throw UsageError("invalid value for \(name): \(value)")
+        }
+        return parsed
+    }
+
     mutating func optionalDouble(_ name: String) throws -> Double? {
         guard let value = try takeValue(name) else { return nil }
         guard let parsed = Double(value) else {
@@ -311,6 +334,50 @@ private struct OptionCursor {
 
     mutating func requiredPublicString(_ name: String) throws -> String {
         try requiredString(name)
+    }
+
+    mutating func requiredStateID(_ name: String) throws -> StateID {
+        let raw = try requiredString(name)
+        guard !raw.isEmpty else {
+            throw UsageError("invalid value for \(name): empty")
+        }
+        return StateID(raw)
+    }
+
+    mutating func requiredElementIndex(_ name: String) throws -> Int {
+        let raw = try requiredString(name)
+        guard let parsed = Int(raw), parsed >= 0 else {
+            throw UsageError("invalid value for \(name): \(raw)")
+        }
+        return parsed
+    }
+
+    mutating func requiredAXElementEvent() throws -> AXElementEvent {
+        var events: [AXElementEvent] = []
+
+        if try takeFlag("--focus") {
+            events.append(.focus)
+        }
+        if let action = try optionalEnum("--action", AXElementAction.self) {
+            events.append(.action(action))
+        }
+        if let value = try optionalString("--set-value") {
+            events.append(.setValue(value))
+        }
+        if let selectedText = try optionalString("--set-selected-text") {
+            events.append(.setSelectedText(selectedText))
+        }
+        if let direction = try optionalEnum("--scroll", AXScrollDirection.self) {
+            let pages = try optionalPositiveDouble("--pages") ?? 1.0
+            events.append(.scroll(direction: direction, pages: pages))
+        }
+
+        guard events.count == 1, let event = events.first else {
+            throw UsageError(
+                "exactly one AX event option is required: --focus, --action, --set-value, --set-selected-text, or --scroll"
+            )
+        }
+        return event
     }
 
     mutating func optionalModifierList(_ name: String) throws -> [BackgroundKeyboardModifier] {
@@ -441,6 +508,14 @@ struct MouseEventCommandRequest: Sendable {
 struct KeyboardEventCommandRequest: Sendable {
     let windowId: CGWindowID
     let event: BackgroundKeyboardEvent
+}
+
+struct AXElementEventCommandRequest: Sendable {
+    let pid: pid_t
+    let windowId: CGWindowID
+    let stateId: StateID
+    let elementIndex: Int
+    let event: AXElementEvent
 }
 
 enum MouseEventCommand: Sendable, Equatable {

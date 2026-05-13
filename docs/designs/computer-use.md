@@ -3,8 +3,9 @@
 ## 当前边界
 
 Computer Use 现在保留 macOS app/window/snapshot/capture foundation，并提供
-in-process non-raising focus 与 background mouse event foundation。它不再暴露给
-Sidecar，也不包含 Sidecar tool 级 app 操作能力。
+in-process non-raising focus、background mouse/keyboard event foundation，以及
+基于 app-state `stateId + elementIndex` 的 AX element semantic event foundation。
+它不再暴露给 Sidecar，也不包含 Sidecar tool 级 app 操作能力。
 
 已移除：
 
@@ -36,9 +37,14 @@ Sources/AOSComputerUseKit/
     BackgroundMouseEvent.swift
     BackgroundMouseEventDelivery.swift
     MouseEventPoster.swift
+    BackgroundKeyboardEvent.swift
+    KeyboardEventPoster.swift
+    AXElementEvent.swift
+    AXFocusStealPreventer.swift
+    AXElementEventPoster.swift
 ```
 
-`AOSComputerUseKit` 仍依赖 `AOSAXSupport`，用于 shared AX primitives、Chromium / Electron web accessibility activation、`_AXUIElementGetWindow` bridging、locator support。`AOSOSSenseKit` 和 `AOSComputerUseKit` 可以共同依赖 `AOSAXSupport`，但不得互相依赖。
+`AOSComputerUseKit` 仍依赖 `AOSAXSupport`，用于 shared AX primitives、Chromium / Electron web accessibility activation、`_AXUIElementGetWindow` bridging。`AOSOSSenseKit` 和 `AOSComputerUseKit` 可以共同依赖 `AOSAXSupport`，但不得互相依赖。
 
 ## Public API
 
@@ -53,6 +59,7 @@ Sources/AOSComputerUseKit/
 - `currentAppSession() -> AppSessionResult`
 - `postMouseEvent(windowId:event:) -> WindowMouseEventResult`
 - `postKeyboardEvent(windowId:event:) -> WindowKeyboardEventResult`
+- `postEventToAXElement(pid:windowId:stateId:elementIndex:event:) -> AXElementEventResult`
 
 Diagnostics 不属于业务 surface，统一挂在 core 的 diagnostics namespace 下：
 
@@ -70,6 +77,15 @@ implementation 类型。Kit 对外公开的是 core、diagnostics namespace、�
 - `vision`：AX tree + screenshot
 - `ax`：仅 AX tree
 
+AX tree 输出对齐 Codex Computer Use 的操作视角：每个 rendered AX node 都有
+`elementIndex`，包括 container、text、image、toolbar、menu bar 等非 action 节点；
+`StateCache` 保存同一份 index -> live `AXUIElement` map。渲染层使用可读 role/action
+名称，例如 `text field (settable, string)`、`scroll area`、`Secondary Actions:
+Scroll Down`，同时保留 `ID`、`Description`、`Placeholder`、`Help` 等定位信息。
+为保持输出可信，AX focused summary 不输出；focus 状态容易停在结构容器上，错误摘要
+比缺省摘要更误导。菜单栏只输出 closed menu bar items，不展开 closed `AXMenu` child；
+多段静态文本组会合并成一条 text，低价值 `_NS:` id 和 implementation-only actions 会被过滤。
+
 `BackgroundMouseEvent` 是鼠标行为层，当前表达 click 和 drag。`BackgroundMouseEventDeliveryRoute`
 是投放路径层，当前将 AppKit route 和 web-content SkyLight route 分开。`ComputerUseCore`
 只编排 validation、app session、focus、event post、window-order guard 和 cleanup，不保留
@@ -83,7 +99,19 @@ frontmost window，按 session pid 重新枚举当前所有 layer-0 windows，�
 AppKit route 只支持 left/right click。Drag 仍是鼠标行为层的一种 event，但只由
 web-content route 承接。
 
-该 API 是 in-process Swift API。当前没有 JSON-RPC schema、Sidecar tool schema 或 Shell handler 绑定 background mouse event。Dev Mode 可以直接注入 `ComputerUseCore`，并通过 `core.diagnostics` 做本地 diagnostics。
+`postEventToAXElement` 是独立于 coordinate mouse/keyboard session 的 AX 语义投放路径，
+不进入 app session，也不复用 coordinate window-order guard。调用方必须传入同一次
+`getAppState` 返回的 `stateId` 与 `elementIndex`；core 只校验 `pid/windowId`
+ownership，并从 `StateCache` 取活体 `AXUIElement`。AX 投放层采用 CUA-style 专用
+focus suppression：先做 Chromium/Electron AX activation，再用临时 synthetic AX focus
+包住 `AXPerformAction` / `AXSetAttribute`，同时在 AX action 周期内监听
+`NSWorkspace.didActivateApplicationNotification`；如果目标 app 自激活，立即重新 activate
+原前台 app。AX scroll 先尝试目标元素 advertised 的 scroll action
+（如 `AXScrollDownByPage`），没有 action 时再寻找 `AXVerticalScrollBar` /
+`AXHorizontalScrollBar` 并写 scrollbar `AXValue`；没有明确 AX scroll 能力时直接失败，
+不自动退回 keyboard scroll。
+
+这些 API 是 in-process Swift API。当前没有 JSON-RPC schema、Sidecar tool schema 或 Shell handler 绑定 Computer Use event 投放。Dev Mode 可以直接注入 `ComputerUseCore`，并通过 `core.diagnostics` 做本地 diagnostics。
 
 ## CLI
 
@@ -140,6 +168,7 @@ interactive command palette 支持：
 - `observe-mouse-events`
 - `post-cursor`
 - `open-coor-test`
+- `post-ax-event`
 
 `left-click` and `right-click` accept `--count`; the default is 1. Counts above
 1 are delivered as repeated down/up pairs at the same coordinate, with the
@@ -153,6 +182,9 @@ windowId；session 内只记录 pid。后续 mouse / keyboard / trace / measurem
 post-cursor 命令每次都要求选择当前 windowId，并使用 current session pid 校验 window
 ownership。没有 active app session 时 event command 直接失败。`stop-app-session` 重新枚举
 session pid 下当前所有窗口，只对非 frontmost 的 session windows 执行 deactivate cleanup。
+`post-ax-event` 不使用 active app session；它要求显式传入 pid、windowId、stateId 和
+elementIndex，并投放 `--focus`、`--action`、`--set-value`、`--set-selected-text` 或
+`--scroll` 其中一种 AX semantic event。
 `focus-window`、trace 和 window-order observe 是 CLI diagnostics command，通过
 `core.diagnostics` 调用，不进入业务协议。
 

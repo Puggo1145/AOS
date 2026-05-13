@@ -615,6 +615,60 @@ struct ComputerUseCLITests {
         #expect(result.exitCode == 0)
     }
 
+    @Test("interactive post-ax-event posts through the command palette")
+    func interactivePostAXEventPostsThroughCommandPalette() async throws {
+        let fake = FakeComputerUseCore()
+        await fake.setApps([
+            AppInfo(
+                pid: 123,
+                bundleId: "com.example.Target",
+                name: "Target",
+                path: "/Applications/Target.app",
+                running: true,
+                active: false
+            ),
+        ])
+        await fake.setWindows([
+            WindowInfo(
+                id: 456,
+                pid: 123,
+                owner: "Target",
+                title: "Main",
+                bounds: WindowBounds(x: 10, y: 20, width: 500, height: 400),
+                zIndex: 1,
+                isOnScreen: true,
+                layer: 0
+            ),
+        ])
+        let io = FakeInteractiveCLIIO(
+            lines: ["state_abc", "7"],
+            keys: [
+                .character("p"), .character("o"), .character("s"), .character("t"), .character("-"), .character("a"),
+                .confirm,
+                .confirm,
+                .confirm,
+                .confirm,
+                .confirm,
+                .quit,
+            ]
+        )
+
+        let result = try await ComputerUseCLI.run(
+            arguments: ["interactive"],
+            core: fake,
+            permissions: FakePermissionClient(),
+            interactiveIO: io
+        )
+
+        #expect(await fake.requestedAXEventPID == 123)
+        #expect(await fake.requestedAXEventWindowID == 456)
+        #expect(await fake.requestedAXEventStateID == StateID("state_abc"))
+        #expect(await fake.requestedAXEventElementIndex == 7)
+        #expect(await fake.requestedAXEvent == .action(.press))
+        #expect(await io.status.contains { $0.contains("Prefix: post-a") && $0.contains("> post-ax-event") })
+        #expect(result.exitCode == 0)
+    }
+
     @Test("left-click requires a local coordinate")
     func leftClickRequiresLocalCoordinate() async throws {
         let fake = FakeComputerUseCore()
@@ -955,6 +1009,79 @@ struct ComputerUseCLITests {
         #expect(await fake.stopAppSessionCallCount == 0)
         #expect(result.stdout.contains("Posted keyboard event delete x5"))
         #expect(result.exitCode == 0)
+    }
+
+    @Test("post-ax-event posts an AX action by state element index")
+    func postAXEventPostsActionByStateElementIndex() async throws {
+        let fake = FakeComputerUseCore()
+
+        let result = try await ComputerUseCLI.run(
+            arguments: [
+                "post-ax-event",
+                "--pid", "123",
+                "--window-id", "456",
+                "--state-id", "state_abc",
+                "--element-index", "7",
+                "--action", "press",
+            ],
+            core: fake,
+            permissions: FakePermissionClient()
+        )
+
+        #expect(await fake.requestedAXEventPID == 123)
+        #expect(await fake.requestedAXEventWindowID == 456)
+        #expect(await fake.requestedAXEventStateID == StateID("state_abc"))
+        #expect(await fake.requestedAXEventElementIndex == 7)
+        #expect(await fake.requestedAXEvent == .action(.press))
+        #expect(result.stdout.contains("Posted AX element event press"))
+        #expect(result.stdout.contains("element 7"))
+        #expect(result.exitCode == 0)
+    }
+
+    @Test("post-ax-event parses semantic scroll pages")
+    func postAXEventParsesSemanticScrollPages() async throws {
+        let fake = FakeComputerUseCore()
+
+        let result = try await ComputerUseCLI.run(
+            arguments: [
+                "post-ax-event",
+                "--pid", "123",
+                "--window-id", "456",
+                "--state-id", "state_abc",
+                "--element-index", "0",
+                "--scroll", "down",
+                "--pages", "0.8",
+            ],
+            core: fake,
+            permissions: FakePermissionClient()
+        )
+
+        #expect(await fake.requestedAXEvent == .scroll(direction: .down, pages: 0.8))
+        #expect(result.stdout.contains("scroll down 0.8 page(s)"))
+        #expect(result.exitCode == 0)
+    }
+
+    @Test("post-ax-event rejects ambiguous event options")
+    func postAXEventRejectsAmbiguousEventOptions() async throws {
+        let fake = FakeComputerUseCore()
+
+        let result = try await ComputerUseCLI.run(
+            arguments: [
+                "post-ax-event",
+                "--pid", "123",
+                "--window-id", "456",
+                "--state-id", "state_abc",
+                "--element-index", "0",
+                "--focus",
+                "--action", "press",
+            ],
+            core: fake,
+            permissions: FakePermissionClient()
+        )
+
+        #expect(await fake.requestedAXEvent == nil)
+        #expect(result.stderr.contains("exactly one AX event option is required"))
+        #expect(result.exitCode == 64)
     }
 
     @Test("left-click trace is opt-in and writes diagnostics to stderr")
@@ -1927,6 +2054,11 @@ private actor FakeComputerUseCore: ComputerUseCoreClient, ComputerUseDiagnostics
     private(set) var requestedMouseEvents: [BackgroundMouseEvent] = []
     private(set) var requestedMouseEventTrace: BackgroundMouseEvent?
     private(set) var requestedKeyboardEvent: BackgroundKeyboardEvent?
+    private(set) var requestedAXEventPID: pid_t?
+    private(set) var requestedAXEventWindowID: CGWindowID?
+    private(set) var requestedAXEventStateID: StateID?
+    private(set) var requestedAXEventElementIndex: Int?
+    private(set) var requestedAXEvent: AXElementEvent?
     private var leftClickTrace: WindowMouseEventTraceResult?
     private var activeAppSession: AppSessionResult? = AppSessionResult(pid: 123)
     private var stoppedAppSession = AppSessionResult(pid: 0)
@@ -2073,6 +2205,27 @@ private actor FakeComputerUseCore: ComputerUseCoreClient, ComputerUseDiagnostics
         let pid = try await currentAppSession().pid
         requestedKeyboardEvent = event
         return WindowKeyboardEventResult(pid: pid, windowId: windowId, event: event)
+    }
+
+    func postEventToAXElement(
+        pid: pid_t,
+        windowId: CGWindowID,
+        stateId: StateID,
+        elementIndex: Int,
+        event: AXElementEvent
+    ) async throws -> AXElementEventResult {
+        requestedAXEventPID = pid
+        requestedAXEventWindowID = windowId
+        requestedAXEventStateID = stateId
+        requestedAXEventElementIndex = elementIndex
+        requestedAXEvent = event
+        return AXElementEventResult(
+            pid: pid,
+            windowId: windowId,
+            stateId: stateId,
+            elementIndex: elementIndex,
+            event: event
+        )
     }
 
 }

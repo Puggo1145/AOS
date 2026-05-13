@@ -352,6 +352,49 @@ struct KeyboardEventPostOutput: Encodable, ReadableOutput {
     }
 }
 
+struct AXElementEventPostOutput: Encodable, ReadableOutput {
+    let command = "post-ax-event"
+    let pid: pid_t
+    let windowId: CGWindowID
+    let stateId: String
+    let elementIndex: Int
+    let event: String
+
+    init(request _: AXElementEventCommandRequest, result: AXElementEventResult) {
+        self.pid = result.pid
+        self.windowId = result.windowId
+        self.stateId = result.stateId.raw
+        self.elementIndex = result.elementIndex
+        self.event = Self.eventName(result.event)
+    }
+
+    var readableText: String {
+        "Posted AX element event \(event) to element \(elementIndex) in state \(stateId), window \(windowId) (pid \(pid))."
+    }
+
+    private static func eventName(_ event: AXElementEvent) -> String {
+        switch event {
+        case .focus:
+            return "focus"
+        case .action(let action):
+            return action.rawValue
+        case .setValue:
+            return "set value"
+        case .setSelectedText:
+            return "set selected text"
+        case .scroll(let direction, let pages):
+            return "scroll \(direction.rawValue) \(Self.formatPages(pages)) page(s)"
+        }
+    }
+
+    private static func formatPages(_ pages: Double) -> String {
+        if pages.rounded(.towardZero) == pages {
+            return String(Int(pages))
+        }
+        return String(pages)
+    }
+}
+
 struct MouseEventTraceOutput: ReadableOutput {
     let trace: WindowMouseEventTraceResult
 

@@ -41,6 +41,10 @@ struct MouseEventArchitectureTests {
             "AppType",
             "AppTypeReason",
             "AppTypeResult",
+            "AXElementAction",
+            "AXElementEvent",
+            "AXElementEventResult",
+            "AXScrollDirection",
             "BackgroundKeyboardEvent",
             "BackgroundKeyboardModifier",
             "BackgroundMouseButton",
@@ -81,6 +85,7 @@ struct MouseEventArchitectureTests {
             "`currentAppSession() -> AppSessionResult`",
             "`postMouseEvent(windowId:event:) -> WindowMouseEventResult`",
             "`postKeyboardEvent(windowId:event:) -> WindowKeyboardEventResult`",
+            "`postEventToAXElement(pid:windowId:stateId:elementIndex:event:) -> AXElementEventResult`",
         ]
 
         for entry in expectedEntries {

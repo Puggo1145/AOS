@@ -104,6 +104,15 @@ public enum ComputerUseCLI {
                     event: request.event
                 )
                 return try success(KeyboardEventPostOutput(request: request, result: result), format: parsed.outputFormat)
+            case .axElementEventCommand(let request):
+                let result = try await core.postEventToAXElement(
+                    pid: request.pid,
+                    windowId: request.windowId,
+                    stateId: request.stateId,
+                    elementIndex: request.elementIndex,
+                    event: request.event
+                )
+                return try success(AXElementEventPostOutput(request: request, result: result), format: parsed.outputFormat)
             case .measureLeftClickWindowOrder(let request):
                 let session = try await core.currentAppSession()
                 let runs = try await measureLeftClickWindowOrder(

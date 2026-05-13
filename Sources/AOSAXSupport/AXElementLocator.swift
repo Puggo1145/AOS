@@ -5,14 +5,12 @@ import Foundation
 
 // MARK: - AXElementLocator
 //
-// Shared locator signature used by OS Sense and Computer Use to describe the
-// same AX element across two independently-timed snapshots. This is not a
-// durable OS handle: it is a deterministic fingerprint over stable app/window
-// identity, the element's ancestor path, sibling ordinal, and attributes.
-// Volatile metadata such as window title and frame intentionally stays out of
-// the hash so title edits or window moves do not break context ↔ app-state
-// correlation. Consumers still resolve it against a fresh app-state snapshot
-// before issuing operations.
+// Locator signature used by OS Sense to describe the same AX element across
+// independently-timed snapshots. This is not a durable OS handle: it is a
+// deterministic fingerprint over stable app/window identity, the element's
+// ancestor path, sibling ordinal, and attributes. Volatile metadata such as
+// window title and frame intentionally stays out of the hash so title edits
+// or window moves do not break context correlation.
 
 public struct AXElementLocator: Equatable, Sendable {
     public struct PathComponent: Equatable, Sendable {

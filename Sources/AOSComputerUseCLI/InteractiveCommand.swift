@@ -202,6 +202,35 @@ enum InteractiveCLICommandCatalog {
         command("grant-permissions") { _ in
             ["grant-permissions"]
         },
+        command("post-ax-event") { context in
+            let target = try await promptTarget(context)
+            var arguments = [
+                "post-ax-event",
+                "--pid", "\(target.pid)",
+                "--window-id", "\(target.windowId)",
+                "--state-id", try await context.io.promptRequired("State ID: "),
+                "--element-index", try await context.io.promptRequired("Element index: "),
+            ]
+            let eventKind = try await select("AX event", options: AXElementEventKind.allCases, context: context)
+            switch eventKind {
+            case .focus:
+                arguments.append("--focus")
+            case .action:
+                let action = try await select("AX action", options: AXElementAction.allCases, context: context)
+                arguments += ["--action", action.rawValue]
+            case .setValue:
+                arguments += ["--set-value", try await context.io.promptRequired("Value: ")]
+            case .setSelectedText:
+                arguments += ["--set-selected-text", try await context.io.promptRequired("Selected text: ")]
+            case .scroll:
+                let direction = try await select("Scroll direction", options: AXScrollDirection.allCases, context: context)
+                arguments += ["--scroll", direction.rawValue]
+                if let pages = try await context.io.promptOptional("Pages (empty for 1): ") {
+                    arguments += ["--pages", pages]
+                }
+            }
+            return arguments
+        },
     ]
 
     private static func command(
@@ -415,6 +444,29 @@ extension BackgroundMouseButton: CaseIterable, InteractiveMenuValue {
 
 extension MouseEventTapLocation: CaseIterable, InteractiveMenuValue {
     public static var allCases: [MouseEventTapLocation] { [.all, .hid, .session, .annotated] }
+    var interactiveTitle: String { rawValue }
+}
+
+extension AXElementAction: CaseIterable, InteractiveMenuValue {
+    public static var allCases: [AXElementAction] {
+        [.press, .showMenu, .pick, .confirm, .cancel, .open, .increment, .decrement, .scrollToVisible]
+    }
+
+    var interactiveTitle: String { rawValue }
+}
+
+extension AXScrollDirection: CaseIterable, InteractiveMenuValue {
+    public static var allCases: [AXScrollDirection] { [.up, .down, .left, .right] }
+    var interactiveTitle: String { rawValue }
+}
+
+private enum AXElementEventKind: String, CaseIterable, InteractiveMenuValue {
+    case action
+    case focus
+    case setValue
+    case setSelectedText
+    case scroll
+
     var interactiveTitle: String { rawValue }
 }
 

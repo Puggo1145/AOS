@@ -31,6 +31,14 @@ public protocol ComputerUseCoreClient: Sendable {
         windowId: CGWindowID,
         event: BackgroundKeyboardEvent
     ) async throws -> WindowKeyboardEventResult
+    /// Posts a semantic AX event to an element from a cached app-state snapshot.
+    func postEventToAXElement(
+        pid: pid_t,
+        windowId: CGWindowID,
+        stateId: StateID,
+        elementIndex: Int,
+        event: AXElementEvent
+    ) async throws -> AXElementEventResult
 }
 
 public protocol ComputerUseDiagnosticsClient: Sendable {

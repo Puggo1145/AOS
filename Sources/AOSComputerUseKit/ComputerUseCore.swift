@@ -234,6 +234,7 @@ public enum ComputerUseError: Error, CustomStringConvertible, Sendable {
     case focusUnavailable(String)
     case mouseEventUnavailable(String)
     case keyboardEventUnavailable(String)
+    case axElementEventUnavailable(String)
     case appSessionUnavailable(String)
     case diagnosticsUnavailable(String)
     case payloadTooLarge(bytes: Int, limit: Int)
@@ -257,6 +258,8 @@ public enum ComputerUseError: Error, CustomStringConvertible, Sendable {
             return "mouse event unavailable: \(message)"
         case .keyboardEventUnavailable(let message):
             return "keyboard event unavailable: \(message)"
+        case .axElementEventUnavailable(let message):
+            return "AX element event unavailable: \(message)"
         case .appSessionUnavailable(let message):
             return "app session unavailable: \(message)"
         case .diagnosticsUnavailable(let message):
@@ -323,6 +326,10 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
         BackgroundKeyboardEvent,
         BackgroundKeyboardEventTarget
     ) async throws -> Void
+    private let postAXElementEventToTarget: @Sendable (
+        AXElementEvent,
+        AXElementEventTarget
+    ) async throws -> Void
     private var activeAppSession: ActiveAppSession?
     private var nextAppSessionId: UInt64 = 1
 
@@ -331,6 +338,7 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
         let windowFocuser = SkyLightWindowFocuser.live()
         let mousePoster = MouseEventPoster.live()
         let keyboardPoster = KeyboardEventPoster.live()
+        let axElementEventPoster = AXElementEventPoster(webAccessibilityActivator: webAccessibilityActivator)
         let mouseDeliveryClassifier = BackgroundMouseEventDeliveryClassifier()
         let deliveryRouteForPID: @Sendable (pid_t) -> BackgroundMouseEventDeliveryRoute = { pid in
             let app = NSRunningApplication(processIdentifier: pid)
@@ -388,6 +396,9 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
             },
             postKeyboardEvent: { event, target in
                 try keyboardPoster.post(event, to: target)
+            },
+            postAXElementEvent: { event, target in
+                try await axElementEventPoster.post(event, to: target)
             }
         )
     }
@@ -430,6 +441,12 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
             BackgroundKeyboardEventTarget
         ) async throws -> Void = { _, _ in
             throw ComputerUseError.keyboardEventUnavailable("postKeyboardEvent dependency was not configured")
+        },
+        postAXElementEvent: @escaping @Sendable (
+            AXElementEvent,
+            AXElementEventTarget
+        ) async throws -> Void = { _, _ in
+            throw ComputerUseError.axElementEventUnavailable("postAXElementEvent dependency was not configured")
         }
     ) {
         let snapshot = snapshot ?? AccessibilitySnapshot(webAccessibilityActivator: webAccessibilityActivator)
@@ -454,6 +471,7 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
         self.sleepForActiveStateGuard = sleepForActiveStateGuard
         self.postMouseEventToRoute = postMouseEvent
         self.postKeyboardEventToPid = postKeyboardEvent
+        self.postAXElementEventToTarget = postAXElementEvent
     }
 
     public func listApps(mode: AppListMode) -> [AppInfo] {
@@ -595,6 +613,39 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
         event: BackgroundKeyboardEvent
     ) async throws -> WindowKeyboardEventResult {
         try await performPostKeyboardEvent(windowId: windowId, event: event)
+    }
+
+    /// Posts a semantic AX event to an element from a prior app-state snapshot.
+    public func postEventToAXElement(
+        pid: pid_t,
+        windowId: CGWindowID,
+        stateId: StateID,
+        elementIndex: Int,
+        event: AXElementEvent
+    ) async throws -> AXElementEventResult {
+        try validateOwnership(pid: pid, windowId: windowId)
+        try validateAXElementEvent(event)
+        let element = try await cache.lookup(
+            pid: pid,
+            windowId: windowId,
+            stateId: stateId,
+            elementIndex: elementIndex
+        )
+        let target = AXElementEventTarget(
+            pid: pid,
+            windowId: windowId,
+            stateId: stateId,
+            elementIndex: elementIndex,
+            element: element
+        )
+        try await postAXElementEventToTarget(event, target)
+        return AXElementEventResult(
+            pid: pid,
+            windowId: windowId,
+            stateId: stateId,
+            elementIndex: elementIndex,
+            event: event
+        )
     }
 
     private func performPostMouseEvent(
@@ -754,6 +805,21 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
                     "hotkey requires at least one modifier"
                 )
             }
+        }
+    }
+
+    private func validateAXElementEvent(_ event: AXElementEvent) throws {
+        switch event {
+        case .setValue(let value), .setSelectedText(let value):
+            guard !value.isEmpty else {
+                throw ComputerUseError.axElementEventUnavailable("AX text value cannot be empty")
+            }
+        case .scroll(_, let pages):
+            guard pages.isFinite, pages > 0 else {
+                throw ComputerUseError.axElementEventUnavailable("scroll pages must be finite and greater than 0")
+            }
+        case .action, .focus:
+            break
         }
     }
 
