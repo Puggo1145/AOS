@@ -21,16 +21,20 @@ ownership:
 Entry point:
 
 ```swift
-try await ComputerUseCore.postLeftClick(pid: pid, windowId: windowId, point: screenPoint)
+try await ComputerUseCore.postMouseEvent(
+    pid: pid,
+    windowId: windowId,
+    event: .click(button: .left, point: screenPoint)
+)
 ```
 
 The CLI accepts window-local `--coor x,y`, resolves the target window bounds,
-and converts that local coordinate to the screen-space `point` consumed by
-`ComputerUseCore`.
+converts that local coordinate to the screen-space `point`, and constructs
+`BackgroundMouseEvent.click(button: .left, point:)` for `ComputerUseCore`.
 
 Production flow:
 
-1. `ComputerUseCore.performPostLeftClick` validates pid/window ownership and
+1. `ComputerUseCore.performPostMouseEvent` validates pid/window ownership and
    rejects points outside the target window.
 2. It snapshots the original front layer-0 window.
 3. It creates `WindowOrderGuardian` from the current visible window order.
@@ -45,7 +49,7 @@ Production flow:
 
 ## Route Selection
 
-`MouseClickDeliveryClassifier` selects the `webContent` route from Chromium /
+`BackgroundMouseEventDeliveryClassifier` selects the `webContent` route from Chromium /
 Electron runtime evidence first, then falls back to known browser or Electron
 bundle identifiers. The
 runtime checks are:
@@ -100,11 +104,12 @@ user's original front window.
 
 ## Web Content Mouse Sequence
 
-The working delivery recipe is implemented in
-`MouseEventPoster.postWebContentLeftClick`.
+The working delivery recipe is implemented in `MouseEventPoster`'s
+web-content SkyLight route.
 
-All events are created as `NSEvent.mouseEvent`, bridged to `CGEvent`, stamped
-with target pid/window fields, then posted through SkyLight:
+Mouse events are created as `NSEvent.mouseEvent` and bridged to `CGEvent`.
+All events are stamped with target pid/window fields, then posted through
+SkyLight:
 
 ```text
 SLEventPostToPid(pid, event)
@@ -114,7 +119,8 @@ Each event is stamped with:
 
 - `event.location` = screen coordinate for that event.
 - `CGEventSetWindowLocation` = window-local coordinate.
-- `.mouseEventButtonNumber` = 0.
+- `.mouseEventButtonNumber` = the event button number. The off-edge primer is
+  always a left-button pair.
 - `.mouseEventSubtype` = 3.
 - `.mouseEventClickState` = 1.
 - `.mouseEventWindowUnderMousePointer` = target window id.
@@ -135,6 +141,9 @@ leftMouseDown(target point)
 sleep 1ms
 leftMouseUp(target point)
 ```
+
+For right-click and drag, the target down/drag/up events use the requested
+button while the primer remains left-button.
 
 The primer point is intentionally just outside the left edge of the target
 window while still stamped as target-window local state:
@@ -255,13 +264,18 @@ run, not total duration.
 - `Sources/AOSComputerUseKit/ComputerUseCore.swift`
   - Orchestrates validation, target focus, mouse dispatch, cleanup, and the
     active-state guard.
+- `Sources/AOSComputerUseKit/Input/BackgroundMouseEvent.swift`
+  - Defines coordinate mouse event intent, independent from delivery path.
+- `Sources/AOSComputerUseKit/Input/BackgroundMouseEventDelivery.swift`
+  - Classifies AppKit vs web-content mouse event delivery routes.
 - `Sources/AOSComputerUseKit/Input/MouseEventPoster.swift`
-  - Implements web-content route classification, event stamping, and the
-    SkyLight mouse sequence.
+  - Implements event stamping, AppKit event posting, and the SkyLight
+    web-content mouse-event sequence.
 - `Sources/AOSComputerUseKit/Windows/SkyLightWindowFocuser.swift`
   - Posts target-side focus/defocus event records without raising.
 - `Sources/AOSComputerUseKit/Windows/WindowOrderGuardian.swift`
   - Defines protected windows and protected-covered diagnostics.
 - `Sources/AOSComputerUseCLI/ComputerUseCLI.swift`
-  - Provides `post-left-click`, `post-left-click --trace`,
-    `observe-window-order`, and `measure-left-click-window-order`.
+  - Provides `left-click`, `right-click`, web-content-only `drag`, `--trace`,
+    `observe-window-order`, and `measure-left-click-window-order` diagnostics
+    for this path.

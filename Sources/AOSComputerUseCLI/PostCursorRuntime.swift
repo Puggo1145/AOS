@@ -37,9 +37,9 @@ public struct LivePostCursorIO: PostCursorIO {
                         }
                     }
                     throw PostCursorRuntimeError("unsupported escape key sequence ESC \(second) \(third)")
-                case 0x41, 0x61:
-                    return .click
-                case 0x42, 0x62:
+                case 0x0A, 0x0D:
+                    return .confirm
+                case 0x51, 0x71:
                     return .quit
                 default:
                     continue

@@ -53,7 +53,7 @@ private enum SLSWindowOrderChangeObservation {
     ) throws -> WindowOrderChangeObservation {
         let uniqueIds = Array(Set(windowIds)).sorted()
         guard !uniqueIds.isEmpty else {
-            throw ComputerUseError.clickUnavailable("window-order observer requires at least one window id")
+            throw ComputerUseError.mouseEventUnavailable("window-order observer requires at least one window id")
         }
 
         let symbols = try SLSWindowOrderSymbols.load()
@@ -72,7 +72,7 @@ private enum SLSWindowOrderChangeObservation {
         )
         guard registerStatus == 0 else {
             Unmanaged<SLSWindowOrderNotificationBox>.fromOpaque(context).release()
-            throw ComputerUseError.clickUnavailable(
+            throw ComputerUseError.mouseEventUnavailable(
                 "SLSRegisterConnectionNotifyProc failed for window-order event \(windowOrderedEvent): CGError \(registerStatus)"
             )
         }
@@ -93,7 +93,7 @@ private enum SLSWindowOrderChangeObservation {
                 context
             )
             Unmanaged<SLSWindowOrderNotificationBox>.fromOpaque(context).release()
-            throw ComputerUseError.clickUnavailable(
+            throw ComputerUseError.mouseEventUnavailable(
                 "SLSRequestNotificationsForWindows failed for \(rawWindowIds): CGError \(requestStatus)"
             )
         }
@@ -152,7 +152,7 @@ private final class SLSWindowOrderObservationToken: @unchecked Sendable {
 
         try await box.drain()
         guard removeStatus == 0 else {
-            throw ComputerUseError.clickUnavailable(
+            throw ComputerUseError.mouseEventUnavailable(
                 "SLSRemoveConnectionNotifyProc failed for window-order event \(event): CGError \(removeStatus)"
             )
         }
@@ -297,10 +297,10 @@ private struct WindowOrderPrivateFrameworkHandles {
     static func load() throws -> WindowOrderPrivateFrameworkHandles {
         let path = "/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight"
         guard dlopen(path, RTLD_LAZY) != nil else {
-            throw ComputerUseError.clickUnavailable("failed to load private framework at \(path)")
+            throw ComputerUseError.mouseEventUnavailable("failed to load private framework at \(path)")
         }
         guard let defaultHandle = UnsafeMutableRawPointer(bitPattern: -2) else {
-            throw ComputerUseError.clickUnavailable("failed to access RTLD_DEFAULT symbol scope")
+            throw ComputerUseError.mouseEventUnavailable("failed to access RTLD_DEFAULT symbol scope")
         }
         return WindowOrderPrivateFrameworkHandles(defaultHandle: defaultHandle)
     }
@@ -309,6 +309,6 @@ private struct WindowOrderPrivateFrameworkHandles {
         if let pointer = dlsym(defaultHandle, name) {
             return unsafeBitCast(pointer, to: T.self)
         }
-        throw ComputerUseError.clickUnavailable("missing private symbol \(name)")
+        throw ComputerUseError.mouseEventUnavailable("missing private symbol \(name)")
     }
 }

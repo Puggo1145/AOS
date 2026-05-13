@@ -19,7 +19,7 @@ struct WindowOrderGuardian: Sendable {
     init(targetWindowId: CGWindowID, beforeWindows: [WindowInfo]) throws {
         let orderedWindows = Self.guardableWindows(beforeWindows)
         guard let targetIndex = orderedWindows.firstIndex(where: { $0.id == targetWindowId }) else {
-            throw ComputerUseError.clickUnavailable(
+            throw ComputerUseError.mouseEventUnavailable(
                 "target window \(targetWindowId) is not visible; cannot guard window order"
             )
         }
@@ -68,7 +68,7 @@ struct WindowOrderGuardian: Sendable {
     private func targetIndex(in currentWindows: [WindowInfo]) throws -> Int {
         let orderedWindows = Self.guardableWindows(currentWindows)
         guard let targetIndex = orderedWindows.firstIndex(where: { $0.id == targetWindowId }) else {
-            throw ComputerUseError.clickUnavailable(
+            throw ComputerUseError.mouseEventUnavailable(
                 "target window \(targetWindowId) disappeared during window-order guard"
             )
         }

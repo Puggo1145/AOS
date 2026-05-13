@@ -1,7 +1,7 @@
 # Background Click
 
-本文记录 AOS 当前已经验证稳定的 general AppKit background click 链路。
-目标是在不影响用户当前前台窗口的情况下，对后台目标窗口投放鼠标左键：
+本文记录 AOS 当前已经验证稳定的 general AppKit background mouse event 链路。
+目标是在不影响用户当前前台窗口的情况下，对后台目标窗口投放坐标鼠标事件：
 
 - 目标窗口可以获得 AppKit 输入路由所需的 focus / active 状态。
 - 用户当前 frontmost app / window 不被切走。
@@ -45,7 +45,7 @@ SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: focus))
 - 不再向用户当前 front process 发送 defocus event。早期 CUA/yabai 风格
   `front defocus + target focus` 能帮助某些 mouse dispatch，但会让用户当前窗口
   出现 deactive / refocus 闪动。
-- 当前 click 链路不再有单独的 `SkyLightMouseClickFocuser`。`post-left-click`
+- 当前 mouse event 链路不再有单独的 mouse-specific focuser。`left-click`
   先走这条标准 focus-without-raise 路径。
 - 当前 standard target-side focus 已在多个 App 上验证：目标能进入输入路由状态，
   同时用户 frontmost app 保持不变。
@@ -64,10 +64,10 @@ SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: focus))
 CGEvent.postToPid(pid)
 ```
 
-投放顺序：
+AppKit route 只支持左/右键 click。投放顺序：
 
 ```text
-mouseMoved -> leftMouseDown -> leftMouseUp
+mouseMoved -> mouseDown(button) -> mouseUp(button)
 ```
 
 每个 event 都带上目标窗口语义：
@@ -159,7 +159,7 @@ pid-scoped mouse event 投放后，目标窗口可能停留在“后台 active/k
 不会改变 `NSWorkspace.frontmostApplication`，但如果下一次继续对这个 active target 投放
 鼠标事件，WindowServer / AppKit 可能瞬间把它补偿 raise 到前台，造成闪动。
 
-因此 `postLeftClick` 在完整投放链路收口时执行 target-side deactive：
+因此 `ComputerUseCore.postMouseEvent` 在完整投放链路收口时执行 target-side deactive：
 
 ```text
 SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: defocus))
@@ -203,11 +203,15 @@ SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: defocus))
 向窗口 local coordinate 投放：
 
 ```zsh
-.build/debug/AOSComputerUseCLI post-left-click --pid <pid> --window-id <windowId> --coor <x,y>
+.build/debug/AOSComputerUseCLI left-click --pid <pid> --window-id <windowId> --coor <x,y>
+.build/debug/AOSComputerUseCLI right-click --pid <pid> --window-id <windowId> --coor <x,y>
+.build/debug/AOSComputerUseCLI drag --pid <pid> --window-id <windowId> --from <x,y> --to <x,y> --button left
 ```
 
-`--coor` 是目标窗口 top-left local point，CLI 会转换为 screen point 后走同一条
-background click core path。
+CLI 坐标参数是目标窗口 top-left local point，CLI 会转换为 screen point，然后构造
+对应的 `BackgroundMouseEvent` 走同一条 background mouse event core path。
+`drag` 是 web-content-only command；AppKit route 只接受 `left-click` 和
+`right-click`。
 
 ## Validation Targets
 
@@ -248,15 +252,28 @@ background click core path。
   - standard target-side focus record for mouse routing and explicit focus.
   - target-side defocus record for post-dispatch background active cleanup.
 
+- `BackgroundMouseEvent`
+  - describes coordinate mouse behavior separately from the delivery path.
+  - currently models click and drag intent.
+
 - `MouseEventPoster`
-  - create/stamp/post AppKit-route pid-scoped move/down/up events.
+  - creates/stamps/posts pid-scoped mouse events for the selected route.
+  - AppKit route currently posts left/right click through public
+    `CGEvent.postToPid`.
+  - Web-content route posts left/right click and drag sequences through
+    SkyLight, preserving the evidence-backed off-edge left primer before the
+    target event.
 
 - `WindowOrderGuardian`
   - capture protected overlapping windows before click.
   - report whether target crossed a previously covering protected window.
 
-- `ComputerUseCore.postLeftClick`
-  - orchestrates focus, event post, immediate guard, delayed guard, target deactive cleanup.
+- `ComputerUseCore.postMouseEvent`
+  - orchestrates validation, focus, event post, immediate guard, delayed guard,
+    and target deactive cleanup for background mouse events.
 
 - `AOSComputerUseCLI`
-  - exposes `post-left-click` and `open-coor-test`.
+  - exposes the current diagnostic commands, including `left-click`,
+    `right-click`, `drag`, and `open-coor-test`.
+  - mouse-event commands construct `BackgroundMouseEvent` values before calling
+    `ComputerUseCore.postMouseEvent`.

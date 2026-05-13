@@ -27,7 +27,7 @@ older entries in this archive to override that path.
 - Chromium and Electron apps use a dedicated SkyLight route:
   `mouseMoved(target) -> primer down/up(left-edge outside target) ->
   target down/up`.
-- Current diagnostics include `post-left-click --trace`,
+- Current diagnostics include `left-click --trace`,
   `observe-window-order`, and `measure-left-click-window-order`.
 - Removed experiment-only CLI options and profile enums must stay removed.
 
@@ -146,7 +146,7 @@ than "final rank unchanged" but looser than "no rank ever changes": the target
 must not become frontmost, must not become active, and must not cover protected
 windows.
 
-Passive AOS observation during the current AOS Chromium `post-left-click`
+Passive AOS observation during the current AOS Chromium `left-click`
 shows the failing shape clearly:
 
 - the external observer saw Chrome become target rank `1` at about `2048ms`;
@@ -163,7 +163,7 @@ protected-window violation, while AOS's Chromium click crosses both `target
 rank 1` and `target active true` shortly after dispatch. One caveat in the
 two-terminal run: the external observer's `max protected-covered 0` can be a
 false negative because the user switched from the observer terminal to a second
-Ghostty window before launching `post-left-click`; the command-local trace
+Ghostty window before launching `left-click`; the command-local trace
 sampled the actual front Ghostty window at click time and reported
 `protected-covered 1`.
 
@@ -171,7 +171,7 @@ Implication for AOS:
 
 - AOS already has the Chromium AX enablement primitive
   (`AXManualAccessibility`, `AXEnhancedUserInterface`, retained AX observer),
-  but the current `post-left-click` path does not use AX actions or synthetic
+  but the current `left-click` path does not use AX actions or synthetic
   AX focus. It always tries the pixel mouse path.
 - AOS's `WindowOrderGuardian` is command-scoped. It samples protected windows
   before the click, repairs after selected event stages, then polls for a fixed
@@ -324,7 +324,7 @@ specifically checking the annotated stream's raw field `0`, raw field `58`,
 primer location, target click-state sequence, and the simultaneous
 window-order violation.
 
-The same all-tap observer on AOS's current Chromium `post-left-click` showed
+The same all-tap observer on AOS's current Chromium `left-click` showed
 the same annotated-only delivery layer, but a different event shape:
 
 - AOS emitted five annotated events:

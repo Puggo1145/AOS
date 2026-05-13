@@ -3,165 +3,12 @@ import CoreGraphics
 import Darwin
 import Foundation
 
-public enum MouseClickPostStage: String, Sendable, Equatable {
-    case afterMouseMoved
-    case afterPrimerDown
-    case afterPrimerUp
-    case afterPrimerGap
-    case afterTargetDown
-    case afterTargetUp
-}
-
-public typealias MouseClickPostObserver = @Sendable (MouseClickPostStage) async throws -> Void
-
-/// Mouse-event delivery route selected for a target process.
-enum MouseClickDeliveryRoute: Sendable, Equatable {
-    case appKit
-    case webContent
-
-    var appType: AppType {
-        switch self {
-        case .appKit:
-            return .appKit
-        case .webContent:
-            return .webContent
-        }
-    }
-}
-
-struct MouseClickDeliveryClassification: Sendable, Equatable {
-    let route: MouseClickDeliveryRoute
-    let reason: AppTypeReason
-}
-
-/// Classifies targets that need the web-content SkyLight mouse delivery recipe.
-struct MouseClickDeliveryClassifier: Sendable {
-    typealias FileExists = @Sendable (String) -> Bool
-    typealias ContainsChromiumRuntimeResources = @Sendable (URL) -> Bool
-
-    private let fileExists: FileExists
-    private let containsChromiumRuntimeResources: ContainsChromiumRuntimeResources
-
-    init(
-        fileExists: @escaping FileExists = { FileManager.default.fileExists(atPath: $0) },
-        containsChromiumRuntimeResources: @escaping ContainsChromiumRuntimeResources = {
-            Self.bundleContainsChromiumRuntimeResources(bundleURL: $0)
-        }
-    ) {
-        self.fileExists = fileExists
-        self.containsChromiumRuntimeResources = containsChromiumRuntimeResources
-    }
-
-    func deliveryRoute(
-        bundleIdentifier: String?,
-        bundleURL: URL?
-    ) -> MouseClickDeliveryRoute {
-        classification(bundleIdentifier: bundleIdentifier, bundleURL: bundleURL).route
-    }
-
-    func classification(
-        bundleIdentifier: String?,
-        bundleURL: URL?
-    ) -> MouseClickDeliveryClassification {
-        if let bundleURL {
-            let electronFrameworkPath = bundleURL
-                .appendingPathComponent("Contents/Frameworks/Electron Framework.framework")
-                .path
-            if fileExists(electronFrameworkPath) {
-                return MouseClickDeliveryClassification(route: .webContent, reason: .electronFramework)
-            }
-
-            let chromiumEmbeddedFrameworkPath = bundleURL
-                .appendingPathComponent("Contents/Frameworks/Chromium Embedded Framework.framework")
-                .path
-            if fileExists(chromiumEmbeddedFrameworkPath) {
-                return MouseClickDeliveryClassification(route: .webContent, reason: .chromiumEmbeddedFramework)
-            }
-
-            if containsChromiumRuntimeResources(bundleURL) {
-                return MouseClickDeliveryClassification(route: .webContent, reason: .chromiumRuntimeResources)
-            }
-        }
-
-        if bundleIdentifier == "com.apple.Safari" {
-            return MouseClickDeliveryClassification(route: .webContent, reason: .safariBundleId)
-        }
-
-        if let bundleIdentifier,
-           Self.chromiumFamilyBundleIdentifiers.contains(bundleIdentifier)
-        {
-            return MouseClickDeliveryClassification(route: .webContent, reason: .chromiumBrowserBundleId)
-        }
-
-        if let bundleIdentifier,
-           Self.knownElectronBundleIdentifiers.contains(bundleIdentifier)
-        {
-            return MouseClickDeliveryClassification(route: .webContent, reason: .knownElectronBundleId)
-        }
-
-        return MouseClickDeliveryClassification(route: .appKit, reason: .appKitDefault)
-    }
-
-    private static let chromiumFamilyBundleIdentifiers: Set<String> = [
-        "com.google.Chrome",
-        "com.google.Chrome.canary",
-        "com.microsoft.edgemac",
-        "com.brave.Browser",
-        "company.thebrowser.Browser",
-        "com.vivaldi.Vivaldi",
-        "com.operasoftware.Opera",
-    ]
-
-    private static let knownElectronBundleIdentifiers: Set<String> = [
-        "com.tinyspeck.slackmacgap",
-        "com.microsoft.VSCode",
-        "com.microsoft.VSCodeInsiders",
-        "com.discordapp.Discord",
-        "notion.id",
-        "com.figma.Desktop",
-        "com.tencent.qq",
-    ]
-
-    private static let chromiumRuntimeResourceMarkers: Set<String> = [
-        "chrome_100_percent.pak",
-        "chrome_200_percent.pak",
-        "icudtl.dat",
-        "resources.pak",
-        "v8_context_snapshot.arm64.bin",
-        "v8_context_snapshot.x86_64.bin",
-    ]
-
-    private static func bundleContainsChromiumRuntimeResources(bundleURL: URL) -> Bool {
-        let frameworksURL = bundleURL.appendingPathComponent("Contents/Frameworks", isDirectory: true)
-        guard let enumerator = FileManager.default.enumerator(
-            at: frameworksURL,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return false
-        }
-
-        var matchedMarkers: Set<String> = []
-        for case let url as URL in enumerator {
-            let marker = url.lastPathComponent
-            guard chromiumRuntimeResourceMarkers.contains(marker) else {
-                continue
-            }
-            matchedMarkers.insert(marker)
-            if matchedMarkers.count >= 3 {
-                return true
-            }
-        }
-        return false
-    }
-}
-
 /// Posts pid-scoped mouse events through either the public AppKit route or the
 /// web-content SkyLight route.
 ///
-/// Both routes construct NSEvent-bridged CGEvents, stamp window-local
-/// coordinates and private SkyLight fields, and rely on the core to run the
-/// active-state guard after observable post stages.
+/// Routes create CGEvents, stamp window-local coordinates and private SkyLight
+/// fields, and rely on the core to run the active-state guard after observable
+/// post stages.
 struct MouseEventPoster: Sendable {
     typealias PostEventToPID = @Sendable (CGEvent, pid_t) throws -> Void
     typealias SetWindowLocation = @Sendable (CGEvent, CGPoint) throws -> Void
@@ -209,177 +56,274 @@ struct MouseEventPoster: Sendable {
         )
     }
 
-    func postLeftClick(
-        pid: pid_t,
-        windowId: CGWindowID,
-        point: CGPoint,
-        windowBounds: WindowBounds,
-        deliveryRoute: MouseClickDeliveryRoute = .appKit,
-        stageObserver: MouseClickPostObserver? = nil
+    func post(
+        _ event: BackgroundMouseEvent,
+        to target: BackgroundMouseEventTarget,
+        deliveryRoute: BackgroundMouseEventDeliveryRoute = .appKit,
+        stageObserver: BackgroundMouseEventPostObserver? = nil
     ) async throws {
-        switch deliveryRoute {
-        case .appKit:
-            try await postAppKitLeftClick(
-                pid: pid,
-                windowId: windowId,
+        switch (deliveryRoute, event) {
+        case (.appKit, .click(let button, let point)):
+            try await postAppKitClick(
+                button: button,
+                target: target,
                 point: point,
-                windowBounds: windowBounds,
                 stageObserver: stageObserver
             )
-        case .webContent:
-            try await postWebContentLeftClick(
-                pid: pid,
-                windowId: windowId,
+        case (.appKit, .drag):
+            throw ComputerUseError.mouseEventUnavailable("appKit route does not support \(event)")
+        case (.webContent, .click(let button, let point)):
+            try await postWebContentClick(
+                button: button,
+                target: target,
                 point: point,
-                windowBounds: windowBounds,
+                stageObserver: stageObserver
+            )
+        case (.webContent, .drag(let button, let start, let end)):
+            try await postWebContentDrag(
+                button: button,
+                target: target,
+                start: start,
+                end: end,
                 stageObserver: stageObserver
             )
         }
     }
 
-    private func postAppKitLeftClick(
-        pid: pid_t,
-        windowId: CGWindowID,
+    private func postAppKitClick(
+        button: BackgroundMouseButton,
+        target: BackgroundMouseEventTarget,
         point: CGPoint,
-        windowBounds: WindowBounds,
-        stageObserver: MouseClickPostObserver? = nil
+        stageObserver: BackgroundMouseEventPostObserver? = nil
     ) async throws {
-        let windowLocalPoint = CGPoint(
-            x: point.x - windowBounds.x,
-            y: point.y - windowBounds.y
-        )
-
+        let windowLocalPoint = target.windowLocalPoint(for: point)
         let move = try makeMouseEvent(
             type: .mouseMoved,
-            windowId: windowId,
+            windowId: target.windowId,
             clickCount: 0
         )
         let down = try makeMouseEvent(
-            type: .leftMouseDown,
-            windowId: windowId,
+            type: button.downEventType,
+            windowId: target.windowId,
             clickCount: 1
         )
         let up = try makeMouseEvent(
-            type: .leftMouseUp,
-            windowId: windowId,
+            type: button.upEventType,
+            windowId: target.windowId,
             clickCount: 1
         )
 
         try stamp(
             move,
-            pid: pid,
-            windowId: windowId,
+            pid: target.pid,
+            windowId: target.windowId,
+            button: button,
             mouseEventNumber: 2,
             screenPoint: point,
             windowLocalPoint: windowLocalPoint
         )
         try stamp(
             down,
-            pid: pid,
-            windowId: windowId,
+            pid: target.pid,
+            windowId: target.windowId,
+            button: button,
             mouseEventNumber: 3,
             screenPoint: point,
             windowLocalPoint: windowLocalPoint
         )
         try stamp(
             up,
-            pid: pid,
-            windowId: windowId,
+            pid: target.pid,
+            windowId: target.windowId,
+            button: button,
             mouseEventNumber: 3,
             screenPoint: point,
             windowLocalPoint: windowLocalPoint
         )
 
-        try postPublic(move, pid: pid)
+        try postPublic(move, pid: target.pid)
         try await stageObserver?(.afterMouseMoved)
         sleep(15_000)
-        try postPublic(down, pid: pid)
+        try postPublic(down, pid: target.pid)
         try await stageObserver?(.afterTargetDown)
         sleep(1_000)
-        try postPublic(up, pid: pid)
+        try postPublic(up, pid: target.pid)
         try await stageObserver?(.afterTargetUp)
     }
 
-    private func postWebContentLeftClick(
-        pid: pid_t,
-        windowId: CGWindowID,
+    private func postWebContentClick(
+        button: BackgroundMouseButton,
+        target: BackgroundMouseEventTarget,
         point: CGPoint,
-        windowBounds: WindowBounds,
-        stageObserver: MouseClickPostObserver? = nil
+        stageObserver: BackgroundMouseEventPostObserver? = nil
     ) async throws {
-        let targetWindowLocalPoint = CGPoint(
-            x: point.x - windowBounds.x,
-            y: point.y - windowBounds.y
-        )
-        let primerScreenPoint = CGPoint(
-            x: windowBounds.x - 1,
-            y: windowBounds.y + max(windowBounds.height - 1, 0)
-        )
-        let primerWindowLocalPoint = CGPoint(x: -1, y: max(windowBounds.height - 1, 0))
+        let primer = try makeWebContentPrimer(target: target)
+        let targetWindowLocalPoint = target.windowLocalPoint(for: point)
         let gestureTimestamp = uptimeSeconds()
 
-        let move = try makeMouseEvent(type: .mouseMoved, windowId: windowId, clickCount: 0)
-        let primerDown = try makeMouseEvent(type: .leftMouseDown, windowId: windowId, clickCount: 1)
-        let primerUp = try makeMouseEvent(type: .leftMouseUp, windowId: windowId, clickCount: 1)
-        let targetDown = try makeMouseEvent(type: .leftMouseDown, windowId: windowId, clickCount: 1)
-        let targetUp = try makeMouseEvent(type: .leftMouseUp, windowId: windowId, clickCount: 1)
+        let move = try makeMouseEvent(type: .mouseMoved, windowId: target.windowId, clickCount: 0)
+        let targetDown = try makeMouseEvent(type: button.downEventType, windowId: target.windowId, clickCount: 1)
+        let targetUp = try makeMouseEvent(type: button.upEventType, windowId: target.windowId, clickCount: 1)
 
         try stamp(
             move,
-            pid: pid,
-            windowId: windowId,
+            pid: target.pid,
+            windowId: target.windowId,
+            button: button,
             mouseEventNumber: 0,
             screenPoint: point,
             windowLocalPoint: targetWindowLocalPoint
         )
-        try stamp(
-            primerDown,
-            pid: pid,
-            windowId: windowId,
-            mouseEventNumber: 1,
-            screenPoint: primerScreenPoint,
-            windowLocalPoint: primerWindowLocalPoint
-        )
-        try stamp(
-            primerUp,
-            pid: pid,
-            windowId: windowId,
-            mouseEventNumber: 2,
-            screenPoint: primerScreenPoint,
-            windowLocalPoint: primerWindowLocalPoint
-        )
+        try stampWebContentPrimer(primer, target: target)
         try stamp(
             targetDown,
-            pid: pid,
-            windowId: windowId,
+            pid: target.pid,
+            windowId: target.windowId,
+            button: button,
             mouseEventNumber: 1,
             screenPoint: point,
             windowLocalPoint: targetWindowLocalPoint
         )
         try stamp(
             targetUp,
-            pid: pid,
-            windowId: windowId,
+            pid: target.pid,
+            windowId: target.windowId,
+            button: button,
             mouseEventNumber: 1,
             screenPoint: point,
             windowLocalPoint: targetWindowLocalPoint
         )
 
-        try postSkyLight(move, pid: pid, timestamp: gestureTimestamp)
+        try postSkyLight(move, pid: target.pid, timestamp: gestureTimestamp)
         try await stageObserver?(.afterMouseMoved)
+        try await postWebContentPrimer(primer, pid: target.pid, timestamp: gestureTimestamp, stageObserver: stageObserver)
+        try postSkyLight(targetDown, pid: target.pid, timestamp: gestureTimestamp)
+        try await stageObserver?(.afterTargetDown)
+        sleep(1_000)
+        try postSkyLight(targetUp, pid: target.pid, timestamp: gestureTimestamp)
+        try await stageObserver?(.afterTargetUp)
+    }
+
+    private func postWebContentDrag(
+        button: BackgroundMouseButton,
+        target: BackgroundMouseEventTarget,
+        start: CGPoint,
+        end: CGPoint,
+        stageObserver: BackgroundMouseEventPostObserver? = nil
+    ) async throws {
+        let primer = try makeWebContentPrimer(target: target)
+        let startWindowLocalPoint = target.windowLocalPoint(for: start)
+        let endWindowLocalPoint = target.windowLocalPoint(for: end)
+        let gestureTimestamp = uptimeSeconds()
+
+        let move = try makeMouseEvent(type: .mouseMoved, windowId: target.windowId, clickCount: 0)
+        let targetDown = try makeMouseEvent(type: button.downEventType, windowId: target.windowId, clickCount: 1)
+        let targetDragged = try makeMouseEvent(type: button.draggedEventType, windowId: target.windowId, clickCount: 1)
+        let targetUp = try makeMouseEvent(type: button.upEventType, windowId: target.windowId, clickCount: 1)
+
+        try stamp(
+            move,
+            pid: target.pid,
+            windowId: target.windowId,
+            button: button,
+            mouseEventNumber: 0,
+            screenPoint: start,
+            windowLocalPoint: startWindowLocalPoint
+        )
+        try stampWebContentPrimer(primer, target: target)
+        try stamp(
+            targetDown,
+            pid: target.pid,
+            windowId: target.windowId,
+            button: button,
+            mouseEventNumber: 1,
+            screenPoint: start,
+            windowLocalPoint: startWindowLocalPoint
+        )
+        try stamp(
+            targetDragged,
+            pid: target.pid,
+            windowId: target.windowId,
+            button: button,
+            mouseEventNumber: 4,
+            screenPoint: end,
+            windowLocalPoint: endWindowLocalPoint
+        )
+        try stamp(
+            targetUp,
+            pid: target.pid,
+            windowId: target.windowId,
+            button: button,
+            mouseEventNumber: 4,
+            screenPoint: end,
+            windowLocalPoint: endWindowLocalPoint
+        )
+
+        try postSkyLight(move, pid: target.pid, timestamp: gestureTimestamp)
+        try await stageObserver?(.afterMouseMoved)
+        try await postWebContentPrimer(primer, pid: target.pid, timestamp: gestureTimestamp, stageObserver: stageObserver)
+        try postSkyLight(targetDown, pid: target.pid, timestamp: gestureTimestamp)
+        try await stageObserver?(.afterTargetDown)
+        sleep(1_000)
+        try postSkyLight(targetDragged, pid: target.pid, timestamp: gestureTimestamp)
+        try await stageObserver?(.afterTargetDragged)
+        sleep(1_000)
+        try postSkyLight(targetUp, pid: target.pid, timestamp: gestureTimestamp)
+        try await stageObserver?(.afterTargetUp)
+    }
+
+    private func makeWebContentPrimer(target: BackgroundMouseEventTarget) throws -> WebContentPrimer {
+        let primerDown = try makeMouseEvent(type: .leftMouseDown, windowId: target.windowId, clickCount: 1)
+        let primerUp = try makeMouseEvent(type: .leftMouseUp, windowId: target.windowId, clickCount: 1)
+        return WebContentPrimer(
+            down: primerDown,
+            up: primerUp,
+            screenPoint: CGPoint(
+                x: target.windowBounds.x - 1,
+                y: target.windowBounds.y + max(target.windowBounds.height - 1, 0)
+            ),
+            windowLocalPoint: CGPoint(x: -1, y: max(target.windowBounds.height - 1, 0))
+        )
+    }
+
+    private func stampWebContentPrimer(
+        _ primer: WebContentPrimer,
+        target: BackgroundMouseEventTarget
+    ) throws {
+        try stamp(
+            primer.down,
+            pid: target.pid,
+            windowId: target.windowId,
+            button: .left,
+            mouseEventNumber: 1,
+            screenPoint: primer.screenPoint,
+            windowLocalPoint: primer.windowLocalPoint
+        )
+        try stamp(
+            primer.up,
+            pid: target.pid,
+            windowId: target.windowId,
+            button: .left,
+            mouseEventNumber: 2,
+            screenPoint: primer.screenPoint,
+            windowLocalPoint: primer.windowLocalPoint
+        )
+    }
+
+    private func postWebContentPrimer(
+        _ primer: WebContentPrimer,
+        pid: pid_t,
+        timestamp: CGEventTimestamp,
+        stageObserver: BackgroundMouseEventPostObserver? = nil
+    ) async throws {
         sleep(15_000)
-        try postSkyLight(primerDown, pid: pid, timestamp: gestureTimestamp)
+        try postSkyLight(primer.down, pid: pid, timestamp: timestamp)
         try await stageObserver?(.afterPrimerDown)
         sleep(1_000)
-        try postSkyLight(primerUp, pid: pid, timestamp: gestureTimestamp)
+        try postSkyLight(primer.up, pid: pid, timestamp: timestamp)
         try await stageObserver?(.afterPrimerUp)
         sleep(100_000)
         try await stageObserver?(.afterPrimerGap)
-        try postSkyLight(targetDown, pid: pid, timestamp: gestureTimestamp)
-        try await stageObserver?(.afterTargetDown)
-        sleep(1_000)
-        try postSkyLight(targetUp, pid: pid, timestamp: gestureTimestamp)
-        try await stageObserver?(.afterTargetUp)
     }
 
     private func makeMouseEvent(
@@ -400,15 +344,37 @@ struct MouseEventPoster: Sendable {
                 pressure: 1.0
             )
         else {
-            throw ComputerUseError.clickUnavailable("failed to create \(type) NSEvent")
+            throw ComputerUseError.mouseEventUnavailable("failed to create \(type) NSEvent")
         }
         guard let event = nsEvent.cgEvent else {
-            throw ComputerUseError.clickUnavailable("failed to bridge \(type) NSEvent to CGEvent")
+            throw ComputerUseError.mouseEventUnavailable("failed to bridge \(type) NSEvent to CGEvent")
         }
         return event
     }
 
     private func stamp(
+        _ event: CGEvent,
+        pid: pid_t,
+        windowId: CGWindowID,
+        button: BackgroundMouseButton,
+        mouseEventNumber: Int64,
+        screenPoint: CGPoint,
+        windowLocalPoint: CGPoint
+    ) throws {
+        event.setIntegerValueField(.mouseEventButtonNumber, value: button.buttonNumber)
+        event.setIntegerValueField(.mouseEventSubtype, value: 3)
+        event.setIntegerValueField(.mouseEventClickState, value: 1)
+        try stampWindowTarget(
+            event,
+            pid: pid,
+            windowId: windowId,
+            mouseEventNumber: mouseEventNumber,
+            screenPoint: screenPoint,
+            windowLocalPoint: windowLocalPoint
+        )
+    }
+
+    private func stampWindowTarget(
         _ event: CGEvent,
         pid: pid_t,
         windowId: CGWindowID,
@@ -418,9 +384,6 @@ struct MouseEventPoster: Sendable {
     ) throws {
         let rawWindowId = Int64(windowId)
         event.location = screenPoint
-        event.setIntegerValueField(.mouseEventButtonNumber, value: 0)
-        event.setIntegerValueField(.mouseEventSubtype, value: 3)
-        event.setIntegerValueField(.mouseEventClickState, value: 1)
         event.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: rawWindowId)
         event.setIntegerValueField(
             .mouseEventWindowUnderMousePointerThatCanHandleThisEvent,
@@ -442,6 +405,51 @@ struct MouseEventPoster: Sendable {
     private func postSkyLight(_ event: CGEvent, pid: pid_t, timestamp: CGEventTimestamp? = nil) throws {
         event.timestamp = timestamp ?? clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         try postSkyLightEventToPID(event, pid)
+    }
+}
+
+private struct WebContentPrimer {
+    let down: CGEvent
+    let up: CGEvent
+    let screenPoint: CGPoint
+    let windowLocalPoint: CGPoint
+}
+
+private extension BackgroundMouseButton {
+    var buttonNumber: Int64 {
+        switch self {
+        case .left:
+            return 0
+        case .right:
+            return 1
+        }
+    }
+
+    var downEventType: NSEvent.EventType {
+        switch self {
+        case .left:
+            return .leftMouseDown
+        case .right:
+            return .rightMouseDown
+        }
+    }
+
+    var upEventType: NSEvent.EventType {
+        switch self {
+        case .left:
+            return .leftMouseUp
+        case .right:
+            return .rightMouseUp
+        }
+    }
+
+    var draggedEventType: NSEvent.EventType {
+        switch self {
+        case .left:
+            return .leftMouseDragged
+        case .right:
+            return .rightMouseDragged
+        }
     }
 }
 
@@ -480,10 +488,10 @@ private struct MouseEventPrivateFrameworkHandles {
     static func load() throws -> MouseEventPrivateFrameworkHandles {
         let path = "/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight"
         guard dlopen(path, RTLD_LAZY) != nil else {
-            throw ComputerUseError.clickUnavailable("failed to load private framework at \(path)")
+            throw ComputerUseError.mouseEventUnavailable("failed to load private framework at \(path)")
         }
         guard let defaultHandle = UnsafeMutableRawPointer(bitPattern: -2) else {
-            throw ComputerUseError.clickUnavailable("failed to access RTLD_DEFAULT symbol scope")
+            throw ComputerUseError.mouseEventUnavailable("failed to access RTLD_DEFAULT symbol scope")
         }
         return MouseEventPrivateFrameworkHandles(defaultHandle: defaultHandle)
     }
@@ -492,6 +500,6 @@ private struct MouseEventPrivateFrameworkHandles {
         if let pointer = dlsym(defaultHandle, name) {
             return unsafeBitCast(pointer, to: T.self)
         }
-        throw ComputerUseError.clickUnavailable("missing private symbol \(name)")
+        throw ComputerUseError.mouseEventUnavailable("missing private symbol \(name)")
     }
 }

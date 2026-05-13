@@ -113,14 +113,18 @@ public protocol ComputerUseCoreClient: Sendable {
     ) async throws -> AppStateBundle
     /// Focuses the pid/window pair without raising or reordering the window.
     func focusWindowWithoutRaise(pid: pid_t, windowId: CGWindowID) async throws -> WindowFocusResult
-    /// Posts a left click to an explicit screen-space point in the pid/window pair.
-    func postLeftClick(pid: pid_t, windowId: CGWindowID, point: CGPoint) async throws -> WindowClickResult
-    /// Posts a left click and returns diagnostic state captured around each click stage.
-    func postLeftClickTrace(
+    /// Posts a coordinate-based background mouse event in the pid/window pair.
+    func postMouseEvent(
         pid: pid_t,
         windowId: CGWindowID,
-        point: CGPoint
-    ) async throws -> WindowClickTraceResult
+        event: BackgroundMouseEvent
+    ) async throws -> WindowMouseEventResult
+    /// Posts a mouse event and returns diagnostic state captured around each event stage.
+    func postMouseEventTrace(
+        pid: pid_t,
+        windowId: CGWindowID,
+        event: BackgroundMouseEvent
+    ) async throws -> WindowMouseEventTraceResult
 }
 
 public enum PostCursorKey: Sendable, Equatable {
@@ -128,7 +132,7 @@ public enum PostCursorKey: Sendable, Equatable {
     case down
     case left
     case right
-    case click
+    case confirm
     case quit
 }
 
@@ -560,19 +564,23 @@ public struct ComputerUseCoreAdapter: ComputerUseCoreClient {
         try await core.focusWindowWithoutRaise(pid: pid, windowId: windowId)
     }
 
-    public func postLeftClick(pid: pid_t, windowId: CGWindowID, point: CGPoint) async throws -> WindowClickResult {
-        try await core.postLeftClick(pid: pid, windowId: windowId, point: point)
-    }
-
-    public func postLeftClickTrace(
+    public func postMouseEvent(
         pid: pid_t,
         windowId: CGWindowID,
-        point: CGPoint
-    ) async throws -> WindowClickTraceResult {
-        try await core.postLeftClickTrace(
+        event: BackgroundMouseEvent
+    ) async throws -> WindowMouseEventResult {
+        try await core.postMouseEvent(pid: pid, windowId: windowId, event: event)
+    }
+
+    public func postMouseEventTrace(
+        pid: pid_t,
+        windowId: CGWindowID,
+        event: BackgroundMouseEvent
+    ) async throws -> WindowMouseEventTraceResult {
+        try await core.postMouseEventTrace(
             pid: pid,
             windowId: windowId,
-            point: point
+            event: event
         )
     }
 }
@@ -696,7 +704,9 @@ public enum ComputerUseCLI {
           AOSComputerUseCLI list-windows --pid <pid>
           AOSComputerUseCLI get-app-state --pid <pid> --window-id <id> [--mode vision|ax] [--max-image-dimension <pixels>] [--screenshot-output <path>]
           AOSComputerUseCLI focus-window --pid <pid> --window-id <id>
-          AOSComputerUseCLI post-left-click --pid <pid> --window-id <id> --coor <x,y> [--trace]
+          AOSComputerUseCLI left-click --pid <pid> --window-id <id> --coor <x,y> [--trace]
+          AOSComputerUseCLI right-click --pid <pid> --window-id <id> --coor <x,y> [--trace]
+          AOSComputerUseCLI drag --pid <pid> --window-id <id> --from <x,y> --to <x,y> [--button left|right] [--trace]
           AOSComputerUseCLI measure-left-click-window-order --pid <pid> --window-id <id> --coor <x,y> [--runs <count>] [--duration-ms <ms>] [--interval-ms <ms>] [--pre-click-delay-ms <ms>] [--between-runs-ms <ms>]
           AOSComputerUseCLI observe-window-order --pid <pid> --window-id <id> [--duration-ms <ms>] [--interval-ms <ms>]
           AOSComputerUseCLI observe-mouse-events [--pid <pid>] [--window-id <id>] [--duration-ms <ms>] [--tap-location hid|session|annotated|all]
@@ -713,9 +723,10 @@ public enum ComputerUseCLI {
           list-windows    List layer-0 windows owned by a process id.
           get-app-state   Capture AX tree and/or screenshot for a specific app window.
           focus-window    Focus a specific app window without raising it.
-          post-left-click
-                          Post a background left click to a local --coor point of a specific app window.
-                          Use --trace to write per-stage click diagnostics to stderr.
+          left-click      Post a background left click to a local --coor point.
+          right-click     Post a background right click to a local --coor point.
+          drag            Post a web-content only background drag from local --from to local --to.
+                          Use --trace on mouse-event commands to write per-stage diagnostics to stderr.
           measure-left-click-window-order
                           Repeat a background click while measuring active/rank/protected-covered durations.
           observe-window-order
@@ -723,7 +734,8 @@ public enum ComputerUseCLI {
           observe-mouse-events
                           Passively capture mouse CGEvent fields for comparing event delivery paths.
           post-cursor
-                          Open an interactive test cursor. Arrow keys move it, A posts a left click, B exits.
+                          Open an interactive mouse-event cursor. Choose an event, use arrow keys to move,
+                          Enter executes, Q exits.
 
         Output:
           Successful commands write readable text to stdout by default.
@@ -779,21 +791,22 @@ public enum ComputerUseCLI {
                     windowId: request.windowId
                 )
                 return try success(FocusWindowOutput(request: request, result: result), format: parsed.outputFormat)
-            case .postLeftClick(let request):
+            case .mouseEventCommand(let request):
+                try await requireSupportedMouseEventTarget(request: request, core: core)
                 if request.trace {
-                    let trace = try await postLeftClickTrace(request: request, core: core)
+                    let trace = try await runMouseEventTraceCommand(request: request, core: core)
                     let output = try success(
-                        LeftClickOutput(request: request, result: trace.result),
+                        MouseEventPostOutput(request: request, result: trace.result),
                         format: parsed.outputFormat
                     )
                     return ComputerUseCLIResult(
                         stdout: output.stdout,
-                        stderr: ClickTraceOutput(trace: trace).readableText + "\n",
+                        stderr: MouseEventTraceOutput(trace: trace).readableText + "\n",
                         exitCode: output.exitCode
                     )
                 }
-                let result = try await postLeftClick(request: request, core: core)
-                return try success(LeftClickOutput(request: request, result: result), format: parsed.outputFormat)
+                let result = try await runMouseEventCommand(request: request, core: core)
+                return try success(MouseEventPostOutput(request: request, result: result), format: parsed.outputFormat)
             case .measureLeftClickWindowOrder(let request):
                 let runs = try await measureLeftClickWindowOrder(
                     request: request,
@@ -854,16 +867,39 @@ public enum ComputerUseCLI {
         return ComputerUseCLIResult(stdout: text + "\n", stderr: "", exitCode: 0)
     }
 
-    private static func postLeftClick(
-        request: LeftClickRequest,
+    private static func runMouseEventCommand(
+        request: MouseEventCommandRequest,
         core: ComputerUseCoreClient
-    ) async throws -> WindowClickResult {
-        let screenPoint = try await leftClickScreenPoint(request: request, core: core)
-        return try await core.postLeftClick(
+    ) async throws -> WindowMouseEventResult {
+        let event = try await backgroundMouseEvent(request: request, core: core)
+        return try await core.postMouseEvent(
             pid: request.pid,
             windowId: request.windowId,
-            point: screenPoint
+            event: event
         )
+    }
+
+    private static func requireSupportedMouseEventTarget(
+        request: MouseEventCommandRequest,
+        core: ComputerUseCoreClient
+    ) async throws {
+        guard case .drag = request.event else {
+            return
+        }
+        try await requireWebContentDragTarget(pid: request.pid, core: core)
+    }
+
+    private static func requireWebContentDragTarget(
+        pid: pid_t,
+        core: ComputerUseCoreClient
+    ) async throws {
+        let appType = try await core.getAppType(pid: pid)
+        guard appType.type == .webContent else {
+            let appName = appType.appName ?? "pid \(pid)"
+            throw UsageError(
+                "drag is only supported for web-content targets; \(appName) is \(appType.type.rawValue)"
+            )
+        }
     }
 
     private static func measureLeftClickWindowOrder(
@@ -871,7 +907,7 @@ public enum ComputerUseCLI {
         core: ComputerUseCoreClient,
         windowOrderObserver: WindowOrderObservationClient
     ) async throws -> [LeftClickWindowOrderMeasurementRun] {
-        let screenPoint = try await leftClickScreenPoint(
+        let screenPoint = try await screenPoint(
             pid: request.pid,
             windowId: request.windowId,
             coordinate: request.coordinate,
@@ -888,13 +924,13 @@ public enum ComputerUseCLI {
             async let observedSamples = windowOrderObserver.observe(orderRequest)
             await Task.yield()
             try await sleep(milliseconds: request.preClickDelayMilliseconds)
-            let click = try await core.postLeftClick(
+            let click = try await core.postMouseEvent(
                 pid: request.pid,
                 windowId: request.windowId,
-                point: screenPoint
+                event: .click(button: .left, point: screenPoint)
             )
             let samples = try await observedSamples
-            runs.append(LeftClickWindowOrderMeasurementRun(
+            runs.append(try LeftClickWindowOrderMeasurementRun(
                 run: runIndex,
                 click: click,
                 statistics: WindowOrderObservationStatistics(
@@ -917,31 +953,38 @@ public enum ComputerUseCLI {
         try await Task.sleep(nanoseconds: UInt64(milliseconds) * 1_000_000)
     }
 
-    private static func postLeftClickTrace(
-        request: LeftClickRequest,
+    private static func runMouseEventTraceCommand(
+        request: MouseEventCommandRequest,
         core: ComputerUseCoreClient
-    ) async throws -> WindowClickTraceResult {
-        let screenPoint = try await leftClickScreenPoint(request: request, core: core)
-        return try await core.postLeftClickTrace(
+    ) async throws -> WindowMouseEventTraceResult {
+        let event = try await backgroundMouseEvent(request: request, core: core)
+        return try await core.postMouseEventTrace(
             pid: request.pid,
             windowId: request.windowId,
-            point: screenPoint
+            event: event
         )
     }
 
-    private static func leftClickScreenPoint(
-        request: LeftClickRequest,
+    private static func backgroundMouseEvent(
+        request: MouseEventCommandRequest,
         core: ComputerUseCoreClient
-    ) async throws -> CGPoint {
-        try await leftClickScreenPoint(
-            pid: request.pid,
-            windowId: request.windowId,
-            coordinate: request.coordinate,
-            core: core
-        )
+    ) async throws -> BackgroundMouseEvent {
+        switch request.event {
+        case .click(let button, let coordinate):
+            return try await .click(
+                button: button,
+                point: screenPoint(pid: request.pid, windowId: request.windowId, coordinate: coordinate, core: core)
+            )
+        case .drag(let button, let start, let end):
+            return try await .drag(
+                button: button,
+                from: screenPoint(pid: request.pid, windowId: request.windowId, coordinate: start, core: core),
+                to: screenPoint(pid: request.pid, windowId: request.windowId, coordinate: end, core: core)
+            )
+        }
     }
 
-    private static func leftClickScreenPoint(
+    private static func screenPoint(
         pid: pid_t,
         windowId: CGWindowID,
         coordinate: CGPoint,
@@ -955,6 +998,13 @@ public enum ComputerUseCLI {
             x: window.bounds.x + coordinate.x,
             y: window.bounds.y + coordinate.y
         )
+    }
+
+    fileprivate static func leftClickPoint(from result: WindowMouseEventResult) throws -> CGPoint {
+        guard case .click(.left, let point) = result.event else {
+            throw ComputerUseCLIInvariantError("left-click diagnostic received \(result.event)")
+        }
+        return point
     }
 
     private static func runPostCursor(
@@ -971,57 +1021,211 @@ public enum ComputerUseCLI {
             core: core,
             io: io
         )
+        let eventKind = try await resolvePostCursorEventKind(io: io)
+        if eventKind == .drag {
+            try await requireWebContentDragTarget(pid: pid, core: core)
+        }
         var localPoint = request.coordinate ?? CGPoint(
             x: floor(window.bounds.width / 2),
             y: floor(window.bounds.height / 2)
         )
         localPoint = clamp(localPoint, to: window.bounds)
         var currentScreenPoint = screenPoint(localPoint: localPoint, window: window)
+        var postedEventCount = 0
+        var lastEvent: BackgroundMouseEvent?
 
         try await overlay.show(at: currentScreenPoint)
-        await io.write(postCursorStatus(window: window, localPoint: localPoint))
+        await io.write(postCursorStatus(window: window, eventKind: eventKind, localPoint: localPoint))
 
         do {
             while true {
-                switch try await io.readKey() {
-                case .up:
-                    localPoint.y -= movementStep
-                case .down:
-                    localPoint.y += movementStep
-                case .left:
-                    localPoint.x -= movementStep
-                case .right:
-                    localPoint.x += movementStep
-                case .click:
-                    let result = try await core.postLeftClick(pid: pid, windowId: window.id, point: currentScreenPoint)
-                    await overlay.hide()
-                    return PostCursorResult(
-                        pid: pid,
-                        windowId: window.id,
-                        point: result.point,
-                        localPoint: localPoint,
-                        clicked: true
-                    )
-                case .quit:
-                    await overlay.hide()
-                    return PostCursorResult(
-                        pid: pid,
-                        windowId: window.id,
-                        point: currentScreenPoint,
-                        localPoint: localPoint,
-                        clicked: false
-                    )
+                switch eventKind {
+                case .leftClick, .rightClick:
+                    switch try await readPostCursorPoint(
+                        localPoint: &localPoint,
+                        currentScreenPoint: &currentScreenPoint,
+                        window: window,
+                        movementStep: movementStep,
+                        io: io,
+                        overlay: overlay
+                    ) {
+                    case .confirm:
+                        let event = try postCursorPointEvent(
+                            eventKind: eventKind,
+                            screenPoint: currentScreenPoint
+                        )
+                        let result = try await core.postMouseEvent(
+                            pid: pid,
+                            windowId: window.id,
+                            event: event
+                        )
+                        postedEventCount += 1
+                        lastEvent = result.event
+                        await io.write(postCursorPostedStatus(
+                            event: result.event,
+                            localPoint: localPoint,
+                            window: window,
+                            postedEventCount: postedEventCount
+                        ))
+                    case .quit:
+                        await overlay.hide()
+                        return finishPostCursor(
+                            pid: pid,
+                            window: window,
+                            point: currentScreenPoint,
+                            localPoint: localPoint,
+                            eventKind: eventKind,
+                            postedEventCount: postedEventCount,
+                            lastEvent: lastEvent
+                        )
+                    }
+                case .drag:
+                    await io.write("drag start: move cursor, Enter selects start, Q exits\n")
+                    switch try await readPostCursorPoint(
+                        localPoint: &localPoint,
+                        currentScreenPoint: &currentScreenPoint,
+                        window: window,
+                        movementStep: movementStep,
+                        io: io,
+                        overlay: overlay
+                    ) {
+                    case .confirm:
+                        break
+                    case .quit:
+                        await overlay.hide()
+                        return finishPostCursor(
+                            pid: pid,
+                            window: window,
+                            point: currentScreenPoint,
+                            localPoint: localPoint,
+                            eventKind: eventKind,
+                            postedEventCount: postedEventCount,
+                            lastEvent: lastEvent
+                        )
+                    }
+                    let startLocalPoint = localPoint
+                    let startScreenPoint = currentScreenPoint
+                    await io.write("drag end: move cursor, Enter posts drag, Q exits\n")
+                    switch try await readPostCursorPoint(
+                        localPoint: &localPoint,
+                        currentScreenPoint: &currentScreenPoint,
+                        window: window,
+                        movementStep: movementStep,
+                        io: io,
+                        overlay: overlay
+                    ) {
+                    case .confirm:
+                        let event = BackgroundMouseEvent.drag(
+                            button: .left,
+                            from: startScreenPoint,
+                            to: currentScreenPoint
+                        )
+                        let result = try await core.postMouseEvent(
+                            pid: pid,
+                            windowId: window.id,
+                            event: event
+                        )
+                        postedEventCount += 1
+                        lastEvent = result.event
+                        await io.write(postCursorPostedStatus(
+                            event: result.event,
+                            localPoint: localPoint,
+                            window: window,
+                            postedEventCount: postedEventCount,
+                            extra: " from local \(Int(startLocalPoint.x)),\(Int(startLocalPoint.y))"
+                        ))
+                    case .quit:
+                        await overlay.hide()
+                        return finishPostCursor(
+                            pid: pid,
+                            window: window,
+                            point: currentScreenPoint,
+                            localPoint: localPoint,
+                            eventKind: eventKind,
+                            postedEventCount: postedEventCount,
+                            lastEvent: lastEvent
+                        )
+                    }
                 }
-
-                localPoint = clamp(localPoint, to: window.bounds)
-                currentScreenPoint = screenPoint(localPoint: localPoint, window: window)
-                try await overlay.move(to: currentScreenPoint)
-                await io.write("cursor local \(Int(localPoint.x)),\(Int(localPoint.y)) screen \(Int(currentScreenPoint.x)),\(Int(currentScreenPoint.y))\n")
             }
         } catch {
             await overlay.hide()
             throw error
         }
+    }
+
+    private static func readPostCursorPoint(
+        localPoint: inout CGPoint,
+        currentScreenPoint: inout CGPoint,
+        window: WindowInfo,
+        movementStep: CGFloat,
+        io: PostCursorIO,
+        overlay: PostCursorOverlay
+    ) async throws -> PostCursorPointAction {
+        while true {
+            switch try await io.readKey() {
+            case .up:
+                localPoint.y -= movementStep
+            case .down:
+                localPoint.y += movementStep
+            case .left:
+                localPoint.x -= movementStep
+            case .right:
+                localPoint.x += movementStep
+            case .confirm:
+                return .confirm
+            case .quit:
+                return .quit
+            }
+
+            localPoint = clamp(localPoint, to: window.bounds)
+            currentScreenPoint = screenPoint(localPoint: localPoint, window: window)
+            try await overlay.move(to: currentScreenPoint)
+            await io.write(postCursorPositionStatus(localPoint: localPoint, screenPoint: currentScreenPoint))
+        }
+    }
+
+    private static func postCursorPointEvent(
+        eventKind: PostCursorEventKind,
+        screenPoint: CGPoint
+    ) throws -> BackgroundMouseEvent {
+        switch eventKind {
+        case .leftClick:
+            return .click(button: .left, point: screenPoint)
+        case .rightClick:
+            return .click(button: .right, point: screenPoint)
+        case .drag:
+            throw ComputerUseCLIInvariantError("drag does not use point event conversion")
+        }
+    }
+
+    private static func resolvePostCursorEventKind(io: PostCursorIO) async throws -> PostCursorEventKind {
+        let raw = try await io.readLine(prompt: "Select mouse event (left-click/right-click/drag): ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let eventKind = PostCursorEventKind(rawValue: raw) else {
+            throw UsageError("invalid mouse event selection: \(raw)")
+        }
+        return eventKind
+    }
+
+    private static func finishPostCursor(
+        pid: pid_t,
+        window: WindowInfo,
+        point: CGPoint,
+        localPoint: CGPoint,
+        eventKind: PostCursorEventKind,
+        postedEventCount: Int,
+        lastEvent: BackgroundMouseEvent?
+    ) -> PostCursorResult {
+        PostCursorResult(
+            pid: pid,
+            windowId: window.id,
+            point: point,
+            localPoint: localPoint,
+            eventKind: eventKind,
+            postedEventCount: postedEventCount,
+            lastEvent: lastEvent
+        )
     }
 
     private static func resolvePostCursorPID(
@@ -1094,13 +1298,41 @@ public enum ComputerUseCLI {
         )
     }
 
-    private static func postCursorStatus(window: WindowInfo, localPoint: CGPoint) -> String {
+    private static func postCursorStatus(
+        window: WindowInfo,
+        eventKind: PostCursorEventKind,
+        localPoint: CGPoint
+    ) -> String {
         """
         Post cursor attached to window \(window.id) (pid \(window.pid)).
-        Arrow keys move the cursor. A posts post-left-click. B exits.
-        cursor local \(Int(localPoint.x)),\(Int(localPoint.y)) screen \(Int(window.bounds.x + localPoint.x)),\(Int(window.bounds.y + localPoint.y))
+        Event: \(eventKind.rawValue).
+        Arrow keys move the cursor. Enter executes. Q exits.
+        \(postCursorPositionStatus(localPoint: localPoint, screenPoint: screenPoint(localPoint: localPoint, window: window)))
 
         """
+    }
+
+    private static func postCursorPositionStatus(localPoint: CGPoint, screenPoint: CGPoint) -> String {
+        "cursor local \(Int(localPoint.x)),\(Int(localPoint.y)) screen \(Int(screenPoint.x)),\(Int(screenPoint.y))\n"
+    }
+
+    private static func postCursorPostedStatus(
+        event: BackgroundMouseEvent,
+        localPoint: CGPoint,
+        window: WindowInfo,
+        postedEventCount: Int,
+        extra: String = ""
+    ) -> String {
+        "posted \(postCursorEventName(event)) #\(postedEventCount) at local \(Int(localPoint.x)),\(Int(localPoint.y))\(extra). Enter executes again. Q exits.\n"
+    }
+
+    private static func postCursorEventName(_ event: BackgroundMouseEvent) -> String {
+        switch event {
+        case .click(let button, _):
+            "\(button.rawValue)-click"
+        case .drag(let button, _, _):
+            "\(button.rawValue)-drag"
+        }
     }
 
 }
@@ -1118,7 +1350,7 @@ private struct ParsedCommand {
         case listWindows(pid: pid_t)
         case getAppState(AppStateRequest)
         case focusWindow(FocusWindowRequest)
-        case postLeftClick(LeftClickRequest)
+        case mouseEventCommand(MouseEventCommandRequest)
         case measureLeftClickWindowOrder(LeftClickWindowOrderMeasurementRequest)
         case observeWindowOrder(WindowOrderObservationRequest)
         case observeMouseEvents(MouseEventObservationRequest)
@@ -1178,16 +1410,42 @@ private struct ParsedCommand {
             let windowId = try options.requiredWindowID("--window-id")
             try options.rejectUnused()
             command = .focusWindow(FocusWindowRequest(pid: pid, windowId: windowId))
-        case "post-left-click":
+        case "left-click":
             let pid = try options.requiredPID("--pid")
             let windowId = try options.requiredWindowID("--window-id")
             let coordinate = try options.requiredPoint("--coor")
             let trace = try options.takeFlag("--trace")
             try options.rejectUnused()
-            command = .postLeftClick(LeftClickRequest(
+            command = .mouseEventCommand(MouseEventCommandRequest(
                 pid: pid,
                 windowId: windowId,
-                coordinate: coordinate,
+                event: .click(button: .left, coordinate: coordinate),
+                trace: trace
+            ))
+        case "right-click":
+            let pid = try options.requiredPID("--pid")
+            let windowId = try options.requiredWindowID("--window-id")
+            let coordinate = try options.requiredPoint("--coor")
+            let trace = try options.takeFlag("--trace")
+            try options.rejectUnused()
+            command = .mouseEventCommand(MouseEventCommandRequest(
+                pid: pid,
+                windowId: windowId,
+                event: .click(button: .right, coordinate: coordinate),
+                trace: trace
+            ))
+        case "drag":
+            let pid = try options.requiredPID("--pid")
+            let windowId = try options.requiredWindowID("--window-id")
+            let start = try options.requiredPoint("--from")
+            let end = try options.requiredPoint("--to")
+            let button = try options.optionalEnum("--button", BackgroundMouseButton.self) ?? .left
+            let trace = try options.takeFlag("--trace")
+            try options.rejectUnused()
+            command = .mouseEventCommand(MouseEventCommandRequest(
+                pid: pid,
+                windowId: windowId,
+                event: .drag(button: button, start: start, end: end),
                 trace: trace
             ))
         case "measure-left-click-window-order":
@@ -1401,6 +1659,15 @@ private struct UsageError: Error, CustomStringConvertible {
     }
 }
 
+private struct ComputerUseCLIInvariantError: Error, CustomStringConvertible {
+    let message: String
+    var description: String { message }
+
+    init(_ message: String) {
+        self.message = message
+    }
+}
+
 private struct AppStateRequest: Sendable {
     let pid: pid_t
     let windowId: CGWindowID
@@ -1414,11 +1681,27 @@ private struct FocusWindowRequest: Sendable {
     let windowId: CGWindowID
 }
 
-private struct LeftClickRequest: Sendable {
+private struct MouseEventCommandRequest: Sendable {
     let pid: pid_t
     let windowId: CGWindowID
-    let coordinate: CGPoint
+    let event: MouseEventCommand
     let trace: Bool
+}
+
+private enum MouseEventCommand: Sendable, Equatable {
+    case click(button: BackgroundMouseButton, coordinate: CGPoint)
+    case drag(button: BackgroundMouseButton, start: CGPoint, end: CGPoint)
+
+    var commandName: String {
+        switch self {
+        case .click(.left, _):
+            return "left-click"
+        case .click(.right, _):
+            return "right-click"
+        case .drag:
+            return "drag"
+        }
+    }
 }
 
 private struct LeftClickWindowOrderMeasurementRequest: Sendable {
@@ -1438,12 +1721,25 @@ private struct PostCursorRequest: Sendable {
     let coordinate: CGPoint?
 }
 
+private enum PostCursorEventKind: String, Sendable, Equatable {
+    case leftClick = "left-click"
+    case rightClick = "right-click"
+    case drag
+}
+
+private enum PostCursorPointAction: Sendable, Equatable {
+    case confirm
+    case quit
+}
+
 private struct PostCursorResult: Sendable, Equatable {
     let pid: pid_t
     let windowId: CGWindowID
     let point: CGPoint
     let localPoint: CGPoint
-    let clicked: Bool
+    let eventKind: PostCursorEventKind
+    let postedEventCount: Int
+    let lastEvent: BackgroundMouseEvent?
 }
 
 private struct GrantPermissionsOutput: Encodable, ReadableOutput {
@@ -1686,33 +1982,63 @@ private struct FocusWindowOutput: Encodable, ReadableOutput {
     }
 }
 
-private struct LeftClickOutput: Encodable, ReadableOutput {
-    let command = "post-left-click"
+private struct MouseEventPostOutput: Encodable, ReadableOutput {
+    let command: String
     let pid: pid_t
     let windowId: CGWindowID
-    let point: PointOutput
+    let event: String
+    let point: PointOutput?
+    let from: PointOutput?
+    let to: PointOutput?
 
-    init(request _: LeftClickRequest, result: WindowClickResult) {
+    init(request: MouseEventCommandRequest, result: WindowMouseEventResult) {
+        self.command = request.event.commandName
         self.pid = result.pid
         self.windowId = result.windowId
-        self.point = PointOutput(result.point)
+        self.event = Self.eventName(result.event)
+        switch result.event {
+        case .click(_, let point):
+            self.point = PointOutput(point)
+            self.from = nil
+            self.to = nil
+        case .drag(_, let start, let end):
+            self.point = nil
+            self.from = PointOutput(start)
+            self.to = PointOutput(end)
+        }
     }
 
     var readableText: String {
-        "Posted left click to window \(windowId) at \(Int(point.x)),\(Int(point.y)) (pid \(pid))."
+        switch (point, from, to) {
+        case (let point?, nil, nil):
+            return "Posted \(event) to window \(windowId) at \(Int(point.x)),\(Int(point.y)) (pid \(pid))."
+        case (nil, let from?, let to?):
+            return "Posted \(event) to window \(windowId) from \(Int(from.x)),\(Int(from.y)) to \(Int(to.x)),\(Int(to.y)) (pid \(pid))."
+        default:
+            return "Posted \(event) to window \(windowId) (pid \(pid))."
+        }
+    }
+
+    private static func eventName(_ event: BackgroundMouseEvent) -> String {
+        switch event {
+        case .click(let button, _):
+            return "\(button.rawValue) click"
+        case .drag(let button, _, _):
+            return "\(button.rawValue) drag"
+        }
     }
 }
 
-private struct ClickTraceOutput: ReadableOutput {
-    let trace: WindowClickTraceResult
+private struct MouseEventTraceOutput: ReadableOutput {
+    let trace: WindowMouseEventTraceResult
 
     var readableText: String {
-        var lines = ["Click trace:"]
+        var lines = ["Mouse event trace:"]
         lines.append(contentsOf: trace.snapshots.map(Self.line))
         return lines.joined(separator: "\n")
     }
 
-    private static func line(_ snapshot: WindowClickTraceSnapshot) -> String {
+    private static func line(_ snapshot: WindowMouseEventTraceSnapshot) -> String {
         let frontmost = snapshot.frontmostPID.map { "pid \($0)" } ?? "pid nil"
         let bundle = snapshot.frontmostBundleIdentifier.map { " bundle \($0)" } ?? ""
         let window = snapshot.frontmostWindowId.map { " window \($0)" } ?? " window nil"
@@ -1788,12 +2114,12 @@ private struct LeftClickWindowOrderMeasurementRun: Encodable {
 
     init(
         run: Int,
-        click: WindowClickResult,
+        click: WindowMouseEventResult,
         statistics: WindowOrderObservationStatistics,
         sampleCount: Int
-    ) {
+    ) throws {
         self.run = run
-        self.clickedPoint = PointOutput(click.point)
+        self.clickedPoint = PointOutput(try ComputerUseCLI.leftClickPoint(from: click))
         self.sampleCount = sampleCount
         self.targetActiveTotalMilliseconds = statistics.targetActive.totalMilliseconds
         self.targetActiveMaxContiguousMilliseconds = statistics.targetActive.maxContiguousMilliseconds
@@ -2072,23 +2398,27 @@ private struct PostCursorOutput: Encodable, ReadableOutput {
     let command = "post-cursor"
     let pid: pid_t
     let windowId: CGWindowID
+    let event: String
     let point: PointOutput
     let localPoint: PointOutput
-    let clicked: Bool
+    let postedEventCount: Int
+    let lastEvent: String?
 
     init(result: PostCursorResult) {
         self.pid = result.pid
         self.windowId = result.windowId
+        self.event = result.eventKind.rawValue
         self.point = PointOutput(result.point)
         self.localPoint = PointOutput(result.localPoint)
-        self.clicked = result.clicked
+        self.postedEventCount = result.postedEventCount
+        self.lastEvent = result.lastEvent?.description
     }
 
     var readableText: String {
-        if clicked {
-            return "Posted cursor click to window \(windowId) at local \(Int(localPoint.x)),\(Int(localPoint.y)) / screen \(Int(point.x)),\(Int(point.y)) (pid \(pid))."
+        if postedEventCount > 0 {
+            return "Post cursor exited after \(postedEventCount) \(event) event(s) at local \(Int(localPoint.x)),\(Int(localPoint.y)) / screen \(Int(point.x)),\(Int(point.y)) (pid \(pid))."
         }
-        return "Post cursor exited at local \(Int(localPoint.x)),\(Int(localPoint.y)) / screen \(Int(point.x)),\(Int(point.y)) (pid \(pid))."
+        return "Post cursor exited without posting \(event) at local \(Int(localPoint.x)),\(Int(localPoint.y)) / screen \(Int(point.x)),\(Int(point.y)) (pid \(pid))."
     }
 }
 

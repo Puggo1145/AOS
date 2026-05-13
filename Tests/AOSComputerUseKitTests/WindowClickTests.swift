@@ -4,8 +4,126 @@ import Darwin
 import Foundation
 import Testing
 
-@Suite("ComputerUseCore coordinate left click")
+@Suite("ComputerUseCore background mouse events")
 struct WindowClickTests {
+    @Test("posts a background mouse event through the selected delivery route")
+    func postsBackgroundMouseEventThroughSelectedDeliveryRoute() async throws {
+        let recorder = BackgroundMouseEventRecorder()
+        let routeRecorder = DeliveryRouteRecorder(route: .webContent)
+        let target = Self.window(
+            id: 456,
+            pid: 123,
+            owner: "Electron",
+            zIndex: 1,
+            bounds: WindowBounds(x: 10, y: 20, width: 300, height: 100)
+        )
+        let event = BackgroundMouseEvent.click(
+            button: .left,
+            point: CGPoint(x: 160, y: 70)
+        )
+        let core = ComputerUseCore(
+            windowLookup: { windowId in
+                windowId == target.id ? target : nil
+            },
+            mouseEventDeliveryRoute: { pid in
+                routeRecorder.resolve(pid: pid)
+            },
+            focusWindowWithoutRaising: { _, _ in },
+            deactivateWindowWithoutRaising: { _, _ in },
+            postMouseEvent: { event, target, deliveryRoute, _ in
+                await recorder.record(
+                    event: event,
+                    target: target,
+                    deliveryRoute: deliveryRoute
+                )
+            }
+        )
+
+        let result = try await core.postMouseEvent(pid: 123, windowId: 456, event: event)
+
+        #expect(result == WindowMouseEventResult(pid: 123, windowId: 456, event: event))
+        #expect(routeRecorder.resolvedPIDs == [123])
+        #expect(await recorder.events == [
+            .post(
+                event: event,
+                target: BackgroundMouseEventTarget(
+                    pid: 123,
+                    windowId: 456,
+                    windowBounds: WindowBounds(x: 10, y: 20, width: 300, height: 100)
+                ),
+                deliveryRoute: .webContent
+            ),
+        ])
+    }
+
+    @Test("validates every screen point of a background mouse event before posting")
+    func validatesEveryScreenPointOfBackgroundMouseEventBeforePosting() async {
+        let recorder = BackgroundMouseEventRecorder()
+        let core = ComputerUseCore(
+            windowLookup: { windowId in
+                guard windowId == 456 else { return nil }
+                return WindowInfo(
+                    id: 456,
+                    pid: 123,
+                    owner: "Target",
+                    title: "Target",
+                    bounds: WindowBounds(x: 10, y: 20, width: 300, height: 100),
+                    zIndex: 1,
+                    isOnScreen: true,
+                    layer: 0
+                )
+            },
+            focusWindowWithoutRaising: { _, _ in },
+            deactivateWindowWithoutRaising: { _, _ in },
+            postMouseEvent: { event, target, deliveryRoute, _ in
+                await recorder.record(
+                    event: event,
+                    target: target,
+                    deliveryRoute: deliveryRoute
+                )
+            }
+        )
+
+        await #expect(throws: ComputerUseError.self) {
+            try await core.postMouseEvent(
+                pid: 123,
+                windowId: 456,
+                event: .drag(
+                    button: .left,
+                    from: CGPoint(x: 160, y: 70),
+                    to: CGPoint(x: 500, y: 70)
+                )
+            )
+        }
+        #expect(await recorder.events.isEmpty)
+    }
+
+    @Test("webContent delivery route supports every background mouse event kind")
+    func webContentDeliveryRouteSupportsEveryBackgroundMouseEventKind() {
+        #expect(BackgroundMouseEventDeliveryRoute.webContent.supports(
+            .click(button: .left, point: CGPoint(x: 150, y: 50))
+        ))
+        #expect(BackgroundMouseEventDeliveryRoute.webContent.supports(
+            .click(button: .right, point: CGPoint(x: 150, y: 50))
+        ))
+        #expect(BackgroundMouseEventDeliveryRoute.webContent.supports(
+            .drag(button: .right, from: CGPoint(x: 150, y: 50), to: CGPoint(x: 170, y: 70))
+        ))
+    }
+
+    @Test("appKit delivery route supports only left and right click")
+    func appKitDeliveryRouteSupportsOnlyLeftAndRightClick() {
+        #expect(BackgroundMouseEventDeliveryRoute.appKit.supports(
+            .click(button: .left, point: CGPoint(x: 150, y: 50))
+        ))
+        #expect(BackgroundMouseEventDeliveryRoute.appKit.supports(
+            .click(button: .right, point: CGPoint(x: 150, y: 50))
+        ))
+        #expect(!BackgroundMouseEventDeliveryRoute.appKit.supports(
+            .drag(button: .left, from: CGPoint(x: 150, y: 50), to: CGPoint(x: 170, y: 70))
+        ))
+    }
+
     @Test("focuses the target then posts a left click at an explicit screen point")
     func focusesThenClicksExplicitScreenPoint() async throws {
         let recorder = ClickChainRecorder()
@@ -28,7 +146,13 @@ struct WindowClickTests {
             },
             deactivateWindowWithoutRaising: { _, _ in
             },
-            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
+            postMouseEvent: { event, target, _, _ in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -38,11 +162,11 @@ struct WindowClickTests {
             }
         )
 
-        let result = try await core.postLeftClick(pid: 123, windowId: 456, point: CGPoint(x: 160, y: 70))
+        let result = try await core.postTestClick(pid: 123, windowId: 456, point: CGPoint(x: 160, y: 70))
 
         #expect(result.pid == 123)
         #expect(result.windowId == 456)
-        #expect(result.point == CGPoint(x: 160, y: 70))
+        #expect(result.clickPoint == CGPoint(x: 160, y: 70))
         #expect(await recorder.events == [
             .focus(pid: 123, windowId: 456),
             .click(
@@ -76,7 +200,13 @@ struct WindowClickTests {
             },
             deactivateWindowWithoutRaising: { _, _ in
             },
-            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
+            postMouseEvent: { event, target, _, _ in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -86,13 +216,13 @@ struct WindowClickTests {
             }
         )
 
-        let result = try await core.postLeftClick(
+        let result = try await core.postTestClick(
             pid: 123,
             windowId: 456,
             point: CGPoint(x: 32, y: 54)
         )
 
-        #expect(result.point == CGPoint(x: 32, y: 54))
+        #expect(result.clickPoint == CGPoint(x: 32, y: 54))
         #expect(await recorder.events == [
             .focus(pid: 123, windowId: 456),
             .click(
@@ -116,7 +246,7 @@ struct WindowClickTests {
             frontmostWindowLookup: {
                 protected
             },
-            requiresPreClickFocus: { _ in
+            requiresPreEventFocus: { _, _ in
                 false
             },
             focusWindowWithoutRaising: { pid, windowId in
@@ -129,7 +259,13 @@ struct WindowClickTests {
                 await recorder.recordActivate(pid: pid)
                 return true
             },
-            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
+            postMouseEvent: { event, target, _, _ in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -139,7 +275,7 @@ struct WindowClickTests {
             }
         )
 
-        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
+        _ = try await core.postTestClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
 
         #expect(await recorder.events == [
             .click(
@@ -172,7 +308,7 @@ struct WindowClickTests {
                     layer: 0
                 )
             },
-            clickDeliveryRoute: { pid in
+            mouseEventDeliveryRoute: { pid in
                 routeRecorder.resolve(pid: pid)
             },
             focusWindowWithoutRaising: { pid, windowId in
@@ -180,7 +316,13 @@ struct WindowClickTests {
             },
             deactivateWindowWithoutRaising: { _, _ in
             },
-            postLeftClick: { pid, windowId, point, windowBounds, deliveryRoute, _ in
+            postMouseEvent: { event, target, deliveryRoute, _ in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
                 #expect(deliveryRoute == .webContent)
                 await recorder.recordClick(
                     pid: pid,
@@ -191,7 +333,7 @@ struct WindowClickTests {
             }
         )
 
-        _ = try await core.postLeftClick(pid: 123, windowId: 456, point: CGPoint(x: 160, y: 70))
+        _ = try await core.postTestClick(pid: 123, windowId: 456, point: CGPoint(x: 160, y: 70))
 
         #expect(routeRecorder.resolvedPIDs == [123])
         #expect(await recorder.events == [
@@ -226,7 +368,13 @@ struct WindowClickTests {
             },
             deactivateWindowWithoutRaising: { _, _ in
             },
-            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
+            postMouseEvent: { event, target, _, _ in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -237,7 +385,7 @@ struct WindowClickTests {
         )
 
         await #expect(throws: ComputerUseError.self) {
-            try await core.postLeftClick(
+            try await core.postTestClick(
                 pid: 123,
                 windowId: 456,
                 point: CGPoint(x: 500, y: 54)
@@ -295,7 +443,13 @@ struct WindowClickTests {
             },
             deactivateWindowWithoutRaising: { _, _ in
             },
-            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
+            postMouseEvent: { event, target, _, _ in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -305,7 +459,7 @@ struct WindowClickTests {
             }
         )
 
-        _ = try await core.postLeftClick(pid: 123, windowId: 456, point: CGPoint(x: 160, y: 70))
+        _ = try await core.postTestClick(pid: 123, windowId: 456, point: CGPoint(x: 160, y: 70))
 
         #expect(await recorder.events == [
             .focus(pid: 123, windowId: 456),
@@ -337,7 +491,13 @@ struct WindowClickTests {
             deactivateWindowWithoutRaising: { pid, windowId in
                 await recorder.recordDeactivate(pid: pid, windowId: windowId)
             },
-            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
+            postMouseEvent: { event, target, _, _ in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -347,7 +507,7 @@ struct WindowClickTests {
             }
         )
 
-        _ = try await core.postLeftClick(pid: 123, windowId: 456, point: CGPoint(x: 150, y: 50))
+        _ = try await core.postTestClick(pid: 123, windowId: 456, point: CGPoint(x: 150, y: 50))
 
         #expect(await recorder.events == [
             .focus(pid: 123, windowId: 456),
@@ -379,7 +539,13 @@ struct WindowClickTests {
             deactivateWindowWithoutRaising: { pid, windowId in
                 await recorder.recordDeactivate(pid: pid, windowId: windowId)
             },
-            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
+            postMouseEvent: { event, target, _, _ in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -389,7 +555,7 @@ struct WindowClickTests {
             }
         )
 
-        _ = try await core.postLeftClick(pid: 123, windowId: 456, point: CGPoint(x: 150, y: 50))
+        _ = try await core.postTestClick(pid: 123, windowId: 456, point: CGPoint(x: 150, y: 50))
 
         #expect(await recorder.events == [
             .focus(pid: 123, windowId: 456),
@@ -424,7 +590,13 @@ struct WindowClickTests {
                 await recorder.recordActivate(pid: pid)
                 return true
             },
-            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
+            postMouseEvent: { event, target, _, _ in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -434,7 +606,7 @@ struct WindowClickTests {
             }
         )
 
-        _ = try await core.postLeftClick(pid: 123, windowId: 456, point: CGPoint(x: 150, y: 50))
+        _ = try await core.postTestClick(pid: 123, windowId: 456, point: CGPoint(x: 150, y: 50))
 
         #expect(await recorder.events == [
             .focus(pid: 123, windowId: 456),
@@ -482,7 +654,13 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
+            postMouseEvent: { event, target, _, _ in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -492,7 +670,7 @@ struct WindowClickTests {
             }
         )
 
-        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
+        _ = try await core.postTestClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
 
         #expect(await recorder.events == [
             .focus(pid: 30, windowId: 300),
@@ -545,7 +723,13 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
+            postMouseEvent: { event, target, _, _ in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -555,7 +739,7 @@ struct WindowClickTests {
             }
         )
 
-        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
+        _ = try await core.postTestClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
 
         #expect(await recorder.events == [
             .focus(pid: 30, windowId: 300),
@@ -599,7 +783,13 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
+            postMouseEvent: { event, target, _, _ in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -609,7 +799,7 @@ struct WindowClickTests {
             }
         )
 
-        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
+        _ = try await core.postTestClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
 
         #expect(await recorder.events == [
             .focus(pid: 30, windowId: 300),
@@ -658,7 +848,13 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0, 1],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, _, stageObserver in
+            postMouseEvent: { event, target, _, stageObserver in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -669,7 +865,7 @@ struct WindowClickTests {
             }
         )
 
-        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
+        _ = try await core.postTestClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
 
         #expect(await recorder.events == [
             .focus(pid: 30, windowId: 300),
@@ -721,7 +917,13 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0, 1, 1],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, _, stageObserver in
+            postMouseEvent: { event, target, _, stageObserver in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -732,7 +934,7 @@ struct WindowClickTests {
             }
         )
 
-        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
+        _ = try await core.postTestClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
 
         #expect(await recorder.events == [
             .focus(pid: 30, windowId: 300),
@@ -783,7 +985,13 @@ struct WindowClickTests {
             windowOrderChangeObserver: orderObserver.observer,
             activeStateGuardDelays: [],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
+            postMouseEvent: { event, target, _, _ in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -794,7 +1002,7 @@ struct WindowClickTests {
             }
         )
 
-        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
+        _ = try await core.postTestClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
 
         #expect(orderObserver.observedWindowIds == [300])
         #expect(await recorder.events == [
@@ -850,7 +1058,13 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0, 1],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
+            postMouseEvent: { event, target, _, _ in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -860,7 +1074,7 @@ struct WindowClickTests {
             }
         )
 
-        let trace = try await core.postLeftClickTrace(
+        let trace = try await core.postTestClickTrace(
             pid: 30,
             windowId: 300,
             point: CGPoint(x: 150, y: 50)
@@ -906,7 +1120,13 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0, 1],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
+            postMouseEvent: { event, target, _, _ in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -916,7 +1136,7 @@ struct WindowClickTests {
             }
         )
 
-        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
+        _ = try await core.postTestClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
 
         #expect(await recorder.events == [
             .focus(pid: 30, windowId: 300),
@@ -958,7 +1178,13 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, _, stageObserver in
+            postMouseEvent: { event, target, _, stageObserver in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -969,7 +1195,7 @@ struct WindowClickTests {
             }
         )
 
-        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
+        _ = try await core.postTestClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
 
         #expect(await recorder.events == [
             .focus(pid: 30, windowId: 300),
@@ -1013,7 +1239,13 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0, 1],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
+            postMouseEvent: { event, target, _, _ in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -1023,7 +1255,7 @@ struct WindowClickTests {
             }
         )
 
-        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
+        _ = try await core.postTestClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
 
         #expect(await recorder.events == [
             .focus(pid: 30, windowId: 300),
@@ -1071,7 +1303,13 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
+            postMouseEvent: { event, target, _, _ in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -1081,7 +1319,7 @@ struct WindowClickTests {
             }
         )
 
-        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
+        _ = try await core.postTestClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
 
         #expect(await recorder.events == [
             .focus(pid: 30, windowId: 300),
@@ -1127,7 +1365,13 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
+            postMouseEvent: { event, target, _, _ in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -1137,7 +1381,7 @@ struct WindowClickTests {
             }
         )
 
-        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
+        _ = try await core.postTestClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
 
         #expect(await recorder.events == [
             .focus(pid: 30, windowId: 300),
@@ -1184,7 +1428,13 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
+            postMouseEvent: { event, target, _, _ in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -1194,7 +1444,7 @@ struct WindowClickTests {
             }
         )
 
-        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
+        _ = try await core.postTestClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
 
         #expect(await recorder.events == [
             .focus(pid: 30, windowId: 300),
@@ -1238,7 +1488,13 @@ struct WindowClickTests {
             },
             activeStateGuardDelays: [0, 1, 1],
             sleepForActiveStateGuard: { _ in },
-            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
+            postMouseEvent: { event, target, _, _ in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -1248,7 +1504,7 @@ struct WindowClickTests {
             }
         )
 
-        _ = try await core.postLeftClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
+        _ = try await core.postTestClick(pid: 30, windowId: 300, point: CGPoint(x: 150, y: 50))
 
         #expect(await recorder.events == [
             .focus(pid: 30, windowId: 300),
@@ -1285,7 +1541,13 @@ struct WindowClickTests {
             },
             deactivateWindowWithoutRaising: { _, _ in
             },
-            postLeftClick: { pid, windowId, point, windowBounds, _, _ in
+            postMouseEvent: { event, target, _, _ in
+                guard case .click(_, let point) = event else {
+                    throw ComputerUseError.mouseEventUnavailable("expected click event")
+                }
+                let pid = target.pid
+                let windowId = target.windowId
+                let windowBounds = target.windowBounds
                 await recorder.recordClick(
                     pid: pid,
                     windowId: windowId,
@@ -1296,7 +1558,7 @@ struct WindowClickTests {
         )
 
         await #expect(throws: ComputerUseError.self) {
-            try await core.postLeftClick(pid: 123, windowId: 456, point: CGPoint(x: 160, y: 70))
+            try await core.postTestClick(pid: 123, windowId: 456, point: CGPoint(x: 160, y: 70))
         }
         #expect(await recorder.events.isEmpty)
     }
@@ -1322,7 +1584,7 @@ struct WindowClickTests {
             }
         )
 
-        try await poster.postLeftClick(
+        try await poster.postTestClick(
             pid: 123,
             windowId: 456,
             point: CGPoint(x: 160, y: 70),
@@ -1378,9 +1640,109 @@ struct WindowClickTests {
         ])
     }
 
+    @Test("mouse poster uses public pid target right-button move/down/up events")
+    func mousePosterUsesPublicPidRightButtonMoveDownUpEvents() async throws {
+        let recorder = MousePostRecorder()
+        let poster = MouseEventPoster(
+            postPublicEventToPID: { event, pid in
+                recorder.recordPublicPost(event: event, pid: pid)
+            },
+            postSkyLightEventToPID: { event, pid in
+                recorder.recordSkyLightPost(event: event, pid: pid)
+            },
+            setWindowLocation: { _, point in
+                recorder.recordWindowLocation(point)
+            },
+            setIntegerField: { _, field, value in
+                recorder.recordIntegerField(field: field, value: value)
+            },
+            sleep: { interval in
+                recorder.recordSleep(interval)
+            }
+        )
+
+        try await poster.post(
+            .click(button: .right, point: CGPoint(x: 160, y: 70)),
+            to: BackgroundMouseEventTarget(
+                pid: 123,
+                windowId: 456,
+                windowBounds: WindowBounds(x: 10, y: 20, width: 300, height: 100)
+            ),
+            deliveryRoute: .appKit,
+            stageObserver: { stage in
+                recorder.recordStage(stage)
+            }
+        )
+
+        #expect(recorder.skyLightPosts.isEmpty)
+        #expect(recorder.publicPosts.map(\.type) == [
+            .mouseMoved,
+            .rightMouseDown,
+            .rightMouseUp,
+        ])
+        #expect(recorder.publicPosts.map(\.buttonNumber) == [1, 1, 1])
+        #expect(recorder.windowLocations == [
+            CGPoint(x: 150, y: 50),
+            CGPoint(x: 150, y: 50),
+            CGPoint(x: 150, y: 50),
+        ])
+        #expect(recorder.stages == [
+            .afterMouseMoved,
+            .afterTargetDown,
+            .afterTargetUp,
+        ])
+    }
+
+    @Test("mouse poster rejects AppKit drag without posting events")
+    func mousePosterRejectsAppKitDragWithoutPostingEvents() async throws {
+        let recorder = MousePostRecorder()
+        let poster = MouseEventPoster(
+            postPublicEventToPID: { event, pid in
+                recorder.recordPublicPost(event: event, pid: pid)
+            },
+            postSkyLightEventToPID: { event, pid in
+                recorder.recordSkyLightPost(event: event, pid: pid)
+            },
+            setWindowLocation: { _, point in
+                recorder.recordWindowLocation(point)
+            },
+            setIntegerField: { _, field, value in
+                recorder.recordIntegerField(field: field, value: value)
+            },
+            sleep: { interval in
+                recorder.recordSleep(interval)
+            }
+        )
+
+        await #expect(throws: ComputerUseError.self) {
+            try await poster.post(
+                .drag(
+                    button: .left,
+                    from: CGPoint(x: 160, y: 70),
+                    to: CGPoint(x: 220, y: 90)
+                ),
+                to: BackgroundMouseEventTarget(
+                    pid: 123,
+                    windowId: 456,
+                    windowBounds: WindowBounds(x: 10, y: 20, width: 300, height: 100)
+                ),
+                deliveryRoute: .appKit,
+                stageObserver: { stage in
+                    recorder.recordStage(stage)
+                }
+            )
+        }
+        #expect(recorder.publicPosts.isEmpty)
+        #expect(recorder.skyLightPosts.isEmpty)
+        #expect(recorder.windowLocations.isEmpty)
+        #expect(recorder.integerFields.isEmpty)
+        #expect(recorder.sleeps.isEmpty)
+        #expect(recorder.stages.isEmpty)
+    }
+
     @Test("classifies browser web content targets for the webContent delivery route")
     func classifiesBrowserWebContentTargetsForWebContentDeliveryRoute() {
-        let classifier = MouseClickDeliveryClassifier(
+        let classifier = BackgroundMouseEventDeliveryClassifier(
             fileExists: { path in
                 path == "/Applications/CustomElectron.app/Contents/Frameworks/Electron Framework.framework"
                     || path == "/Applications/CustomCEF.app/Contents/Frameworks/Chromium Embedded Framework.framework"
@@ -1391,31 +1753,31 @@ struct WindowClickTests {
         #expect(classifier.classification(
             bundleIdentifier: "com.google.Chrome",
             bundleURL: nil
-        ) == MouseClickDeliveryClassification(route: .webContent, reason: .chromiumBrowserBundleId))
+        ) == BackgroundMouseEventDeliveryClassification(route: .webContent, reason: .chromiumBrowserBundleId))
         #expect(classifier.classification(
             bundleIdentifier: "com.apple.Safari",
             bundleURL: nil
-        ) == MouseClickDeliveryClassification(route: .webContent, reason: .safariBundleId))
+        ) == BackgroundMouseEventDeliveryClassification(route: .webContent, reason: .safariBundleId))
         #expect(classifier.classification(
             bundleIdentifier: "com.tinyspeck.slackmacgap",
             bundleURL: nil
-        ) == MouseClickDeliveryClassification(route: .webContent, reason: .knownElectronBundleId))
+        ) == BackgroundMouseEventDeliveryClassification(route: .webContent, reason: .knownElectronBundleId))
         #expect(classifier.classification(
             bundleIdentifier: "dev.local.CustomElectron",
             bundleURL: URL(fileURLWithPath: "/Applications/CustomElectron.app")
-        ) == MouseClickDeliveryClassification(route: .webContent, reason: .electronFramework))
+        ) == BackgroundMouseEventDeliveryClassification(route: .webContent, reason: .electronFramework))
         #expect(classifier.classification(
             bundleIdentifier: "dev.local.CustomCEF",
             bundleURL: URL(fileURLWithPath: "/Applications/CustomCEF.app")
-        ) == MouseClickDeliveryClassification(route: .webContent, reason: .chromiumEmbeddedFramework))
+        ) == BackgroundMouseEventDeliveryClassification(route: .webContent, reason: .chromiumEmbeddedFramework))
         #expect(classifier.classification(
             bundleIdentifier: "com.tencent.qq",
             bundleURL: URL(fileURLWithPath: "/Applications/QQ.app")
-        ) == MouseClickDeliveryClassification(route: .webContent, reason: .knownElectronBundleId))
+        ) == BackgroundMouseEventDeliveryClassification(route: .webContent, reason: .knownElectronBundleId))
         #expect(classifier.classification(
             bundleIdentifier: "com.apple.TextEdit",
             bundleURL: URL(fileURLWithPath: "/System/Applications/TextEdit.app")
-        ) == MouseClickDeliveryClassification(route: .appKit, reason: .appKitDefault))
+        ) == BackgroundMouseEventDeliveryClassification(route: .appKit, reason: .appKitDefault))
     }
 
     @Test("classifies arbitrary Chromium runtime resources without a bundle id whitelist")
@@ -1431,13 +1793,13 @@ struct WindowClickTests {
             try Data().write(to: resources.appendingPathComponent(marker))
         }
 
-        let classifier = MouseClickDeliveryClassifier()
+        let classifier = BackgroundMouseEventDeliveryClassifier()
         let appURL = root.appendingPathComponent("CustomChromium.app", isDirectory: true)
 
         #expect(classifier.classification(
             bundleIdentifier: "dev.local.NotWhitelisted",
             bundleURL: appURL
-        ) == MouseClickDeliveryClassification(route: .webContent, reason: .chromiumRuntimeResources))
+        ) == BackgroundMouseEventDeliveryClassification(route: .webContent, reason: .chromiumRuntimeResources))
     }
 
     @Test("webContent delivery route matches Codex annotated mouse sequence")
@@ -1461,7 +1823,7 @@ struct WindowClickTests {
             }
         )
 
-        try await poster.postLeftClick(
+        try await poster.postTestClick(
             pid: 123,
             windowId: 456,
             point: CGPoint(x: 160, y: 70),
@@ -1521,6 +1883,151 @@ struct WindowClickTests {
             .afterPrimerUp,
             .afterPrimerGap,
             .afterTargetDown,
+            .afterTargetUp,
+        ])
+    }
+
+    @Test("webContent delivery route posts right-click through SkyLight primer sequence")
+    func webContentDeliveryRoutePostsRightClickThroughSkyLightPrimerSequence() async throws {
+        let recorder = MousePostRecorder()
+        let poster = MouseEventPoster(
+            postPublicEventToPID: { event, pid in
+                recorder.recordPublicPost(event: event, pid: pid)
+            },
+            postSkyLightEventToPID: { event, pid in
+                recorder.recordSkyLightPost(event: event, pid: pid)
+            },
+            setWindowLocation: { _, point in
+                recorder.recordWindowLocation(point)
+            },
+            setIntegerField: { _, field, value in
+                recorder.recordIntegerField(field: field, value: value)
+            },
+            sleep: { interval in
+                recorder.recordSleep(interval)
+            }
+        )
+
+        try await poster.post(
+            .click(button: .right, point: CGPoint(x: 160, y: 70)),
+            to: BackgroundMouseEventTarget(
+                pid: 123,
+                windowId: 456,
+                windowBounds: WindowBounds(x: 10, y: 20, width: 300, height: 100)
+            ),
+            deliveryRoute: .webContent,
+            stageObserver: { stage in
+                recorder.recordStage(stage)
+            }
+        )
+
+        #expect(recorder.publicPosts.isEmpty)
+        #expect(recorder.skyLightPosts.map(\.type) == [
+            .mouseMoved,
+            .leftMouseDown,
+            .leftMouseUp,
+            .rightMouseDown,
+            .rightMouseUp,
+        ])
+        #expect(recorder.skyLightPosts.map(\.buttonNumber) == [1, 0, 0, 1, 1])
+        #expect(recorder.skyLightPosts.map(\.location) == [
+            CGPoint(x: 160, y: 70),
+            CGPoint(x: 9, y: 119),
+            CGPoint(x: 9, y: 119),
+            CGPoint(x: 160, y: 70),
+            CGPoint(x: 160, y: 70),
+        ])
+        #expect(recorder.windowLocations == [
+            CGPoint(x: 150, y: 50),
+            CGPoint(x: -1, y: 99),
+            CGPoint(x: -1, y: 99),
+            CGPoint(x: 150, y: 50),
+            CGPoint(x: 150, y: 50),
+        ])
+        #expect(recorder.sleeps == [15_000, 1_000, 100_000, 1_000])
+        #expect(recorder.stages == [
+            .afterMouseMoved,
+            .afterPrimerDown,
+            .afterPrimerUp,
+            .afterPrimerGap,
+            .afterTargetDown,
+            .afterTargetUp,
+        ])
+    }
+
+    @Test("webContent delivery route posts drag through SkyLight primer sequence")
+    func webContentDeliveryRoutePostsDragThroughSkyLightPrimerSequence() async throws {
+        let recorder = MousePostRecorder()
+        let poster = MouseEventPoster(
+            postPublicEventToPID: { event, pid in
+                recorder.recordPublicPost(event: event, pid: pid)
+            },
+            postSkyLightEventToPID: { event, pid in
+                recorder.recordSkyLightPost(event: event, pid: pid)
+            },
+            setWindowLocation: { _, point in
+                recorder.recordWindowLocation(point)
+            },
+            setIntegerField: { _, field, value in
+                recorder.recordIntegerField(field: field, value: value)
+            },
+            sleep: { interval in
+                recorder.recordSleep(interval)
+            }
+        )
+
+        try await poster.post(
+            .drag(
+                button: .right,
+                from: CGPoint(x: 160, y: 70),
+                to: CGPoint(x: 220, y: 90)
+            ),
+            to: BackgroundMouseEventTarget(
+                pid: 123,
+                windowId: 456,
+                windowBounds: WindowBounds(x: 10, y: 20, width: 300, height: 100)
+            ),
+            deliveryRoute: .webContent,
+            stageObserver: { stage in
+                recorder.recordStage(stage)
+            }
+        )
+
+        #expect(recorder.publicPosts.isEmpty)
+        #expect(recorder.skyLightPosts.map(\.type) == [
+            .mouseMoved,
+            .leftMouseDown,
+            .leftMouseUp,
+            .rightMouseDown,
+            .rightMouseDragged,
+            .rightMouseUp,
+        ])
+        #expect(recorder.skyLightPosts.map(\.buttonNumber) == [1, 0, 0, 1, 1, 1])
+        #expect(recorder.skyLightPosts.map(\.location) == [
+            CGPoint(x: 160, y: 70),
+            CGPoint(x: 9, y: 119),
+            CGPoint(x: 9, y: 119),
+            CGPoint(x: 160, y: 70),
+            CGPoint(x: 220, y: 90),
+            CGPoint(x: 220, y: 90),
+        ])
+        #expect(recorder.windowLocations == [
+            CGPoint(x: 150, y: 50),
+            CGPoint(x: -1, y: 99),
+            CGPoint(x: -1, y: 99),
+            CGPoint(x: 150, y: 50),
+            CGPoint(x: 210, y: 70),
+            CGPoint(x: 210, y: 70),
+        ])
+        #expect(recorder.sleeps == [15_000, 1_000, 100_000, 1_000, 1_000])
+        #expect(recorder.integerFields.filter { $0.field == 0 }.map(\.value) == [0, 1, 2, 1, 4, 4])
+        #expect(recorder.stages == [
+            .afterMouseMoved,
+            .afterPrimerDown,
+            .afterPrimerUp,
+            .afterPrimerGap,
+            .afterTargetDown,
+            .afterTargetDragged,
             .afterTargetUp,
         ])
     }
@@ -1586,6 +2093,91 @@ private enum ClickChainEvent: Equatable {
     case click(pid: pid_t, windowId: CGWindowID, point: CGPoint, windowBounds: WindowBounds)
 }
 
+private actor BackgroundMouseEventRecorder {
+    private var recordedEvents: [RecordedBackgroundMouseEvent] = []
+
+    var events: [RecordedBackgroundMouseEvent] {
+        recordedEvents
+    }
+
+    func record(
+        event: BackgroundMouseEvent,
+        target: BackgroundMouseEventTarget,
+        deliveryRoute: BackgroundMouseEventDeliveryRoute
+    ) {
+        recordedEvents.append(.post(
+            event: event,
+            target: target,
+            deliveryRoute: deliveryRoute
+        ))
+    }
+}
+
+private enum RecordedBackgroundMouseEvent: Equatable {
+    case post(
+        event: BackgroundMouseEvent,
+        target: BackgroundMouseEventTarget,
+        deliveryRoute: BackgroundMouseEventDeliveryRoute
+    )
+}
+
+private extension ComputerUseCore {
+    func postTestClick(
+        pid: pid_t,
+        windowId: CGWindowID,
+        point: CGPoint
+    ) async throws -> WindowMouseEventResult {
+        try await postMouseEvent(
+            pid: pid,
+            windowId: windowId,
+            event: .click(button: .left, point: point)
+        )
+    }
+
+    func postTestClickTrace(
+        pid: pid_t,
+        windowId: CGWindowID,
+        point: CGPoint
+    ) async throws -> WindowMouseEventTraceResult {
+        try await postMouseEventTrace(
+            pid: pid,
+            windowId: windowId,
+            event: .click(button: .left, point: point)
+        )
+    }
+}
+
+private extension WindowMouseEventResult {
+    var clickPoint: CGPoint? {
+        guard case .click(_, let point) = event else {
+            return nil
+        }
+        return point
+    }
+}
+
+private extension MouseEventPoster {
+    func postTestClick(
+        pid: pid_t,
+        windowId: CGWindowID,
+        point: CGPoint,
+        windowBounds: WindowBounds,
+        deliveryRoute: BackgroundMouseEventDeliveryRoute = .appKit,
+        stageObserver: BackgroundMouseEventPostObserver? = nil
+    ) async throws {
+        try await post(
+            .click(button: .left, point: point),
+            to: BackgroundMouseEventTarget(
+                pid: pid,
+                windowId: windowId,
+                windowBounds: windowBounds
+            ),
+            deliveryRoute: deliveryRoute,
+            stageObserver: stageObserver
+        )
+    }
+}
+
 private final class WindowSnapshotScript: @unchecked Sendable {
     private let snapshots: [[WindowInfo]]
     private let lock = NSLock()
@@ -1623,11 +2215,11 @@ private final class ActiveStateScript: @unchecked Sendable {
 }
 
 private final class DeliveryRouteRecorder: @unchecked Sendable {
-    private let route: MouseClickDeliveryRoute
+    private let route: BackgroundMouseEventDeliveryRoute
     private let lock = NSLock()
     private var recordedPIDs: [pid_t] = []
 
-    init(route: MouseClickDeliveryRoute) {
+    init(route: BackgroundMouseEventDeliveryRoute) {
         self.route = route
     }
 
@@ -1637,7 +2229,7 @@ private final class DeliveryRouteRecorder: @unchecked Sendable {
         return recordedPIDs
     }
 
-    func resolve(pid: pid_t) -> MouseClickDeliveryRoute {
+    func resolve(pid: pid_t) -> BackgroundMouseEventDeliveryRoute {
         lock.lock()
         recordedPIDs.append(pid)
         lock.unlock()
@@ -1665,7 +2257,7 @@ private final class ManualWindowOrderChangeObserver: @unchecked Sendable {
 
     func emit(windowId: CGWindowID) async throws {
         guard let handler = handlerSnapshot() else {
-            throw ComputerUseError.clickUnavailable("window-order observer was not armed")
+            throw ComputerUseError.mouseEventUnavailable("window-order observer was not armed")
         }
         try await handler(windowId)
     }
@@ -1695,6 +2287,7 @@ private final class MousePostRecorder: @unchecked Sendable {
         let location: CGPoint
         let windowUnderMousePointer: Int64
         let windowUnderMousePointerThatCanHandleThisEvent: Int64
+        let buttonNumber: Int64
         let rawField58: Int64
     }
 
@@ -1709,7 +2302,7 @@ private final class MousePostRecorder: @unchecked Sendable {
     private var recordedWindowLocations: [CGPoint] = []
     private var recordedIntegerFields: [IntegerField] = []
     private var recordedSleeps: [useconds_t] = []
-    private var recordedStages: [MouseClickPostStage] = []
+    private var recordedStages: [BackgroundMouseEventPostStage] = []
 
     var publicPosts: [Post] {
         lock.lock()
@@ -1741,7 +2334,7 @@ private final class MousePostRecorder: @unchecked Sendable {
         return recordedSleeps
     }
 
-    var stages: [MouseClickPostStage] {
+    var stages: [BackgroundMouseEventPostStage] {
         lock.lock()
         defer { lock.unlock() }
         return recordedStages
@@ -1758,6 +2351,7 @@ private final class MousePostRecorder: @unchecked Sendable {
             windowUnderMousePointerThatCanHandleThisEvent: event.getIntegerValueField(
                 .mouseEventWindowUnderMousePointerThatCanHandleThisEvent
             ),
+            buttonNumber: event.getIntegerValueField(.mouseEventButtonNumber),
             rawField58: event.getIntegerValueField(CGEventField(rawValue: 58)!)
         ))
     }
@@ -1773,6 +2367,7 @@ private final class MousePostRecorder: @unchecked Sendable {
             windowUnderMousePointerThatCanHandleThisEvent: event.getIntegerValueField(
                 .mouseEventWindowUnderMousePointerThatCanHandleThisEvent
             ),
+            buttonNumber: event.getIntegerValueField(.mouseEventButtonNumber),
             rawField58: event.getIntegerValueField(CGEventField(rawValue: 58)!)
         ))
     }
@@ -1795,7 +2390,7 @@ private final class MousePostRecorder: @unchecked Sendable {
         recordedSleeps.append(interval)
     }
 
-    func recordStage(_ stage: MouseClickPostStage) {
+    func recordStage(_ stage: BackgroundMouseEventPostStage) {
         lock.lock()
         defer { lock.unlock() }
         recordedStages.append(stage)

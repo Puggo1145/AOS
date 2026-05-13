@@ -6,9 +6,8 @@ import Foundation
 // MARK: - ComputerUseCore
 //
 // Public façade for the Computer Use foundation: app/window enumeration,
-// AX snapshot rendering, screenshot capture, non-raising focus, and snapshot
-// cache ownership. App operation layers were removed so this actor has no
-// ability to click, type, drag, or scroll.
+// AX snapshot rendering, screenshot capture, non-raising focus, background
+// mouse-event dispatch, and snapshot cache ownership.
 
 public struct AppStateBundle: Sendable {
     public let stateId: StateID
@@ -46,20 +45,21 @@ public struct WindowFocusResult: Sendable, Equatable {
     }
 }
 
-/// Result of posting a coordinate-based left click to a WindowServer window.
-public struct WindowClickResult: Sendable, Equatable {
+/// Result of posting a coordinate-based mouse event to a WindowServer window.
+public struct WindowMouseEventResult: Sendable, Equatable {
     public let pid: pid_t
     public let windowId: CGWindowID
-    public let point: CGPoint
+    public let event: BackgroundMouseEvent
 
-    public init(pid: pid_t, windowId: CGWindowID, point: CGPoint) {
+    public init(pid: pid_t, windowId: CGWindowID, event: BackgroundMouseEvent) {
         self.pid = pid
         self.windowId = windowId
-        self.point = point
+        self.event = event
     }
 }
 
-public enum WindowClickTraceStage: String, Sendable, Codable, Equatable {
+/// WindowServer and app-active sampling stage around a background mouse event.
+public enum WindowMouseEventTraceStage: String, Sendable, Codable, Equatable {
     case before
     case afterFocus
     case afterMouseMoved
@@ -67,6 +67,7 @@ public enum WindowClickTraceStage: String, Sendable, Codable, Equatable {
     case afterPrimerUp
     case afterPrimerGap
     case afterTargetDown
+    case afterTargetDragged
     case afterTargetUp
     case afterRestoreOriginalFrontWindow
     case afterTargetDeactivate
@@ -77,8 +78,9 @@ public enum WindowClickTraceStage: String, Sendable, Codable, Equatable {
     case afterTraceSettle1s
 }
 
-public struct WindowClickTraceSnapshot: Sendable, Codable, Equatable {
-    public let stage: WindowClickTraceStage
+/// Snapshot of frontmost-window and target-window state at one trace stage.
+public struct WindowMouseEventTraceSnapshot: Sendable, Codable, Equatable {
+    public let stage: WindowMouseEventTraceStage
     public let frontmostPID: pid_t?
     public let frontmostBundleIdentifier: String?
     public let frontmostWindowId: CGWindowID?
@@ -90,7 +92,7 @@ public struct WindowClickTraceSnapshot: Sendable, Codable, Equatable {
     public let corrected: Bool?
 
     public init(
-        stage: WindowClickTraceStage,
+        stage: WindowMouseEventTraceStage,
         frontmostPID: pid_t?,
         frontmostBundleIdentifier: String?,
         frontmostWindowId: CGWindowID?,
@@ -114,11 +116,12 @@ public struct WindowClickTraceSnapshot: Sendable, Codable, Equatable {
     }
 }
 
-public struct WindowClickTraceResult: Sendable, Equatable {
-    public let result: WindowClickResult
-    public let snapshots: [WindowClickTraceSnapshot]
+/// Trace result for a coordinate-based background mouse event.
+public struct WindowMouseEventTraceResult: Sendable, Equatable {
+    public let result: WindowMouseEventResult
+    public let snapshots: [WindowMouseEventTraceSnapshot]
 
-    public init(result: WindowClickResult, snapshots: [WindowClickTraceSnapshot]) {
+    public init(result: WindowMouseEventResult, snapshots: [WindowMouseEventTraceSnapshot]) {
         self.result = result
         self.snapshots = snapshots
     }
@@ -134,7 +137,7 @@ public enum ComputerUseError: Error, CustomStringConvertible, Sendable {
     case windowMismatch(pid: pid_t, windowId: CGWindowID, ownerPid: pid_t?)
     case captureUnavailable(String)
     case focusUnavailable(String)
-    case clickUnavailable(String)
+    case mouseEventUnavailable(String)
     case payloadTooLarge(bytes: Int, limit: Int)
     case windowNotFound(windowId: CGWindowID)
 
@@ -152,8 +155,8 @@ public enum ComputerUseError: Error, CustomStringConvertible, Sendable {
             return "capture unavailable: \(message)"
         case .focusUnavailable(let message):
             return "focus unavailable: \(message)"
-        case .clickUnavailable(let message):
-            return "click unavailable: \(message)"
+        case .mouseEventUnavailable(let message):
+            return "mouse event unavailable: \(message)"
         case .payloadTooLarge(let bytes, let limit):
             return "screenshot payload \(bytes) bytes exceeds raw limit \(limit) bytes after downscale retries"
         case .windowNotFound(let windowId):
@@ -170,8 +173,8 @@ public actor ComputerUseCore {
     private let windowLookup: @Sendable (CGWindowID) -> WindowInfo?
     private let visibleWindowsLookup: @Sendable () -> [WindowInfo]
     private let frontmostWindowLookup: @Sendable () -> WindowInfo?
-    private let clickDeliveryRoute: @Sendable (pid_t) -> MouseClickDeliveryRoute
-    private let requiresPreClickFocus: @Sendable (MouseClickDeliveryRoute) -> Bool
+    private let mouseEventDeliveryRoute: @Sendable (pid_t) -> BackgroundMouseEventDeliveryRoute
+    private let requiresPreEventFocus: @Sendable (BackgroundMouseEventDeliveryRoute, BackgroundMouseEvent) -> Bool
     private let focusWindowWithoutRaising: @Sendable (pid_t, CGWindowID) async throws -> Void
     private let deactivateWindowWithoutRaising: @Sendable (pid_t, CGWindowID) async throws -> Void
     private let activateApplication: @Sendable (pid_t) async -> Bool
@@ -179,21 +182,19 @@ public actor ComputerUseCore {
     private let windowOrderChangeObserver: WindowOrderChangeObserver?
     private let activeStateGuardDelays: [UInt64]
     private let sleepForActiveStateGuard: @Sendable (UInt64) async throws -> Void
-    private let postLeftClickEvent: @Sendable (
-        pid_t,
-        CGWindowID,
-        CGPoint,
-        WindowBounds,
-        MouseClickDeliveryRoute,
-        MouseClickPostObserver?
+    private let postMouseEventToRoute: @Sendable (
+        BackgroundMouseEvent,
+        BackgroundMouseEventTarget,
+        BackgroundMouseEventDeliveryRoute,
+        BackgroundMouseEventPostObserver?
     ) async throws -> Void
 
     public init() {
         let webAccessibilityActivator = AXWebAccessibilityActivator()
         let windowFocuser = SkyLightWindowFocuser.live()
         let mousePoster = MouseEventPoster.live()
-        let mouseDeliveryClassifier = MouseClickDeliveryClassifier()
-        let deliveryRouteForPID: @Sendable (pid_t) -> MouseClickDeliveryRoute = { pid in
+        let mouseDeliveryClassifier = BackgroundMouseEventDeliveryClassifier()
+        let deliveryRouteForPID: @Sendable (pid_t) -> BackgroundMouseEventDeliveryRoute = { pid in
             let app = NSRunningApplication(processIdentifier: pid)
             return mouseDeliveryClassifier.deliveryRoute(
                 bundleIdentifier: app?.bundleIdentifier,
@@ -214,7 +215,7 @@ public actor ComputerUseCore {
             frontmostWindowLookup: {
                 Self.currentFrontmostLayerZeroWindow()
             },
-            clickDeliveryRoute: deliveryRouteForPID,
+            mouseEventDeliveryRoute: deliveryRouteForPID,
             focusWindowWithoutRaising: { pid, windowId in
                 try windowFocuser.focusWindowWithoutRaising(pid: pid, windowId: windowId)
             },
@@ -236,12 +237,10 @@ public actor ComputerUseCore {
             sleepForActiveStateGuard: { delay in
                 try await Task.sleep(nanoseconds: delay)
             },
-            postLeftClick: { pid, windowId, point, windowBounds, deliveryRoute, stageObserver in
-                try await mousePoster.postLeftClick(
-                    pid: pid,
-                    windowId: windowId,
-                    point: point,
-                    windowBounds: windowBounds,
+            postMouseEvent: { event, target, deliveryRoute, stageObserver in
+                try await mousePoster.post(
+                    event,
+                    to: target,
                     deliveryRoute: deliveryRoute,
                     stageObserver: stageObserver
                 )
@@ -257,8 +256,11 @@ public actor ComputerUseCore {
         windowLookup: @escaping @Sendable (CGWindowID) -> WindowInfo?,
         visibleWindowsLookup: @escaping @Sendable () -> [WindowInfo] = { [] },
         frontmostWindowLookup: @escaping @Sendable () -> WindowInfo? = { nil },
-        clickDeliveryRoute: @escaping @Sendable (pid_t) -> MouseClickDeliveryRoute = { _ in .appKit },
-        requiresPreClickFocus: @escaping @Sendable (MouseClickDeliveryRoute) -> Bool = { $0.requiresPreClickFocus },
+        mouseEventDeliveryRoute: @escaping @Sendable (pid_t) -> BackgroundMouseEventDeliveryRoute = { _ in .appKit },
+        requiresPreEventFocus: @escaping @Sendable (
+            BackgroundMouseEventDeliveryRoute,
+            BackgroundMouseEvent
+        ) -> Bool = { route, _ in route.requiresPreEventFocus },
         focusWindowWithoutRaising: @escaping @Sendable (pid_t, CGWindowID) async throws -> Void,
         deactivateWindowWithoutRaising: @escaping @Sendable (pid_t, CGWindowID) async throws -> Void,
         activateApplication: @escaping @Sendable (pid_t) async -> Bool = { _ in false },
@@ -266,15 +268,13 @@ public actor ComputerUseCore {
         windowOrderChangeObserver: WindowOrderChangeObserver? = nil,
         activeStateGuardDelays: [UInt64] = [],
         sleepForActiveStateGuard: @escaping @Sendable (UInt64) async throws -> Void = { _ in },
-        postLeftClick: @escaping @Sendable (
-            pid_t,
-            CGWindowID,
-            CGPoint,
-            WindowBounds,
-            MouseClickDeliveryRoute,
-            MouseClickPostObserver?
-        ) async throws -> Void = { _, _, _, _, _, _ in
-            throw ComputerUseError.clickUnavailable("mouse event poster is not configured")
+        postMouseEvent: @escaping @Sendable (
+            BackgroundMouseEvent,
+            BackgroundMouseEventTarget,
+            BackgroundMouseEventDeliveryRoute,
+            BackgroundMouseEventPostObserver?
+        ) async throws -> Void = { _, _, _, _ in
+            throw ComputerUseError.mouseEventUnavailable("postMouseEvent dependency was not configured")
         }
     ) {
         let snapshot = snapshot ?? AccessibilitySnapshot(webAccessibilityActivator: webAccessibilityActivator)
@@ -285,8 +285,8 @@ public actor ComputerUseCore {
         self.windowLookup = windowLookup
         self.visibleWindowsLookup = visibleWindowsLookup
         self.frontmostWindowLookup = frontmostWindowLookup
-        self.clickDeliveryRoute = clickDeliveryRoute
-        self.requiresPreClickFocus = requiresPreClickFocus
+        self.mouseEventDeliveryRoute = mouseEventDeliveryRoute
+        self.requiresPreEventFocus = requiresPreEventFocus
         self.focusWindowWithoutRaising = focusWindowWithoutRaising
         self.deactivateWindowWithoutRaising = deactivateWindowWithoutRaising
         self.activateApplication = activateApplication
@@ -294,7 +294,7 @@ public actor ComputerUseCore {
         self.windowOrderChangeObserver = windowOrderChangeObserver
         self.activeStateGuardDelays = activeStateGuardDelays
         self.sleepForActiveStateGuard = sleepForActiveStateGuard
-        self.postLeftClickEvent = postLeftClick
+        self.postMouseEventToRoute = postMouseEvent
     }
 
     public func listApps(mode: AppListMode) -> [AppInfo] {
@@ -306,7 +306,7 @@ public actor ComputerUseCore {
             throw ComputerUseError.appNotFound(pid: pid)
         }
 
-        let classifier = MouseClickDeliveryClassifier()
+        let classifier = BackgroundMouseEventDeliveryClassifier()
         let classification = classifier.classification(
             bundleIdentifier: app.bundleIdentifier,
             bundleURL: app.bundleURL
@@ -377,47 +377,49 @@ public actor ComputerUseCore {
         return WindowFocusResult(pid: pid, windowId: windowId)
     }
 
-    /// Posts a background left-click to an explicit screen-space point inside
-    /// `windowId`, using the standard non-raising focus and order-guardian path.
-    public func postLeftClick(
+    /// Posts a coordinate-based background mouse event through the selected
+    /// delivery route while preserving the original front window state.
+    public func postMouseEvent(
         pid: pid_t,
         windowId: CGWindowID,
-        point: CGPoint
-    ) async throws -> WindowClickResult {
-        try await performPostLeftClick(pid: pid, windowId: windowId, point: point, tracing: false).result
+        event: BackgroundMouseEvent
+    ) async throws -> WindowMouseEventResult {
+        try await performPostMouseEvent(pid: pid, windowId: windowId, event: event, tracing: false).result
     }
 
-    /// Posts a background left-click and returns per-stage WindowServer state
-    /// for diagnosing browser/Web-content activation and ordering side effects.
-    public func postLeftClickTrace(
+    /// Posts a background mouse event and returns per-stage WindowServer state
+    /// for diagnosing activation and ordering side effects.
+    public func postMouseEventTrace(
         pid: pid_t,
         windowId: CGWindowID,
-        point: CGPoint
-    ) async throws -> WindowClickTraceResult {
-        try await performPostLeftClick(
+        event: BackgroundMouseEvent
+    ) async throws -> WindowMouseEventTraceResult {
+        try await performPostMouseEvent(
             pid: pid,
             windowId: windowId,
-            point: point,
+            event: event,
             tracing: true
         )
     }
 
-    private func performPostLeftClick(
+    private func performPostMouseEvent(
         pid: pid_t,
         windowId: CGWindowID,
-        point: CGPoint,
+        event: BackgroundMouseEvent,
         tracing: Bool
-    ) async throws -> WindowClickTraceResult {
+    ) async throws -> WindowMouseEventTraceResult {
         let window = try validateOwnership(pid: pid, windowId: windowId)
-        guard window.bounds.cgRect.contains(point) else {
-            throw ComputerUseError.clickUnavailable(
-                "point \(Int(point.x)),\(Int(point.y)) is outside window \(windowId)"
+        try validateMouseEvent(event, isInside: window)
+        let deliveryRoute = mouseEventDeliveryRoute(pid)
+        guard deliveryRoute.supports(event) else {
+            throw ComputerUseError.mouseEventUnavailable(
+                "\(deliveryRoute) route does not support \(event)"
             )
         }
-        let deliveryRoute = clickDeliveryRoute(pid)
+        let target = BackgroundMouseEventTarget(pid: pid, windowId: windowId, windowBounds: window.bounds)
         let originalFrontWindow = frontmostWindowLookup()
         let orderGuardian = try makeWindowOrderGuardian(targetWindowId: windowId)
-        let traceRecorder = tracing ? WindowClickTraceRecorder() : nil
+        let traceRecorder = tracing ? WindowMouseEventTraceRecorder() : nil
         let orderChangeObservation = try await startWindowOrderChangeGuard(
             orderGuardian,
             originalFrontWindow: originalFrontWindow,
@@ -433,7 +435,7 @@ public actor ComputerUseCore {
                 targetWindowId: windowId,
                 orderGuardian: orderGuardian
             )
-            if requiresPreClickFocus(deliveryRoute) {
+            if requiresPreEventFocus(deliveryRoute, event) {
                 try await focusWindowWithoutRaising(pid, windowId)
                 try await Task.sleep(nanoseconds: 5_000_000)
                 await recordTraceStage(
@@ -444,7 +446,7 @@ public actor ComputerUseCore {
                     orderGuardian: orderGuardian
                 )
             }
-            try await postLeftClickEvent(pid, windowId, point, window.bounds, deliveryRoute) { [self] stage in
+            try await postMouseEventToRoute(event, target, deliveryRoute) { [self] stage in
                 if stage.runsActiveStateGuard {
                     try await self.runActiveStateGuardOnce(
                         orderGuardian,
@@ -453,7 +455,7 @@ public actor ComputerUseCore {
                     )
                 }
                 await self.recordTraceStage(
-                    WindowClickTraceStage(stage),
+                    WindowMouseEventTraceStage(stage),
                     recorder: traceRecorder,
                     targetPID: pid,
                     targetWindowId: windowId,
@@ -491,12 +493,22 @@ public actor ComputerUseCore {
                 )
             }
             try await orderChangeObservation?.finish()
-            let result = WindowClickResult(pid: pid, windowId: windowId, point: point)
+            let result = WindowMouseEventResult(pid: pid, windowId: windowId, event: event)
             let snapshots = await traceRecorder?.allSnapshots() ?? []
-            return WindowClickTraceResult(result: result, snapshots: snapshots)
+            return WindowMouseEventTraceResult(result: result, snapshots: snapshots)
         } catch {
             try? await orderChangeObservation?.finish()
             throw error
+        }
+    }
+
+    private func validateMouseEvent(_ event: BackgroundMouseEvent, isInside window: WindowInfo) throws {
+        for point in event.screenPoints {
+            guard window.bounds.cgRect.contains(point) else {
+                throw ComputerUseError.mouseEventUnavailable(
+                    "point \(Int(point.x)),\(Int(point.y)) for \(event) is outside window \(window.id)"
+                )
+            }
         }
     }
 
@@ -547,7 +559,7 @@ public actor ComputerUseCore {
         windowId: CGWindowID,
         originalFrontWindow: WindowInfo?,
         orderGuardian: WindowOrderGuardian?,
-        traceRecorder: WindowClickTraceRecorder?
+        traceRecorder: WindowMouseEventTraceRecorder?
     ) async throws {
         try await restoreOriginalFrontWindow(originalFrontWindow, targetWindowId: windowId)
         await recordTraceStage(
@@ -611,7 +623,7 @@ public actor ComputerUseCore {
         _ orderGuardian: WindowOrderGuardian?,
         originalFrontWindow: WindowInfo?,
         targetWindowId: CGWindowID,
-        traceRecorder: WindowClickTraceRecorder? = nil,
+        traceRecorder: WindowMouseEventTraceRecorder? = nil,
         targetPID: pid_t? = nil,
         delays: [UInt64]
     ) async throws {
@@ -683,8 +695,8 @@ public actor ComputerUseCore {
     }
 
     private func recordTraceStage(
-        _ stage: WindowClickTraceStage,
-        recorder: WindowClickTraceRecorder?,
+        _ stage: WindowMouseEventTraceStage,
+        recorder: WindowMouseEventTraceRecorder?,
         targetPID: pid_t,
         targetWindowId: CGWindowID,
         orderGuardian: WindowOrderGuardian?,
@@ -703,7 +715,7 @@ public actor ComputerUseCore {
         let frontmostApp = NSWorkspace.shared.frontmostApplication
         let frontmostWindow = Self.currentFrontmostLayerZeroWindow()
         let targetApp = NSRunningApplication(processIdentifier: targetPID)
-        await recorder.record(WindowClickTraceSnapshot(
+        await recorder.record(WindowMouseEventTraceSnapshot(
             stage: stage,
             frontmostPID: frontmostApp?.processIdentifier,
             frontmostBundleIdentifier: frontmostApp?.bundleIdentifier,
@@ -718,12 +730,12 @@ public actor ComputerUseCore {
     }
 
     private func recordTraceSettleSamples(
-        recorder: WindowClickTraceRecorder,
+        recorder: WindowMouseEventTraceRecorder,
         targetPID: pid_t,
         targetWindowId: CGWindowID,
         orderGuardian: WindowOrderGuardian?
     ) async throws {
-        let samples: [(stage: WindowClickTraceStage, delay: UInt64)] = [
+        let samples: [(stage: WindowMouseEventTraceStage, delay: UInt64)] = [
             (.afterTraceSettle50ms, 50_000_000),
             (.afterTraceSettle200ms, 150_000_000),
             (.afterTraceSettle1s, 800_000_000),
@@ -808,22 +820,22 @@ private extension ComputerUseCore {
     }
 }
 
-private actor WindowClickTraceRecorder {
-    private var recordedSnapshots: [WindowClickTraceSnapshot] = []
+private actor WindowMouseEventTraceRecorder {
+    private var recordedSnapshots: [WindowMouseEventTraceSnapshot] = []
 
-    func record(_ snapshot: WindowClickTraceSnapshot) {
+    func record(_ snapshot: WindowMouseEventTraceSnapshot) {
         recordedSnapshots.append(snapshot)
     }
 
-    func allSnapshots() -> [WindowClickTraceSnapshot] {
+    func allSnapshots() -> [WindowMouseEventTraceSnapshot] {
         recordedSnapshots
     }
 }
 
-private extension MouseClickPostStage {
+private extension BackgroundMouseEventPostStage {
     var runsActiveStateGuard: Bool {
         switch self {
-        case .afterMouseMoved, .afterTargetDown, .afterTargetUp:
+        case .afterMouseMoved, .afterTargetDown, .afterTargetDragged, .afterTargetUp:
             return true
         case .afterPrimerDown, .afterPrimerUp, .afterPrimerGap:
             return false
@@ -831,8 +843,8 @@ private extension MouseClickPostStage {
     }
 }
 
-private extension MouseClickDeliveryRoute {
-    var requiresPreClickFocus: Bool {
+private extension BackgroundMouseEventDeliveryRoute {
+    var requiresPreEventFocus: Bool {
         switch self {
         case .appKit, .webContent:
             return true
@@ -840,8 +852,8 @@ private extension MouseClickDeliveryRoute {
     }
 }
 
-private extension WindowClickTraceStage {
-    init(_ stage: MouseClickPostStage) {
+private extension WindowMouseEventTraceStage {
+    init(_ stage: BackgroundMouseEventPostStage) {
         switch stage {
         case .afterMouseMoved:
             self = .afterMouseMoved
@@ -853,6 +865,8 @@ private extension WindowClickTraceStage {
             self = .afterPrimerGap
         case .afterTargetDown:
             self = .afterTargetDown
+        case .afterTargetDragged:
+            self = .afterTargetDragged
         case .afterTargetUp:
             self = .afterTargetUp
         }

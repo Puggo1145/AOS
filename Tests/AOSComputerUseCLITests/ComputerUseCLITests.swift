@@ -17,7 +17,11 @@ struct ComputerUseCLITests {
         #expect(output.contains("focus-window"))
         #expect(output.contains("open-coor-test"))
         #expect(!output.contains("open-button"))
-        #expect(output.contains("post-left-click"))
+        #expect(output.contains("left-click"))
+        #expect(output.contains("right-click"))
+        #expect(output.contains("drag"))
+        #expect(output.contains("web-content only"))
+        #expect(!output.contains("post-left-click"))
         #expect(output.contains("measure-left-click-window-order"))
         #expect(!output.contains("target-down-window-local-offscreen"))
         #expect(!output.contains("target-up-window-local-offscreen"))
@@ -225,12 +229,12 @@ struct ComputerUseCLITests {
         #expect(result.exitCode == 0)
     }
 
-    @Test("post-left-click requires a local coordinate")
-    func postLeftClickRequiresLocalCoordinate() async throws {
+    @Test("left-click requires a local coordinate")
+    func leftClickRequiresLocalCoordinate() async throws {
         let fake = FakeComputerUseCore()
 
         let result = try await ComputerUseCLI.run(
-            arguments: ["post-left-click", "--pid", "123", "--window-id", "456"],
+            arguments: ["left-click", "--pid", "123", "--window-id", "456"],
             core: fake,
             permissions: FakePermissionClient()
         )
@@ -241,8 +245,8 @@ struct ComputerUseCLITests {
         #expect(result.exitCode != 0)
     }
 
-    @Test("post-left-click accepts a local coordinate")
-    func postLeftClickAcceptsLocalCoordinate() async throws {
+    @Test("left-click accepts a local coordinate")
+    func leftClickAcceptsLocalCoordinate() async throws {
         let fake = FakeComputerUseCore()
         await fake.setWindows([
             WindowInfo(
@@ -258,7 +262,7 @@ struct ComputerUseCLITests {
         ])
 
         let result = try await ComputerUseCLI.run(
-            arguments: ["post-left-click", "--pid", "123", "--window-id", "456", "--coor", "260,180"],
+            arguments: ["left-click", "--pid", "123", "--window-id", "456", "--coor", "260,180"],
             core: fake,
             permissions: FakePermissionClient()
         )
@@ -273,8 +277,133 @@ struct ComputerUseCLITests {
         #expect(result.exitCode == 0)
     }
 
-    @Test("post-left-click trace is opt-in and writes diagnostics to stderr")
-    func postLeftClickTraceIsOptInAndWritesDiagnosticsToStderr() async throws {
+    @Test("right-click accepts a local coordinate")
+    func rightClickAcceptsLocalCoordinate() async throws {
+        let fake = FakeComputerUseCore()
+        await fake.setWindows([
+            WindowInfo(
+                id: 456,
+                pid: 123,
+                owner: "AOSCoordinateTarget",
+                title: "AOS Button Reliability Target",
+                bounds: WindowBounds(x: 50, y: 70, width: 520, height: 360),
+                zIndex: 1,
+                isOnScreen: true,
+                layer: 0
+            )
+        ])
+
+        let result = try await ComputerUseCLI.run(
+            arguments: ["right-click", "--pid", "123", "--window-id", "456", "--coor", "260,180"],
+            core: fake,
+            permissions: FakePermissionClient()
+        )
+
+        #expect(await fake.requestedMouseEvent == .click(button: .right, point: CGPoint(x: 310, y: 250)))
+        #expect(result.stdout.contains("Posted right click to window 456 at 310,250"))
+        #expect(result.stderr.isEmpty)
+        #expect(result.exitCode == 0)
+    }
+
+    @Test("scroll command is not accepted")
+    func scrollCommandIsNotAccepted() async throws {
+        let fake = FakeComputerUseCore()
+
+        let result = try await ComputerUseCLI.run(
+            arguments: ["scroll", "--pid", "123", "--window-id", "456", "--coor", "260,180", "--delta", "-12,24"],
+            core: fake,
+            permissions: FakePermissionClient()
+        )
+
+        #expect(await fake.requestedMouseEvent == nil)
+        #expect(result.stdout.isEmpty)
+        #expect(result.stderr.contains("unknown command scroll"))
+        #expect(result.exitCode == 64)
+    }
+
+    @Test("drag accepts local endpoints and button")
+    func dragAcceptsLocalEndpointsAndButton() async throws {
+        let fake = FakeComputerUseCore()
+        await fake.setAppType(AppTypeResult(
+            pid: 123,
+            appName: "Chrome",
+            bundleId: "com.google.Chrome",
+            bundlePath: "/Applications/Google Chrome.app",
+            type: .webContent,
+            reason: .chromiumBrowserBundleId
+        ))
+        await fake.setWindows([
+            WindowInfo(
+                id: 456,
+                pid: 123,
+                owner: "AOSCoordinateTarget",
+                title: "AOS Button Reliability Target",
+                bounds: WindowBounds(x: 50, y: 70, width: 520, height: 360),
+                zIndex: 1,
+                isOnScreen: true,
+                layer: 0
+            )
+        ])
+
+        let result = try await ComputerUseCLI.run(
+            arguments: [
+                "drag",
+                "--pid", "123",
+                "--window-id", "456",
+                "--from", "260,180",
+                "--to", "280,210",
+                "--button", "right",
+            ],
+            core: fake,
+            permissions: FakePermissionClient()
+        )
+
+        #expect(await fake.requestedMouseEvent == .drag(
+            button: .right,
+            from: CGPoint(x: 310, y: 250),
+            to: CGPoint(x: 330, y: 280)
+        ))
+        #expect(await fake.requestedAppTypePID == 123)
+        #expect(result.stdout.contains("Posted right drag to window 456 from 310,250 to 330,280"))
+        #expect(result.stderr.isEmpty)
+        #expect(result.exitCode == 0)
+    }
+
+    @Test("drag rejects AppKit targets before posting")
+    func dragRejectsAppKitTargetsBeforePosting() async throws {
+        let fake = FakeComputerUseCore()
+        await fake.setAppType(AppTypeResult(
+            pid: 123,
+            appName: "Finder",
+            bundleId: "com.apple.finder",
+            bundlePath: "/System/Library/CoreServices/Finder.app",
+            type: .appKit,
+            reason: .appKitDefault
+        ))
+
+        let result = try await ComputerUseCLI.run(
+            arguments: [
+                "drag",
+                "--pid", "123",
+                "--window-id", "456",
+                "--from", "260,180",
+                "--to", "280,210",
+            ],
+            core: fake,
+            permissions: FakePermissionClient()
+        )
+
+        #expect(await fake.requestedAppTypePID == 123)
+        #expect(await fake.requestedWindowPID == nil)
+        #expect(await fake.requestedMouseEvent == nil)
+        #expect(result.stdout.isEmpty)
+        #expect(result.stderr.contains("drag is only supported for web-content targets"))
+        #expect(result.stderr.contains("Finder"))
+        #expect(result.exitCode == 64)
+    }
+
+    @Test("left-click trace is opt-in and writes diagnostics to stderr")
+    func leftClickTraceIsOptInAndWritesDiagnosticsToStderr() async throws {
         let fake = FakeComputerUseCore()
         await fake.setWindows([
             WindowInfo(
@@ -288,14 +417,14 @@ struct ComputerUseCLITests {
                 layer: 0
             )
         ])
-        await fake.setLeftClickTrace(WindowClickTraceResult(
-            result: WindowClickResult(
+        await fake.setLeftClickTrace(WindowMouseEventTraceResult(
+            result: WindowMouseEventResult(
                 pid: 123,
                 windowId: 456,
-                point: CGPoint(x: 310, y: 250)
+                event: .click(button: .left, point: CGPoint(x: 310, y: 250))
             ),
             snapshots: [
-                WindowClickTraceSnapshot(
+                WindowMouseEventTraceSnapshot(
                     stage: .before,
                     frontmostPID: 999,
                     frontmostBundleIdentifier: "com.example.Front",
@@ -304,7 +433,7 @@ struct ComputerUseCLITests {
                     targetRank: 3,
                     protectedCoveredCount: 0
                 ),
-                WindowClickTraceSnapshot(
+                WindowMouseEventTraceSnapshot(
                     stage: .activeStateGuardTick,
                     frontmostPID: 999,
                     frontmostBundleIdentifier: "com.example.Front",
@@ -321,7 +450,7 @@ struct ComputerUseCLITests {
 
         let result = try await ComputerUseCLI.run(
             arguments: [
-                "post-left-click",
+                "left-click",
                 "--pid", "123",
                 "--window-id", "456",
                 "--coor", "260,180",
@@ -336,7 +465,7 @@ struct ComputerUseCLITests {
         #expect(await fake.requestedLeftClickTraceWindowID == 456)
         #expect(await fake.requestedLeftClickTracePoint == CGPoint(x: 310, y: 250))
         #expect(result.stdout.contains("Posted left click to window 456 at 310,250"))
-        #expect(result.stderr.contains("Click trace:"))
+        #expect(result.stderr.contains("Mouse event trace:"))
         #expect(result.stderr.contains("before: frontmost pid 999"))
         #expect(result.stderr.contains("activeStateGuardTick"))
         #expect(result.stderr.contains("elapsed-ms 15"))
@@ -365,7 +494,7 @@ struct ComputerUseCLITests {
 
         let result = try await ComputerUseCLI.run(
             arguments: [
-                "post-left-click",
+                "left-click",
                 "--pid", "123",
                 "--window-id", "456",
                 "--coor", "260,180",
@@ -712,7 +841,7 @@ struct ComputerUseCLITests {
     @Test("post-cursor accepts explicit target and posts click at adjusted local coordinate")
     func postCursorAcceptsExplicitTargetAndPostsAdjustedCoordinate() async throws {
         let fake = FakeComputerUseCore()
-        let io = FakePostCursorIO(keys: [.right, .down, .click])
+        let io = FakePostCursorIO(lines: ["left-click"], keys: [.right, .down, .confirm, .quit])
         let overlay = FakePostCursorOverlay()
         await fake.setWindows([
             WindowInfo(
@@ -739,21 +868,155 @@ struct ComputerUseCLITests {
         #expect(await fake.requestedLeftClickPID == 123)
         #expect(await fake.requestedLeftClickWindowID == 456)
         #expect(await fake.requestedLeftClickPoint == CGPoint(x: 320, y: 260))
+        #expect(await fake.requestedMouseEvents == [
+            .click(button: .left, point: CGPoint(x: 320, y: 260)),
+        ])
         #expect(await overlay.points == [
             CGPoint(x: 310, y: 250),
             CGPoint(x: 320, y: 250),
             CGPoint(x: 320, y: 260),
         ])
         #expect(await overlay.hidden == true)
-        #expect(result.stdout.contains("Posted cursor click to window 456 at local 270,190 / screen 320,260"))
+        #expect(result.stdout.contains("Post cursor exited after 1 left-click event(s) at local 270,190 / screen 320,260"))
         #expect(result.stderr.isEmpty)
         #expect(result.exitCode == 0)
+    }
+
+    @Test("post-cursor repeats the selected event from the last cursor position")
+    func postCursorRepeatsSelectedEventFromLastPosition() async throws {
+        let fake = FakeComputerUseCore()
+        let io = FakePostCursorIO(lines: ["right-click"], keys: [.confirm, .right, .confirm, .quit])
+        let overlay = FakePostCursorOverlay()
+        await fake.setWindows([
+            WindowInfo(
+                id: 456,
+                pid: 123,
+                owner: "AOSCoordinateTarget",
+                title: "AOS Button Reliability Target",
+                bounds: WindowBounds(x: 50, y: 70, width: 520, height: 360),
+                zIndex: 1,
+                isOnScreen: true,
+                layer: 0
+            )
+        ])
+
+        let result = try await ComputerUseCLI.run(
+            arguments: ["post-cursor", "--pid", "123", "--window-id", "456", "--coor", "260,180"],
+            core: fake,
+            permissions: FakePermissionClient(),
+            postCursorIO: io,
+            postCursorOverlay: overlay
+        )
+
+        #expect(await fake.requestedMouseEvents == [
+            .click(button: .right, point: CGPoint(x: 310, y: 250)),
+            .click(button: .right, point: CGPoint(x: 320, y: 250)),
+        ])
+        #expect(await overlay.points == [
+            CGPoint(x: 310, y: 250),
+            CGPoint(x: 320, y: 250),
+        ])
+        #expect(result.stdout.contains("Post cursor exited after 2 right-click event(s) at local 270,180 / screen 320,250"))
+        #expect(result.exitCode == 0)
+    }
+
+    @Test("post-cursor uses cursor-confirmed drag endpoints")
+    func postCursorUsesCursorConfirmedDragEndpoints() async throws {
+        let fake = FakeComputerUseCore()
+        let io = FakePostCursorIO(lines: ["drag"], keys: [.confirm, .right, .down, .confirm, .quit])
+        let overlay = FakePostCursorOverlay()
+        await fake.setAppType(AppTypeResult(
+            pid: 123,
+            appName: "Chrome",
+            bundleId: "com.google.Chrome",
+            bundlePath: "/Applications/Google Chrome.app",
+            type: .webContent,
+            reason: .chromiumBrowserBundleId
+        ))
+        await fake.setWindows([
+            WindowInfo(
+                id: 456,
+                pid: 123,
+                owner: "AOSCoordinateTarget",
+                title: "AOS Button Reliability Target",
+                bounds: WindowBounds(x: 50, y: 70, width: 520, height: 360),
+                zIndex: 1,
+                isOnScreen: true,
+                layer: 0
+            )
+        ])
+
+        let result = try await ComputerUseCLI.run(
+            arguments: ["post-cursor", "--pid", "123", "--window-id", "456", "--coor", "260,180"],
+            core: fake,
+            permissions: FakePermissionClient(),
+            postCursorIO: io,
+            postCursorOverlay: overlay
+        )
+
+        #expect(await fake.requestedMouseEvents == [
+            .drag(
+                button: .left,
+                from: CGPoint(x: 310, y: 250),
+                to: CGPoint(x: 320, y: 260)
+            ),
+        ])
+        #expect(await overlay.points == [
+            CGPoint(x: 310, y: 250),
+            CGPoint(x: 320, y: 250),
+            CGPoint(x: 320, y: 260),
+        ])
+        #expect(result.stdout.contains("Post cursor exited after 1 drag event(s) at local 270,190 / screen 320,260"))
+        #expect(result.exitCode == 0)
+    }
+
+    @Test("post-cursor rejects drag for AppKit targets")
+    func postCursorRejectsDragForAppKitTargets() async throws {
+        let fake = FakeComputerUseCore()
+        let io = FakePostCursorIO(lines: ["drag"], keys: [])
+        let overlay = FakePostCursorOverlay()
+        await fake.setAppType(AppTypeResult(
+            pid: 123,
+            appName: "Finder",
+            bundleId: "com.apple.finder",
+            bundlePath: "/System/Library/CoreServices/Finder.app",
+            type: .appKit,
+            reason: .appKitDefault
+        ))
+        await fake.setWindows([
+            WindowInfo(
+                id: 456,
+                pid: 123,
+                owner: "Finder",
+                title: "Finder",
+                bounds: WindowBounds(x: 50, y: 70, width: 520, height: 360),
+                zIndex: 1,
+                isOnScreen: true,
+                layer: 0
+            )
+        ])
+
+        let result = try await ComputerUseCLI.run(
+            arguments: ["post-cursor", "--pid", "123", "--window-id", "456", "--coor", "260,180"],
+            core: fake,
+            permissions: FakePermissionClient(),
+            postCursorIO: io,
+            postCursorOverlay: overlay
+        )
+
+        #expect(await fake.requestedAppTypePID == 123)
+        #expect(await fake.requestedMouseEvents.isEmpty)
+        #expect(await overlay.points.isEmpty)
+        #expect(result.stdout.isEmpty)
+        #expect(result.stderr.contains("drag is only supported for web-content targets"))
+        #expect(result.stderr.contains("Finder"))
+        #expect(result.exitCode == 64)
     }
 
     @Test("post-cursor prompts for pid and window when omitted")
     func postCursorPromptsForTargetWhenOmitted() async throws {
         let fake = FakeComputerUseCore()
-        let io = FakePostCursorIO(lines: ["123", "456"], keys: [.quit])
+        let io = FakePostCursorIO(lines: ["123", "456", "left-click"], keys: [.quit])
         let overlay = FakePostCursorOverlay()
         await fake.setApps([
             AppInfo(
@@ -789,9 +1052,13 @@ struct ComputerUseCLITests {
         #expect(await fake.requestedAppMode == .running)
         #expect(await fake.requestedWindowPID == 123)
         #expect(await fake.requestedLeftClickPID == nil)
-        #expect(await io.prompts == ["Select pid: ", "Select window id: "])
+        #expect(await io.prompts == [
+            "Select pid: ",
+            "Select window id: ",
+            "Select mouse event (left-click/right-click/drag): ",
+        ])
         #expect(await overlay.points == [CGPoint(x: 60, y: 60)])
-        #expect(result.stdout.contains("Post cursor exited at local 50,40 / screen 60,60"))
+        #expect(result.stdout.contains("Post cursor exited without posting left-click at local 50,40 / screen 60,60"))
         #expect(result.exitCode == 0)
     }
 
@@ -808,6 +1075,22 @@ struct ComputerUseCLITests {
         #expect(await fake.requestedLeftClickPID == nil)
         #expect(result.stdout.isEmpty)
         #expect(result.stderr.contains("unknown command postLeftClick"))
+        #expect(result.exitCode == 64)
+    }
+
+    @Test("post-left-click command is not accepted")
+    func postLeftClickCommandIsNotAccepted() async throws {
+        let fake = FakeComputerUseCore()
+
+        let result = try await ComputerUseCLI.run(
+            arguments: ["post-left-click", "--pid", "123", "--window-id", "456", "--coor", "10,20"],
+            core: fake,
+            permissions: FakePermissionClient()
+        )
+
+        #expect(await fake.requestedMouseEvent == nil)
+        #expect(result.stdout.isEmpty)
+        #expect(result.stderr.contains("unknown command post-left-click"))
         #expect(result.exitCode == 64)
     }
 
@@ -1044,7 +1327,10 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
     private(set) var requestedLeftClickTracePID: pid_t?
     private(set) var requestedLeftClickTraceWindowID: CGWindowID?
     private(set) var requestedLeftClickTracePoint: CGPoint?
-    private var leftClickTrace: WindowClickTraceResult?
+    private(set) var requestedMouseEvent: BackgroundMouseEvent?
+    private(set) var requestedMouseEvents: [BackgroundMouseEvent] = []
+    private(set) var requestedMouseEventTrace: BackgroundMouseEvent?
+    private var leftClickTrace: WindowMouseEventTraceResult?
 
     func setApps(_ apps: [AppInfo]) {
         self.apps = apps
@@ -1062,7 +1348,7 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
         self.appType = appType
     }
 
-    func setLeftClickTrace(_ trace: WindowClickTraceResult) {
+    func setLeftClickTrace(_ trace: WindowMouseEventTraceResult) {
         self.leftClickTrace = trace
     }
 
@@ -1100,29 +1386,49 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
         return WindowFocusResult(pid: pid, windowId: windowId)
     }
 
-    func postLeftClick(pid: pid_t, windowId: CGWindowID, point: CGPoint) async throws -> WindowClickResult {
-        requestedLeftClickPID = pid
-        requestedLeftClickWindowID = windowId
-        requestedLeftClickPoint = point
-        requestedLeftClickCount += 1
-        return WindowClickResult(pid: pid, windowId: windowId, point: point)
-    }
-
-    func postLeftClickTrace(
+    func postMouseEvent(
         pid: pid_t,
         windowId: CGWindowID,
-        point: CGPoint
-    ) async throws -> WindowClickTraceResult {
-        requestedLeftClickTracePID = pid
-        requestedLeftClickTraceWindowID = windowId
-        requestedLeftClickTracePoint = point
+        event: BackgroundMouseEvent
+    ) async throws -> WindowMouseEventResult {
+        requestedMouseEvent = event
+        requestedMouseEvents.append(event)
+        if case .click(.left, let point) = event {
+            requestedLeftClickPID = pid
+            requestedLeftClickWindowID = windowId
+            requestedLeftClickPoint = point
+            requestedLeftClickCount += 1
+        }
+        return WindowMouseEventResult(pid: pid, windowId: windowId, event: event)
+    }
+
+    func postMouseEventTrace(
+        pid: pid_t,
+        windowId: CGWindowID,
+        event: BackgroundMouseEvent
+    ) async throws -> WindowMouseEventTraceResult {
+        requestedMouseEventTrace = event
+        if case .click(.left, let point) = event {
+            requestedLeftClickTracePID = pid
+            requestedLeftClickTraceWindowID = windowId
+            requestedLeftClickTracePoint = point
+        }
         if let leftClickTrace {
             return leftClickTrace
         }
-        return WindowClickTraceResult(
-            result: WindowClickResult(pid: pid, windowId: windowId, point: point),
+        return WindowMouseEventTraceResult(
+            result: WindowMouseEventResult(pid: pid, windowId: windowId, event: event),
             snapshots: []
         )
     }
 
+}
+
+private struct FakeComputerUseCoreError: Error, CustomStringConvertible {
+    let message: String
+    var description: String { message }
+
+    init(_ message: String) {
+        self.message = message
+    }
 }
