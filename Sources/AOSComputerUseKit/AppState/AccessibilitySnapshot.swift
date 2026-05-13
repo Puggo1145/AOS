@@ -21,7 +21,7 @@ import Foundation
 // `AOSAXSupport` (the only module both kits depend on) so there is exactly
 // one declaration in the linked binary.
 
-public struct SnapshotElement: Sendable {
+struct SnapshotElement: Sendable {
     public let role: String
     public let title: String?
     public let value: String?
@@ -37,13 +37,13 @@ public struct SnapshotElement: Sendable {
 
 /// Result of a walk: the rendered markdown tree + the element-index map
 /// the cache stores. The walker fills `elementCount` from the map.
-public struct SnapshotResult: Sendable {
+struct SnapshotResult: Sendable {
     public let treeMarkdown: String
     public let elements: [Int: AXUIElement]
     public var elementCount: Int { elements.count }
 }
 
-public enum SnapshotError: Error, CustomStringConvertible, Sendable {
+enum SnapshotError: Error, CustomStringConvertible, Sendable {
     case notAuthorized
     case appNotFound(pid_t)
 
@@ -55,7 +55,7 @@ public enum SnapshotError: Error, CustomStringConvertible, Sendable {
     }
 }
 
-public actor AccessibilitySnapshot {
+actor AccessibilitySnapshot {
     /// Hard caps from `docs/designs/computer-use.md` §"AX 树遍历":
     ///   - 最多 500 actionable 元素 (maxElements — bounds the
     ///     `elementIndex` map handed to `StateCache`; preserves the wire

@@ -12,7 +12,7 @@ struct ComputerUseCLIArchitectureTests {
             "Types.swift",
             "Parser.swift",
             "Outputs.swift",
-            "CoreAdapter.swift",
+            "CoreClient.swift",
             "DiagnosticClients.swift",
             "Permissions.swift",
             "CoordinateTarget.swift",
@@ -30,6 +30,19 @@ struct ComputerUseCLIArchitectureTests {
         #expect(facadeLineCount < 450)
     }
 
+    @Test("CLI uses ComputerUseCore directly without a production adapter")
+    func cliUsesComputerUseCoreDirectlyWithoutProductionAdapter() throws {
+        let root = try Self.packageRoot()
+        let cliRoot = root.appendingPathComponent("Sources/AOSComputerUseCLI")
+
+        #expect(!FileManager.default.fileExists(atPath: cliRoot.appendingPathComponent("CoreAdapter.swift").path))
+
+        for file in try swiftFiles(in: cliRoot) {
+            let source = try String(contentsOf: file, encoding: .utf8)
+            #expect(!source.contains("ComputerUseCoreAdapter"), "\(file.lastPathComponent) still references ComputerUseCoreAdapter")
+        }
+    }
+
     private static func packageRoot(file: String = #filePath) throws -> URL {
         var url = URL(fileURLWithPath: file)
         while url.path != "/" {
@@ -44,6 +57,20 @@ struct ComputerUseCLIArchitectureTests {
 
     private func lineCount(_ url: URL) throws -> Int {
         try String(contentsOf: url, encoding: .utf8).split(separator: "\n", omittingEmptySubsequences: false).count
+    }
+
+    private func swiftFiles(in root: URL) throws -> [URL] {
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey]
+        ) else {
+            return []
+        }
+        return try enumerator.compactMap { entry in
+            guard let url = entry as? URL, url.pathExtension == "swift" else { return nil }
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey])
+            return values.isRegularFile == true ? url : nil
+        }
     }
 }
 

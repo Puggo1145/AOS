@@ -143,24 +143,19 @@ public protocol MouseEventObservationClient: Sendable {
 }
 
 public struct LiveWindowOrderObservationClient: WindowOrderObservationClient {
-    public init() {}
+    private let diagnostics: ComputerUseDiagnosticsClient
+
+    public init(diagnostics: ComputerUseDiagnosticsClient) {
+        self.diagnostics = diagnostics
+    }
 
     public func observe(_ request: WindowOrderObservationRequest) async throws -> [WindowOrderObservationSample] {
-        let probe = try WindowOrderProbe.live(targetPID: request.pid, targetWindowId: request.windowId)
-        let durationNanoseconds = UInt64(request.durationMilliseconds) * 1_000_000
-        let intervalNanoseconds = UInt64(request.intervalMilliseconds) * 1_000_000
-        let start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
-        var samples: [WindowOrderObservationSample] = []
-
-        while true {
-            let now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
-            let elapsed = now >= start ? now - start : 0
-            samples.append(probe.sample(elapsedNanoseconds: elapsed))
-            if elapsed >= durationNanoseconds {
-                return samples
-            }
-            try await Task.sleep(nanoseconds: intervalNanoseconds)
-        }
+        try await diagnostics.observeWindowOrder(
+            pid: request.pid,
+            windowId: request.windowId,
+            durationMilliseconds: request.durationMilliseconds,
+            intervalMilliseconds: request.intervalMilliseconds
+        )
     }
 }
 

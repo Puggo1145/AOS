@@ -1898,7 +1898,7 @@ private actor FakeMouseEventObservationClient: MouseEventObservationClient {
     }
 }
 
-private actor FakeComputerUseCore: ComputerUseCoreClient {
+private actor FakeComputerUseCore: ComputerUseCoreClient, ComputerUseDiagnosticsClient {
     var apps: [AppInfo] = []
     var windows: [WindowInfo] = []
     var state: AppStateBundle?
@@ -1930,6 +1930,10 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
     private var leftClickTrace: WindowMouseEventTraceResult?
     private var activeAppSession: AppSessionResult? = AppSessionResult(pid: 123)
     private var stoppedAppSession = AppSessionResult(pid: 0)
+
+    nonisolated var diagnosticsClient: ComputerUseDiagnosticsClient {
+        self
+    }
 
     func setApps(_ apps: [AppInfo]) {
         self.apps = apps
@@ -2051,6 +2055,15 @@ private actor FakeComputerUseCore: ComputerUseCoreClient {
             result: WindowMouseEventResult(pid: pid, windowId: windowId, event: event),
             snapshots: []
         )
+    }
+
+    func observeWindowOrder(
+        pid: pid_t,
+        windowId: CGWindowID,
+        durationMilliseconds: Int,
+        intervalMilliseconds: Int
+    ) async throws -> [WindowOrderObservationSample] {
+        []
     }
 
     func postKeyboardEvent(

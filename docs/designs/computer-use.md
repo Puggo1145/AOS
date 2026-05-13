@@ -45,14 +45,25 @@ Sources/AOSComputerUseKit/
 `ComputerUseCore` 是当前唯一门面：
 
 - `listApps(mode:) -> [AppInfo]`
+- `getAppType(pid:) -> AppTypeResult`
 - `listWindows(pid:) -> [WindowInfo]`
 - `getAppState(pid:windowId:captureMode:maxImageDimension:) -> AppStateBundle`
-- `focusWindowWithoutRaise(pid:windowId:) -> WindowFocusResult`
 - `startAppSession(pid:windowId:) -> AppSessionResult`
 - `stopAppSession() -> AppSessionResult`
 - `currentAppSession() -> AppSessionResult`
 - `postMouseEvent(windowId:event:) -> WindowMouseEventResult`
 - `postKeyboardEvent(windowId:event:) -> WindowKeyboardEventResult`
+
+Diagnostics 不属于业务 surface，统一挂在 core 的 diagnostics namespace 下：
+
+- `core.diagnostics.focusWindowWithoutRaise(pid:windowId:) -> WindowFocusResult`
+- `core.diagnostics.postMouseEventTrace(windowId:event:) -> WindowMouseEventTraceResult`
+- `core.diagnostics.observeWindowOrder(pid:windowId:durationMilliseconds:intervalMilliseconds:) -> [WindowOrderObservationSample]`
+
+因此外部 target 仍只持有 `ComputerUseCore`；诊断命令不会直接依赖
+`WindowCapture`、`AccessibilitySnapshot`、`WindowEnumerator`、`WindowOrderProbe` 等
+implementation 类型。Kit 对外公开的是 core、diagnostics namespace、以及 core
+入参/返回值需要的 value types。
 
 `getAppState` 支持两种 capture mode。AX tree 每次都会构建并返回：
 
@@ -72,7 +83,7 @@ frontmost window，按 session pid 重新枚举当前所有 layer-0 windows，�
 AppKit route 只支持 left/right click。Drag 仍是鼠标行为层的一种 event，但只由
 web-content route 承接。
 
-该 API 是 in-process Swift API。当前没有 JSON-RPC schema、Sidecar tool schema 或 Shell handler 绑定 background mouse event。Dev Mode 可以直接注入 `ComputerUseCore` 做本地 diagnostics。
+该 API 是 in-process Swift API。当前没有 JSON-RPC schema、Sidecar tool schema 或 Shell handler 绑定 background mouse event。Dev Mode 可以直接注入 `ComputerUseCore`，并通过 `core.diagnostics` 做本地 diagnostics。
 
 ## CLI
 
@@ -91,8 +102,8 @@ CLI target 内部按职责拆分：
 - `Types.swift`：shared CLI result types。
 - `Parser.swift`：argv parsing、usage errors、command request models。
 - `Outputs.swift`：stdout / JSON output DTO 和 readable formatting。
-- `CoreAdapter.swift`：CLI-facing core interface 和 live adapter。
-- `DiagnosticClients.swift`：window-order / mouse-event diagnostic observers。
+- `CoreClient.swift`：CLI command runner 的 test seam；production 直接传入 `ComputerUseCore`。
+- `DiagnosticClients.swift`：mouse-event diagnostic observer；window-order diagnostics 通过 `core.diagnostics` 调用 Kit。
 - `Permissions.swift`：permission prompt client。
 - `CoordinateTarget.swift`：coordinate probe process launcher。
 - `InteractiveCommand.swift` / `InteractiveRuntime.swift`：long-lived interactive command palette、bounded scrolling selection viewport、Output/Error section rendering、command argument collection。
@@ -142,8 +153,10 @@ windowId；session 内只记录 pid。后续 mouse / keyboard / trace / measurem
 post-cursor 命令每次都要求选择当前 windowId，并使用 current session pid 校验 window
 ownership。没有 active app session 时 event command 直接失败。`stop-app-session` 重新枚举
 session pid 下当前所有窗口，只对非 frontmost 的 session windows 执行 deactivate cleanup。
+`focus-window`、trace 和 window-order observe 是 CLI diagnostics command，通过
+`core.diagnostics` 调用，不进入业务协议。
 
-`interactive` 是 CLI 内置的 long-lived host：进入后创建一次 `ComputerUseCoreAdapter`，
+`interactive` 是 CLI 内置的 long-lived host：进入后创建一次 `ComputerUseCore`，
 所有后续 command palette 操作都复用这个 core。所有 interactive UI 区域都使用
 `Title` + underline 的 section 形态，例如 `Command` / `-------`、`Output` / `------`、
 `Error` / `-----`。主菜单和枚举值选择使用 Up/Down/Enter/Q，并以固定高度 viewport

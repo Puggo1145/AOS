@@ -6,6 +6,50 @@ import Testing
 
 @Suite("ComputerUseCore focus without raise")
 struct WindowFocusTests {
+    @Test("diagnostics rejects non-positive window order sampling values before probing windows")
+    func diagnosticsRejectsNonPositiveWindowOrderSamplingValuesBeforeProbingWindows() async throws {
+        let core = ComputerUseCore(
+            windowLookup: { _ in
+                Issue.record("window lookup should not run for invalid diagnostics sampling values")
+                return nil
+            },
+            visibleWindowsLookup: {
+                Issue.record("visible window lookup should not run for invalid diagnostics sampling values")
+                return []
+            },
+            focusWindowWithoutRaising: { _, _ in },
+            deactivateWindowWithoutRaising: { _, _ in }
+        )
+
+        let invalidValues = [
+            (durationMilliseconds: 0, intervalMilliseconds: 5),
+            (durationMilliseconds: -1, intervalMilliseconds: 5),
+            (durationMilliseconds: 20, intervalMilliseconds: 0),
+            (durationMilliseconds: 20, intervalMilliseconds: -1),
+            (durationMilliseconds: Int.max, intervalMilliseconds: 5),
+            (durationMilliseconds: 20, intervalMilliseconds: Int.max),
+        ]
+
+        for values in invalidValues {
+            do {
+                _ = try await core.diagnostics.observeWindowOrder(
+                    pid: 123,
+                    windowId: 456,
+                    durationMilliseconds: values.durationMilliseconds,
+                    intervalMilliseconds: values.intervalMilliseconds
+                )
+                Issue.record("expected invalid diagnostics sampling values to throw")
+            } catch let error as ComputerUseError {
+                guard case .diagnosticsUnavailable = error else {
+                    Issue.record("unexpected diagnostics sampling error: \(error)")
+                    continue
+                }
+            } catch {
+                Issue.record("unexpected diagnostics sampling error: \(error)")
+            }
+        }
+    }
+
     @Test("validates pid ownership before focusing the window")
     func validatesOwnershipBeforeFocusingWindow() async throws {
         let recorder = FocusRecorder()
@@ -30,7 +74,7 @@ struct WindowFocusTests {
             }
         )
 
-        let result = try await core.focusWindowWithoutRaise(pid: 123, windowId: 456)
+        let result = try await core.diagnostics.focusWindowWithoutRaise(pid: 123, windowId: 456)
 
         #expect(result.pid == 123)
         #expect(result.windowId == 456)
@@ -61,7 +105,7 @@ struct WindowFocusTests {
         )
 
         await #expect(throws: ComputerUseError.self) {
-            try await core.focusWindowWithoutRaise(pid: 123, windowId: 456)
+            try await core.diagnostics.focusWindowWithoutRaise(pid: 123, windowId: 456)
         }
         #expect(await recorder.calls.isEmpty)
     }

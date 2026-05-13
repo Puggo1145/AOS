@@ -10,7 +10,7 @@ import Foundation
 // can match elements by index. Lines without an index are non-interactive
 // containers (groups, layout regions, etc).
 
-public enum TreeRenderer {
+enum TreeRenderer {
     public static func renderLine(
         depth: Int,
         elementIndex: Int?,

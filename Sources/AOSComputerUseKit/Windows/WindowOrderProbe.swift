@@ -2,7 +2,7 @@ import AppKit
 import CoreGraphics
 import Foundation
 
-public struct FrontmostApplicationSnapshot: Sendable, Hashable, Codable {
+struct FrontmostApplicationSnapshot: Sendable, Hashable, Codable {
     public let pid: pid_t
     public let bundleIdentifier: String?
 
@@ -49,7 +49,7 @@ public struct WindowOrderObservationSample: Sendable, Hashable, Codable {
 /// anything. It captures the same visual-order invariant as
 /// ``WindowOrderGuardian`` so diagnostics can distinguish "no order change"
 /// from "order changed and was handled fast enough to hide".
-public struct WindowOrderProbe: Sendable {
+struct WindowOrderProbe: Sendable {
     private let targetPID: pid_t
     private let targetWindowId: CGWindowID
     private let orderGuardian: WindowOrderGuardian

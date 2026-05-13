@@ -1,6 +1,7 @@
 import AppKit
 import AOSAXSupport
 import CoreGraphics
+import Darwin
 import Foundation
 
 // MARK: - ComputerUseCore
@@ -147,6 +148,80 @@ public struct WindowMouseEventTraceResult: Sendable, Equatable {
     }
 }
 
+/// Diagnostics-only Computer Use surface, kept separate from business calls.
+public struct ComputerUseDiagnostics: Sendable {
+    private let core: ComputerUseCore
+
+    init(core: ComputerUseCore) {
+        self.core = core
+    }
+
+    /// Focuses `windowId` for `pid` without raising or reordering the window.
+    public func focusWindowWithoutRaise(
+        pid: pid_t,
+        windowId: CGWindowID
+    ) async throws -> WindowFocusResult {
+        try await core.focusWindowWithoutRaise(pid: pid, windowId: windowId)
+    }
+
+    /// Posts a mouse event and returns diagnostic state captured around each event stage.
+    public func postMouseEventTrace(
+        windowId: CGWindowID,
+        event: BackgroundMouseEvent
+    ) async throws -> WindowMouseEventTraceResult {
+        try await core.postMouseEventTrace(windowId: windowId, event: event)
+    }
+
+    /// Passively samples WindowServer ordering around a target window.
+    public func observeWindowOrder(
+        pid: pid_t,
+        windowId: CGWindowID,
+        durationMilliseconds: Int,
+        intervalMilliseconds: Int
+    ) async throws -> [WindowOrderObservationSample] {
+        let durationNanoseconds = try Self.nanoseconds(
+            fromMilliseconds: durationMilliseconds,
+            parameterName: "durationMilliseconds"
+        )
+        let intervalNanoseconds = try Self.nanoseconds(
+            fromMilliseconds: intervalMilliseconds,
+            parameterName: "intervalMilliseconds"
+        )
+        let probe = try WindowOrderProbe.live(targetPID: pid, targetWindowId: windowId)
+        let start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        var samples: [WindowOrderObservationSample] = []
+
+        while true {
+            let now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+            let elapsed = now >= start ? now - start : 0
+            samples.append(probe.sample(elapsedNanoseconds: elapsed))
+            if elapsed >= durationNanoseconds {
+                return samples
+            }
+            try await Task.sleep(nanoseconds: intervalNanoseconds)
+        }
+    }
+
+    private static func nanoseconds(
+        fromMilliseconds milliseconds: Int,
+        parameterName: String
+    ) throws -> UInt64 {
+        guard milliseconds > 0 else {
+            throw ComputerUseError.diagnosticsUnavailable("\(parameterName) must be greater than 0")
+        }
+        let (nanoseconds, overflow) = UInt64(milliseconds).multipliedReportingOverflow(by: 1_000_000)
+        if overflow {
+            throw ComputerUseError.diagnosticsUnavailable("\(parameterName) is too large")
+        }
+        return nanoseconds
+    }
+}
+
+/// Type that exposes Computer Use diagnostics separately from business calls.
+public protocol ComputerUseDiagnosticsProviding: Sendable {
+    var diagnostics: ComputerUseDiagnostics { get }
+}
+
 public enum CaptureMode: String, Sendable, Equatable {
     case vision
     case ax
@@ -160,6 +235,7 @@ public enum ComputerUseError: Error, CustomStringConvertible, Sendable {
     case mouseEventUnavailable(String)
     case keyboardEventUnavailable(String)
     case appSessionUnavailable(String)
+    case diagnosticsUnavailable(String)
     case payloadTooLarge(bytes: Int, limit: Int)
     case windowNotFound(windowId: CGWindowID)
 
@@ -183,6 +259,8 @@ public enum ComputerUseError: Error, CustomStringConvertible, Sendable {
             return "keyboard event unavailable: \(message)"
         case .appSessionUnavailable(let message):
             return "app session unavailable: \(message)"
+        case .diagnosticsUnavailable(let message):
+            return "diagnostics unavailable: \(message)"
         case .payloadTooLarge(let bytes, let limit):
             return "screenshot payload \(bytes) bytes exceeds raw limit \(limit) bytes after downscale retries"
         case .windowNotFound(let windowId):
@@ -217,7 +295,7 @@ private struct ActiveAppSession: Sendable {
 
 }
 
-public actor ComputerUseCore {
+public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
     private let webAccessibilityActivator: AXWebAccessibilityActivator
     private let snapshot: AccessibilitySnapshot
     private let cache: StateCache
@@ -312,6 +390,10 @@ public actor ComputerUseCore {
                 try keyboardPoster.post(event, to: target)
             }
         )
+    }
+
+    public nonisolated var diagnostics: ComputerUseDiagnostics {
+        ComputerUseDiagnostics(core: self)
     }
 
     init(
@@ -444,8 +526,7 @@ public actor ComputerUseCore {
         )
     }
 
-    /// Focuses `windowId` for `pid` without raising or reordering the window.
-    public func focusWindowWithoutRaise(
+    func focusWindowWithoutRaise(
         pid: pid_t,
         windowId: CGWindowID
     ) async throws -> WindowFocusResult {
@@ -496,9 +577,7 @@ public actor ComputerUseCore {
         try await performPostMouseEvent(windowId: windowId, event: event, tracing: false).result
     }
 
-    /// Posts a background mouse event and returns per-stage WindowServer state
-    /// for diagnosing activation and ordering side effects.
-    public func postMouseEventTrace(
+    func postMouseEventTrace(
         windowId: CGWindowID,
         event: BackgroundMouseEvent
     ) async throws -> WindowMouseEventTraceResult {

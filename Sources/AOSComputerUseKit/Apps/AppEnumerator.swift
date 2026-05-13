@@ -7,7 +7,7 @@ import Foundation
 // Returns installed/launchable application bundles from the user's standard
 // app locations and overlays current `NSRunningApplication` state.
 
-public enum AppEnumerator {
+enum AppEnumerator {
     public static func apps(mode: AppListMode) -> [AppInfo] {
         apps(
             mode: mode,

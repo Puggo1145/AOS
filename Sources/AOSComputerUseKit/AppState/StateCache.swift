@@ -20,7 +20,7 @@ public struct StateID: Sendable, Hashable {
     public init(_ raw: String) { self.raw = raw }
 }
 
-public enum StateCacheLookupError: Error, Sendable, Equatable {
+enum StateCacheLookupError: Error, Sendable, Equatable {
     /// `stateId` not found, expired, or its element is no longer valid.
     case stale(reason: StaleReason, stateId: String)
     /// (pid, windowId) of the request doesn't match the snapshot's
@@ -28,14 +28,14 @@ public enum StateCacheLookupError: Error, Sendable, Equatable {
     case windowMismatch(stateId: String, expectedPid: pid_t, expectedWindowId: CGWindowID)
     case invalidElementIndex(stateId: String, elementIndex: Int)
 
-    public enum StaleReason: String, Sendable, Equatable {
+    enum StaleReason: String, Sendable, Equatable {
         case expired
         case elementInvalid
         case windowChanged
     }
 }
 
-public actor StateCache {
+actor StateCache {
     private struct Entry {
         let stateId: StateID
         let pid: pid_t

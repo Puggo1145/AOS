@@ -58,7 +58,7 @@ struct BackgroundMouseEventTarget: Sendable, Equatable {
 }
 
 /// Observable post stage emitted after a background mouse event sub-event.
-public enum BackgroundMouseEventPostStage: String, Sendable, Equatable {
+enum BackgroundMouseEventPostStage: String, Sendable, Equatable {
     case afterMouseMoved
     case afterPrimerDown
     case afterPrimerUp
@@ -69,4 +69,4 @@ public enum BackgroundMouseEventPostStage: String, Sendable, Equatable {
 }
 
 /// Async hook used by the core to run window-order guards between sub-events.
-public typealias BackgroundMouseEventPostObserver = @Sendable (BackgroundMouseEventPostStage) async throws -> Void
+typealias BackgroundMouseEventPostObserver = @Sendable (BackgroundMouseEventPostStage) async throws -> Void

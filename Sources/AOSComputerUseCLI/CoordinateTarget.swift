@@ -22,13 +22,15 @@ public protocol CoorTestTargetClient: Sendable {
 public struct LiveCoorTestTargetClient: CoorTestTargetClient {
     private let stateURL: URL
     private let eventLogURL: URL
+    private let core: ComputerUseCoreClient
 
-    public init() {
+    public init(core: ComputerUseCoreClient) {
         let runDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".aos", isDirectory: true)
             .appendingPathComponent("run", isDirectory: true)
         self.stateURL = runDir.appendingPathComponent("coordinate-target.json")
         self.eventLogURL = runDir.appendingPathComponent("coordinate-target-events.jsonl")
+        self.core = core
     }
 
     public func open() async throws -> CoorTestTargetState {
@@ -77,7 +79,7 @@ public struct LiveCoorTestTargetClient: CoorTestTargetClient {
 
     private func waitForWindow(pid: pid_t) async throws -> WindowInfo {
         for _ in 0..<80 {
-            if let window = WindowEnumerator.appWindows(forPid: pid)
+            if let window = try await core.listWindows(pid: pid)
                 .filter({ $0.isOnScreen })
                 .max(by: { $0.zIndex < $1.zIndex }) {
                 return window

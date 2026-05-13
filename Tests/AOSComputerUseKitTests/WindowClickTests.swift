@@ -2749,7 +2749,7 @@ private extension ComputerUseCore {
         point: CGPoint
     ) async throws -> WindowMouseEventTraceResult {
         _ = try await startAppSession(pid: pid, windowId: windowId)
-        return try await postMouseEventTrace(
+        return try await diagnostics.postMouseEventTrace(
             windowId: windowId,
             event: .click(button: .left, point: point)
         )

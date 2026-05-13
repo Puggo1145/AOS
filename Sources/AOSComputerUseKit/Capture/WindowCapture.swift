@@ -64,7 +64,7 @@ public struct Screenshot: Sendable {
 // PNG/JPEG file size scales roughly with pixel count = dimension². So
 // the next target dimension is `currentDim × √(budget/currentBytes)`
 // with a 0.85 fudge factor to absorb non-quadratic compression behavior.
-public enum ScreenshotPayloadPolicy {
+enum ScreenshotPayloadPolicy {
     /// 1 MB base64 cap from the wire protocol, minus headroom. Leaves
     /// room for the rest of the JSON envelope (axTree + bookkeeping).
     public static let defaultRawByteBudget: Int = 700_000
@@ -102,7 +102,7 @@ public enum ScreenshotPayloadPolicy {
     }
 }
 
-public enum CaptureError: Error, Sendable, CustomStringConvertible {
+enum CaptureError: Error, Sendable, CustomStringConvertible {
     case noDisplay
     case permissionDenied
     case encodeFailed
@@ -120,7 +120,7 @@ public enum CaptureError: Error, Sendable, CustomStringConvertible {
     }
 }
 
-public actor WindowCapture {
+actor WindowCapture {
     public init() {}
 
     /// Capture a single window by its `CGWindowID`. Returns PNG by

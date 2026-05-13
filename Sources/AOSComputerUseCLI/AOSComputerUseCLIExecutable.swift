@@ -1,3 +1,4 @@
+import AOSComputerUseKit
 import Darwin
 import Dispatch
 import Foundation
@@ -28,7 +29,7 @@ struct AOSComputerUseCLIExecutable {
         }
 
         do {
-            let core = ComputerUseCoreAdapter()
+            let core = ComputerUseCore()
             let signalCleanup = normalizedArguments == ["interactive"]
                 ? ProcessSignalAppSessionCleanup(core: core)
                 : nil

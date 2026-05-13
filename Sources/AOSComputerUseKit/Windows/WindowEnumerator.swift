@@ -13,7 +13,7 @@ import Foundation
 // surface WindowServer reports. Coordinate / capture paths use the same
 // selector internally so screenshot anchor and click anchor always agree.
 
-public enum WindowEnumerator {
+enum WindowEnumerator {
 
     /// All on-screen windows, including non-app layers (menu bar, etc).
     /// Most callers want `appWindows()` instead.

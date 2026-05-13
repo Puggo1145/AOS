@@ -25,15 +25,18 @@ public enum ComputerUseCLI {
         arguments: [String],
         core: ComputerUseCoreClient,
         permissions: ComputerUsePermissionClient = LiveComputerUsePermissionClient(),
-        coorTestTarget: CoorTestTargetClient = LiveCoorTestTargetClient(),
+        coorTestTarget: CoorTestTargetClient? = nil,
         postCursorIO: PostCursorIO = LivePostCursorIO(),
         postCursorOverlay: PostCursorOverlay = LivePostCursorOverlay(),
         interactiveIO: InteractiveCLIIO = LiveInteractiveCLIIO(),
-        windowOrderObserver: WindowOrderObservationClient = LiveWindowOrderObservationClient(),
+        windowOrderObserver: WindowOrderObservationClient? = nil,
         mouseEventObserver: MouseEventObservationClient = LiveMouseEventObservationClient()
     ) async throws -> ComputerUseCLIResult {
         do {
             let parsed = try ParsedCommand(arguments: arguments)
+            let coorTestTarget = coorTestTarget ?? LiveCoorTestTargetClient(core: core)
+            let windowOrderObserver = windowOrderObserver
+                ?? LiveWindowOrderObservationClient(diagnostics: core.diagnosticsClient)
             switch parsed.command {
             case .help:
                 return ComputerUseCLIResult(stdout: try helpText() + "\n", stderr: "", exitCode: 0)
@@ -65,7 +68,7 @@ public enum ComputerUseCLI {
                 }
                 return try success(AppStateOutput(request: request, state: state), format: parsed.outputFormat)
             case .focusWindow(let request):
-                let result = try await core.focusWindowWithoutRaise(
+                let result = try await core.diagnosticsClient.focusWindowWithoutRaise(
                     pid: request.pid,
                     windowId: request.windowId
                 )
@@ -265,7 +268,7 @@ public enum ComputerUseCLI {
         core: ComputerUseCoreClient
     ) async throws -> WindowMouseEventTraceResult {
         let event = try await backgroundMouseEvent(request: request, core: core)
-        return try await core.postMouseEventTrace(
+        return try await core.diagnosticsClient.postMouseEventTrace(
             windowId: request.windowId,
             event: event
         )

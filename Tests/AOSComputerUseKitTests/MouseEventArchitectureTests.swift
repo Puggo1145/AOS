@@ -30,6 +30,96 @@ struct MouseEventArchitectureTests {
         #expect(!source.contains("public struct WindowKeyboardEventResult"))
     }
 
+    @Test("computer use kit only exposes core and value types needed by callers")
+    func computerUseKitOnlyExposesCoreAndCallerValueTypes() throws {
+        let publicDeclarations = try Self.publicTypeDeclarations()
+        let allowedPublicTypes: Set<String> = [
+            "AppInfo",
+            "AppListMode",
+            "AppSessionResult",
+            "AppStateBundle",
+            "AppType",
+            "AppTypeReason",
+            "AppTypeResult",
+            "BackgroundKeyboardEvent",
+            "BackgroundKeyboardModifier",
+            "BackgroundMouseButton",
+            "BackgroundMouseEvent",
+            "CaptureMode",
+            "ComputerUseCore",
+            "ComputerUseDiagnostics",
+            "ComputerUseDiagnosticsProviding",
+            "ComputerUseError",
+            "ImageFormat",
+            "Screenshot",
+            "ScreenshotCoordinateSpace",
+            "StateID",
+            "WindowBounds",
+            "WindowFocusResult",
+            "WindowInfo",
+            "WindowKeyboardEventResult",
+            "WindowMouseEventResult",
+            "WindowMouseEventTraceResult",
+            "WindowMouseEventTraceSnapshot",
+            "WindowMouseEventTraceStage",
+            "WindowOrderObservationSample",
+        ]
+
+        #expect(publicDeclarations.subtracting(allowedPublicTypes).isEmpty)
+    }
+
+    @Test("computer use design doc lists the public core surface")
+    func computerUseDesignDocListsThePublicCoreSurface() throws {
+        let doc = try Self.source("docs/designs/computer-use.md")
+        let expectedEntries = [
+            "`listApps(mode:) -> [AppInfo]`",
+            "`getAppType(pid:) -> AppTypeResult`",
+            "`listWindows(pid:) -> [WindowInfo]`",
+            "`getAppState(pid:windowId:captureMode:maxImageDimension:) -> AppStateBundle`",
+            "`startAppSession(pid:windowId:) -> AppSessionResult`",
+            "`stopAppSession() -> AppSessionResult`",
+            "`currentAppSession() -> AppSessionResult`",
+            "`postMouseEvent(windowId:event:) -> WindowMouseEventResult`",
+            "`postKeyboardEvent(windowId:event:) -> WindowKeyboardEventResult`",
+        ]
+
+        for entry in expectedEntries {
+            #expect(doc.contains(entry))
+        }
+        #expect(doc.contains("`core.diagnostics.focusWindowWithoutRaise(pid:windowId:) -> WindowFocusResult`"))
+        #expect(doc.contains("`core.diagnostics.postMouseEventTrace(windowId:event:) -> WindowMouseEventTraceResult`"))
+        #expect(doc.contains("`core.diagnostics.observeWindowOrder(pid:windowId:durationMilliseconds:intervalMilliseconds:) -> [WindowOrderObservationSample]`"))
+    }
+
+    private static func publicTypeDeclarations(file: String = #filePath) throws -> Set<String> {
+        let root = URL(fileURLWithPath: file)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sourcesRoot = root.appendingPathComponent("Sources/AOSComputerUseKit")
+        let fileManager = FileManager.default
+        guard let enumerator = fileManager.enumerator(
+            at: sourcesRoot,
+            includingPropertiesForKeys: [.isRegularFileKey]
+        ) else {
+            return []
+        }
+
+        var declarations = Set<String>()
+        let pattern = #"public\s+(?:actor|struct|enum|protocol|class)\s+([A-Za-z_][A-Za-z0-9_]*)"#
+        let regex = try NSRegularExpression(pattern: pattern)
+
+        for case let fileURL as URL in enumerator where fileURL.pathExtension == "swift" {
+            let source = try String(contentsOf: fileURL, encoding: .utf8)
+            let range = NSRange(source.startIndex..<source.endIndex, in: source)
+            for match in regex.matches(in: source, range: range) {
+                guard let nameRange = Range(match.range(at: 1), in: source) else { continue }
+                declarations.insert(String(source[nameRange]))
+            }
+        }
+        return declarations
+    }
+
     private static func source(_ path: String, file: String = #filePath) throws -> String {
         let url = URL(fileURLWithPath: file)
             .deletingLastPathComponent()

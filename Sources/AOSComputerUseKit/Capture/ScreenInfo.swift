@@ -12,7 +12,7 @@ import Foundation
 //
 // Single source so screenshot bake and coordinate division cancel.
 
-public enum ScreenInfo {
+enum ScreenInfo {
     public static func backingScale(for frame: CGRect) -> CGFloat {
         var best: NSScreen? = nil
         var bestArea: CGFloat = 0
