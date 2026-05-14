@@ -290,7 +290,7 @@ export const streamOpenaiResponses: StreamFunction<"openai-responses", OpenAIRes
       // shimmer until they cancel by hand.
       while (true) {
         if (options?.signal?.aborted) throw new DOMException("aborted", "AbortError");
-        const { value, done } = await readWithIdleTimeout(reader, RESPONSES_IDLE_TIMEOUT_MS);
+        const { value, done } = await readWithIdleTimeout(reader, RESPONSES_IDLE_TIMEOUT_MS, options?.signal);
         if (done) break;
         parser.feed(decoder.decode(value, { stream: true }));
       }
@@ -328,8 +328,10 @@ const RESPONSES_IDLE_TIMEOUT_MS = 60_000;
 export async function readWithIdleTimeout<T>(
   reader: { read(): Promise<{ value?: T; done: boolean }> },
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<{ value?: T; done: boolean }> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let signalCleanup: (() => void) | undefined;
   const idle = new Promise<never>((_, reject) => {
     timer = setTimeout(
       () =>
@@ -343,10 +345,21 @@ export async function readWithIdleTimeout<T>(
       timeoutMs,
     );
   });
+  const aborted = new Promise<never>((_, reject) => {
+    if (!signal) return;
+    if (signal.aborted) {
+      reject(new DOMException("aborted", "AbortError"));
+      return;
+    }
+    const onAbort = () => reject(new DOMException("aborted", "AbortError"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    signalCleanup = () => signal.removeEventListener("abort", onAbort);
+  });
   try {
-    return await Promise.race([reader.read(), idle]);
+    return await Promise.race([reader.read(), idle, aborted]);
   } finally {
     if (timer) clearTimeout(timer);
+    signalCleanup?.();
   }
 }
 

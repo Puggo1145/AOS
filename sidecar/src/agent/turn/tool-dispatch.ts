@@ -12,6 +12,7 @@ import type {
   ToolResultContent,
 } from "../../llm";
 import { validateToolArguments } from "../../llm";
+import type { ComputerUseStateCache } from "../session/computer-use-state-cache";
 import { ToolUserError, type ToolExecResult, type ToolHandler } from "../tools";
 
 export type ToolCallOutcome =
@@ -24,6 +25,7 @@ export interface ToolDispatchCtx {
   toolCallId: string;
   model: Model<Api>;
   computerUseAppSession?: { pid: number; windowId: number };
+  computerUseStateCache?: ComputerUseStateCache;
   signal: AbortSignal;
 }
 

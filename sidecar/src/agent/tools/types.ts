@@ -12,6 +12,7 @@
 // details) without polluting the model's view.
 
 import type { Api, Model, Tool, ToolResultContent } from "../../llm/types";
+import type { ComputerUseStateCache } from "../session/computer-use-state-cache";
 
 /// Per-call context handed to a tool's `execute`. Carries the abort signal
 /// (shared with the parent turn — cancellation propagates), plus identity
@@ -31,6 +32,7 @@ export interface ToolExecContext {
   toolCallId: string;
   model: Model<Api>;
   computerUseAppSession?: { pid: number; windowId: number };
+  computerUseStateCache?: ComputerUseStateCache;
   /// Aborted when the parent turn is cancelled or reset. Tools MUST honor
   /// it to avoid leaking subprocesses / file handles.
   signal: AbortSignal;

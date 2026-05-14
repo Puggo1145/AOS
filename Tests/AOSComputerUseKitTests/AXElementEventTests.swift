@@ -86,6 +86,130 @@ struct AXElementEventTests {
         ])
     }
 
+    @Test("AX element actions drive the virtual mouse at the element center")
+    func axElementActionsDriveTheVirtualMouseAtTheElementCenter() async throws {
+        guard StateCache.isElementAlive(Self.aliveElement()) else { return }
+        let recorder = VirtualMouseRecorder()
+        let cache = StateCache(ttlSeconds: 30)
+        let element = Self.aliveElement()
+        let stateId = await cache.store(pid: 123, windowId: 456, elements: [7: element])
+        let window = Self.window(id: 456, pid: 123)
+        let core = ComputerUseCore(
+            cache: cache,
+            windowLookup: { windowId in
+                windowId == window.id ? window : nil
+            },
+            focusWindowWithoutRaising: { _, _ in },
+            deactivateWindowWithoutRaising: { _, _ in },
+            postAXElementEvent: { _, _ in },
+            virtualMouseReflector: VirtualMouseReflector(
+                axElementFrame: { target in
+                    #expect(CFEqual(target, element))
+                    return CGRect(x: 20, y: 40, width: 100, height: 60)
+                },
+                emit: { event in
+                    await recorder.record(event)
+                }
+            )
+        )
+
+        _ = try await core.startAppSession(pid: 123, windowId: 456)
+        _ = try await core.postEventToAXElement(
+            windowId: 456,
+            stateId: stateId,
+            elementIndex: 7,
+            event: .action(.press)
+        )
+
+        #expect(await recorder.events == [
+            .move(VirtualMouseTarget(
+                source: .ax,
+                point: CGPoint(x: 70, y: 70),
+                windowId: 456,
+                windowBounds: window.bounds
+            )),
+            .click(
+                VirtualMouseTarget(
+                    source: .ax,
+                    point: CGPoint(x: 70, y: 70),
+                    windowId: 456,
+                    windowBounds: window.bounds
+                ),
+                button: .left,
+                count: 1
+            ),
+        ])
+    }
+
+    @Test("AX virtual mouse frame miss does not block the AX event")
+    func axVirtualMouseFrameMissDoesNotBlockTheAXEvent() async throws {
+        guard StateCache.isElementAlive(Self.aliveElement()) else { return }
+        let axRecorder = AXElementEventRecorder()
+        let virtualRecorder = VirtualMouseRecorder()
+        let cache = StateCache(ttlSeconds: 30)
+        let element = Self.aliveElement()
+        let stateId = await cache.store(pid: 123, windowId: 456, elements: [7: element])
+        let window = Self.window(id: 456, pid: 123)
+        let core = ComputerUseCore(
+            cache: cache,
+            windowLookup: { windowId in
+                windowId == window.id ? window : nil
+            },
+            focusWindowWithoutRaising: { _, _ in },
+            deactivateWindowWithoutRaising: { _, _ in },
+            postAXElementEvent: { event, target in
+                await axRecorder.record(.ax(event: event, target: target))
+            },
+            virtualMouseReflector: VirtualMouseReflector(
+                axElementFrame: { _ in nil },
+                emit: { event in
+                    await virtualRecorder.record(event)
+                }
+            )
+        )
+
+        _ = try await core.startAppSession(pid: 123, windowId: 456)
+        _ = try await core.postEventToAXElement(
+            windowId: 456,
+            stateId: stateId,
+            elementIndex: 7,
+            event: .action(.press)
+        )
+
+        #expect(await axRecorder.events == [
+            .ax(
+                event: .action(.press),
+                target: AXElementEventTarget(
+                    pid: 123,
+                    windowId: 456,
+                    stateId: stateId,
+                    elementIndex: 7,
+                    element: element
+                )
+            ),
+        ])
+        #expect(await virtualRecorder.events.isEmpty)
+    }
+
+    @Test("AX virtual mouse reflection returns nil when frame is unavailable")
+    func axVirtualMouseReflectionReturnsNilWhenFrameIsUnavailable() async {
+        let recorder = VirtualMouseRecorder()
+        let reflector = VirtualMouseReflector(
+            axElementFrame: { _ in nil },
+            emit: { event in
+                await recorder.record(event)
+            }
+        )
+
+        let target = await reflector.reflectAXStart(
+            element: AXUIElementCreateSystemWide(),
+            window: Self.window(id: 456, pid: 123)
+        )
+
+        #expect(target == nil)
+        #expect(await recorder.events.isEmpty)
+    }
+
     @Test("postEventToAXElement supports semantic page scroll")
     func postEventToAXElementSupportsSemanticPageScroll() async throws {
         guard StateCache.isElementAlive(Self.aliveElement()) else { return }

@@ -927,6 +927,7 @@ export async function runTurn(
               toolCallId: tc.id,
               model,
               computerUseAppSession: session.computerUseAppSession,
+              computerUseStateCache: session.computerUseStateCache,
               signal,
             });
           } catch (err) {

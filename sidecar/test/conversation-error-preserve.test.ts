@@ -39,6 +39,22 @@ function fakeAssistantText(text: string): AssistantMessage {
   };
 }
 
+function fakeAssistantToolCall(id: string): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "toolCall", id, name: "get_app_state", arguments: {} }],
+    api: "openai-responses",
+    provider: "test",
+    model: "fake",
+    usage: {
+      input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "toolUse",
+    timestamp: 1,
+  };
+}
+
 test("llmMessages keeps errored turns so a retry resumes from where the failure landed", () => {
   const c = new Conversation();
   // Turn 1 — completes normally.
@@ -138,3 +154,36 @@ test("finalizeCancellation is idempotent", () => {
   expect(c.llmMessages().length).toBe(beforeLen);
 });
 
+test("llmMessages keeps a fresh screenshot for the next round but strips it after an assistant consumes it", () => {
+  const c = new Conversation();
+  c.startTurn({ id: "T1", prompt: "inspect the app", citedContext: {} });
+  c.appendAssistant("T1", fakeAssistantToolCall("tc_state"));
+  c.appendToolResult("T1", {
+    role: "toolResult",
+    toolCallId: "tc_state",
+    toolName: "get_app_state",
+    content: [
+      { type: "text", text: "<app_state>...</app_state>" },
+      { type: "image", data: "large-screenshot-base64", mimeType: "image/png" },
+    ],
+    isError: false,
+    timestamp: 2,
+  });
+
+  const nextRoundMessages = c.llmMessages();
+  expect((nextRoundMessages[2] as ToolResultMessage).content.some((block) => block.type === "image")).toBe(true);
+
+  c.appendAssistant("T1", fakeAssistantText("I read the screenshot."));
+  c.markDone("T1");
+
+  const replayMessages = c.llmMessages();
+  const replayedToolResult = replayMessages[2] as ToolResultMessage;
+  expect(replayedToolResult.content.some((block) => block.type === "image")).toBe(false);
+  expect(c.messages[2]).toMatchObject({
+    role: "toolResult",
+    content: [
+      { type: "text", text: "<app_state>...</app_state>" },
+      { type: "image", data: "large-screenshot-base64", mimeType: "image/png" },
+    ],
+  });
+});

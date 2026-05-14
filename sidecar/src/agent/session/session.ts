@@ -9,6 +9,7 @@ import { Conversation } from "../conversation";
 import { TurnRegistry } from "../registry";
 import { TodoManager } from "../todos/manager";
 import type { CitedContext } from "../../rpc/rpc-types";
+import { ComputerUseStateCache } from "./computer-use-state-cache";
 import type { SessionId, SessionInfo, SessionListItem } from "./types";
 
 export interface PendingSteerPrompt {
@@ -31,6 +32,7 @@ export class Session {
   /// tool mutates this; the agent loop subscribes and projects every
   /// update onto the wire as `ui.todo`.
   readonly todos: TodoManager;
+  readonly computerUseStateCache = new ComputerUseStateCache();
   private _pendingSteer: PendingSteerPrompt | undefined;
   private _compacting = false;
   /// Count of consecutive tool-call rounds in the in-flight (or most
@@ -100,11 +102,18 @@ export class Session {
   }
 
   setComputerUseAppSession(info: ComputerUseAppSessionInfo): void {
+    if (
+      this._computerUseAppSession &&
+      (this._computerUseAppSession.pid !== info.pid || this._computerUseAppSession.windowId !== info.windowId)
+    ) {
+      this.computerUseStateCache.clear();
+    }
     this._computerUseAppSession = info;
   }
 
   clearComputerUseAppSession(): void {
     this._computerUseAppSession = undefined;
+    this.computerUseStateCache.clear();
   }
 
   /// Replace title. Manager calls this once on first user prompt; subsequent

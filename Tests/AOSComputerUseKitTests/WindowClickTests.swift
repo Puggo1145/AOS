@@ -267,6 +267,139 @@ struct WindowClickTests {
         ])
     }
 
+    @Test("coordinate mouse events drive the virtual mouse at the target point")
+    func coordinateMouseEventsDriveTheVirtualMouseAtTheTargetPoint() async throws {
+        let recorder = VirtualMouseRecorder()
+        let target = Self.window(
+            id: 456,
+            pid: 123,
+            owner: "Target",
+            zIndex: 1,
+            bounds: WindowBounds(x: 10, y: 20, width: 300, height: 100)
+        )
+        let core = ComputerUseCore(
+            windowLookup: { windowId in
+                windowId == target.id ? target : nil
+            },
+            focusWindowWithoutRaising: { _, _ in },
+            deactivateWindowWithoutRaising: { _, _ in },
+            postMouseEvent: { _, _, _, _ in },
+            virtualMouseReflector: VirtualMouseReflector(
+                axElementFrame: { _ in nil },
+                emit: { event in
+                    await recorder.record(event)
+                }
+            )
+        )
+
+        _ = try await core.startAppSession(pid: 123, windowId: 456)
+        _ = try await core.postMouseEvent(
+            windowId: 456,
+            event: .click(button: .left, point: CGPoint(x: 160, y: 70), count: 2)
+        )
+
+        #expect(await recorder.events == [
+            .move(VirtualMouseTarget(
+                source: .coordinate,
+                point: CGPoint(x: 160, y: 70),
+                windowId: 456,
+                windowBounds: target.bounds
+            )),
+            .click(
+                VirtualMouseTarget(
+                    source: .coordinate,
+                    point: CGPoint(x: 160, y: 70),
+                    windowId: 456,
+                    windowBounds: target.bounds
+                ),
+                button: .left,
+                count: 2
+            ),
+        ])
+    }
+
+    @Test("coordinate mouse event waits for virtual mouse move before posting")
+    func coordinateMouseEventWaitsForVirtualMouseMoveBeforePosting() async throws {
+        let recorder = VirtualMouseOperationOrderRecorder()
+        let target = Self.window(
+            id: 456,
+            pid: 123,
+            owner: "Target",
+            zIndex: 1,
+            bounds: WindowBounds(x: 10, y: 20, width: 300, height: 100)
+        )
+        let core = ComputerUseCore(
+            windowLookup: { windowId in
+                windowId == target.id ? target : nil
+            },
+            focusWindowWithoutRaising: { _, _ in },
+            deactivateWindowWithoutRaising: { _, _ in },
+            postMouseEvent: { _, _, _, _ in
+                await recorder.record(.postedMouseEvent)
+            },
+            virtualMouseReflector: VirtualMouseReflector(
+                axElementFrame: { _ in nil },
+                emit: { event in
+                    switch event {
+                    case .move:
+                        await recorder.record(.virtualMoveStarted)
+                        try? await Task.sleep(nanoseconds: 10_000_000)
+                        await recorder.record(.virtualMoveFinished)
+                    case .click, .drag, .settle, .dismiss:
+                        await recorder.record(.virtualCompletion)
+                    }
+                }
+            )
+        )
+
+        _ = try await core.startAppSession(pid: 123, windowId: 456)
+        _ = try await core.postMouseEvent(
+            windowId: 456,
+            event: .click(button: .left, point: CGPoint(x: 160, y: 70), count: 1)
+        )
+
+        #expect(await recorder.events == [
+            .virtualMoveStarted,
+            .virtualMoveFinished,
+            .postedMouseEvent,
+            .virtualCompletion,
+        ])
+    }
+
+    @Test("stopAppSession dismisses the virtual mouse immediately")
+    func stopAppSessionDismissesTheVirtualMouseImmediately() async throws {
+        let recorder = VirtualMouseRecorder()
+        let target = Self.window(
+            id: 456,
+            pid: 123,
+            owner: "Target",
+            zIndex: 1,
+            bounds: WindowBounds(x: 10, y: 20, width: 300, height: 100)
+        )
+        let core = ComputerUseCore(
+            windowLookup: { windowId in
+                windowId == target.id ? target : nil
+            },
+            windowsForPIDLookup: { pid in
+                pid == target.pid ? [target] : []
+            },
+            frontmostWindowLookup: { nil },
+            focusWindowWithoutRaising: { _, _ in },
+            deactivateWindowWithoutRaising: { _, _ in },
+            virtualMouseReflector: VirtualMouseReflector(
+                axElementFrame: { _ in nil },
+                emit: { event in
+                    await recorder.record(event)
+                }
+            )
+        )
+
+        _ = try await core.startAppSession(pid: 123, windowId: 456)
+        _ = try await core.stopAppSession()
+
+        #expect(await recorder.events == [.dismiss])
+    }
+
     @Test("validates every screen point of a background mouse event before posting")
     func validatesEveryScreenPointOfBackgroundMouseEventBeforePosting() async {
         let recorder = BackgroundMouseEventRecorder()
@@ -2693,6 +2826,25 @@ private actor FocusGate {
             waiters.append(continuation)
         }
     }
+}
+
+private actor VirtualMouseOperationOrderRecorder {
+    private var recordedEvents: [VirtualMouseOperationOrderEvent] = []
+
+    var events: [VirtualMouseOperationOrderEvent] {
+        recordedEvents
+    }
+
+    func record(_ event: VirtualMouseOperationOrderEvent) {
+        recordedEvents.append(event)
+    }
+}
+
+private enum VirtualMouseOperationOrderEvent: Equatable {
+    case virtualMoveStarted
+    case virtualMoveFinished
+    case postedMouseEvent
+    case virtualCompletion
 }
 
 private enum ClickChainEvent: Equatable {

@@ -100,7 +100,10 @@ let package = Package(
         .target(
             name: "AOSComputerUseKit",
             dependencies: ["AOSAXSupport"],
-            path: "Sources/AOSComputerUseKit"
+            path: "Sources/AOSComputerUseKit",
+            resources: [
+                .process("Resources")
+            ]
         ),
         .testTarget(
             name: "AOSComputerUseKitTests",

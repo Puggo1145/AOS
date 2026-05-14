@@ -23,10 +23,12 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 BUILD_CONFIG="${AOS_BUILD_CONFIG:-debug}"
+BUILD_DIR="$(swift build -c "$BUILD_CONFIG" --show-bin-path)"
 swift build -c "$BUILD_CONFIG" --product AOSShell
 
 mkdir -p AOS.app/Contents/MacOS AOS.app/Contents/Resources
-cp .build/"$BUILD_CONFIG"/AOSShell AOS.app/Contents/MacOS/AOS
+cp "$BUILD_DIR"/AOSShell AOS.app/Contents/MacOS/AOS
+find "$BUILD_DIR" -maxdepth 1 -type d -name '*.bundle' -exec cp -R {} AOS.app/Contents/Resources/ \;
 
 # ----- Info.plist (with version injection) ------------------------------
 # Single source of truth for the app version is sidecar/package.json so

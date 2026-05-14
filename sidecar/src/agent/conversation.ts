@@ -29,7 +29,7 @@
 // only producer and it is single-threaded per session in practice; if
 // concurrent turns ever ship, this storage needs revisiting.
 
-import type { Message, AssistantMessage, ToolCall, ToolResultMessage } from "../llm/types";
+import type { Message, AssistantMessage, ToolCall, ToolResultContent, ToolResultMessage } from "../llm/types";
 import type {
   CitedContext,
   ConversationTurnWire,
@@ -44,6 +44,9 @@ import { buildUserMessage } from "./prompt";
 /// can detect "already finalized" by comparing the last message.
 const INTERRUPT_MARKER_TEXT =
   "[The user interrupted the conversation here.]";
+
+const CONSUMED_IMAGE_PLACEHOLDER =
+  "[image omitted: screenshot already consumed by a prior model round]";
 
 export interface ConversationTurn {
   id: string;
@@ -432,7 +435,7 @@ export class Conversation {
         out.push(this._messages[i]);
       }
     }
-    return out;
+    return stripConsumedToolResultImages(out);
   }
 
   /// Wire-format projection for `conversation.turnStarted` and the
@@ -455,4 +458,34 @@ export class Conversation {
   private find(turnId: string): ConversationTurn | undefined {
     return this._turns.find((x) => x.id === turnId);
   }
+}
+
+function stripConsumedToolResultImages(messages: Message[]): Message[] {
+  let lastAssistantIndex = -1;
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i]!.role === "assistant") lastAssistantIndex = i;
+  }
+
+  if (lastAssistantIndex < 0) return messages;
+
+  return messages.map((message, index) => {
+    if (message.role !== "toolResult" || index > lastAssistantIndex) {
+      return message;
+    }
+    return stripImages(message);
+  });
+}
+
+function stripImages(message: ToolResultMessage): ToolResultMessage {
+  if (!message.content.some((block) => block.type === "image")) {
+    return message;
+  }
+
+  const content = message.content.filter((block): block is ToolResultContent => block.type !== "image");
+  content.push({ type: "text", text: CONSUMED_IMAGE_PLACEHOLDER });
+
+  return {
+    ...message,
+    content,
+  };
 }

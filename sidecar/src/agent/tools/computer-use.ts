@@ -1,6 +1,14 @@
 import { supportsVision } from "../../llm/models/capabilities";
 import type { ToolResultContent } from "../../llm/types";
-import { RPCMethod, type ComputerUseGetAppStateResult } from "../../rpc/rpc-types";
+import {
+  RPCMethod,
+  type ComputerUseBounds,
+  type ComputerUseCoordinateSpace,
+  type ComputerUseGetAppStateResult,
+  type ComputerUseMouseEvent,
+  type ComputerUsePoint,
+  type ComputerUsePostMouseEventParams,
+} from "../../rpc/rpc-types";
 import type { Dispatcher } from "../../rpc/dispatcher";
 import { ToolUserError, type ToolExecContext, type ToolExecResult, type ToolHandler } from "./types";
 import type { ToolRegistry } from "./registry";
@@ -70,7 +78,7 @@ export function createComputerUseTools(dispatcher: Dispatcher): ToolHandler[] {
     rpcTool({
       name: "get_app_state",
       description:
-        "Read a target window's AX tree and optionally a screenshot in the active Computer Use app session. Returns stateId for AX element actions.",
+        "Read a target window's AX tree and optionally a screenshot in the active Computer Use app session. Returns stateId for AX element actions and screenshot-local mouse actions.",
       method: RPCMethod.computerUseGetAppState,
       parameters: {
         type: "object",
@@ -84,6 +92,7 @@ export function createComputerUseTools(dispatcher: Dispatcher): ToolHandler[] {
       },
       dispatcher,
       render: renderAppStateResult,
+      afterResult: recordAppStateCoordinateSpace,
     }),
     rpcTool({
       name: "start_app_session",
@@ -115,19 +124,21 @@ export function createComputerUseTools(dispatcher: Dispatcher): ToolHandler[] {
       name: "use_mouse",
       description:
         "Post a mouse event to a window in the active Computer Use app session. " +
+        "Use the stateId from the get_app_state screenshot you are pointing at. " +
         "event variants: " +
         "{kind:\"click\", button:\"left\"|\"right\", point:{x:number,y:number}, count?:positive integer}; " +
         "{kind:\"drag\", button:\"left\"|\"right\", from:{x:number,y:number}, to:{x:number,y:number}}. " +
-        "Coordinates are screen points.",
+        "Coordinates are screenshot-local pixels in that get_app_state image.",
       method: RPCMethod.computerUsePostMouseEvent,
       parameters: {
         type: "object",
         properties: {
           windowId: { type: "integer" },
+          stateId: { type: "string", description: "State ID from the get_app_state screenshot used for these coordinates." },
           event: {
             ...passthroughEventSchema,
             description:
-              "Mouse event: {kind:'click', button:'left'|'right', point:{x,y}, count?} or {kind:'drag', button:'left'|'right', from:{x,y}, to:{x,y}}. Coordinates are screen points.",
+              "Mouse event: {kind:'click', button:'left'|'right', point:{x,y}, count?} or {kind:'drag', button:'left'|'right', from:{x,y}, to:{x,y}}. Coordinates are screenshot-local pixels from the referenced get_app_state image.",
             properties: {
               kind: { type: "string", enum: ["click", "drag"] },
               button: { type: "string", enum: ["left", "right"] },
@@ -138,11 +149,12 @@ export function createComputerUseTools(dispatcher: Dispatcher): ToolHandler[] {
             },
           },
         },
-        required: ["windowId", "event"],
+        required: ["windowId", "stateId", "event"],
         additionalProperties: false,
       },
       dispatcher,
       validate: validateMouseArgs,
+      prepare: mouseEventParams,
     }),
     rpcTool({
       name: "use_keyboard",
@@ -237,7 +249,9 @@ function rpcTool(options: {
   parameters: ToolHandler["spec"]["parameters"];
   dispatcher: Dispatcher;
   validate?: (args: ComputerUseArgs) => void;
+  prepare?: (args: ComputerUseArgs, ctx: ToolExecContext) => object;
   render?: (result: unknown, ctx: ToolExecContext) => ToolResultContent[];
+  afterResult?: (result: unknown, args: ComputerUseArgs, ctx: ToolExecContext) => void;
 }): ToolHandler<ComputerUseArgs, unknown> {
   return {
     spec: {
@@ -247,11 +261,16 @@ function rpcTool(options: {
     },
     execute: async (args, ctx) => {
       options.validate?.(args);
-      const rpcArgs =
-        options.method === RPCMethod.computerUseStopAppSession
-          ? stopAppSessionParams(ctx)
-          : args;
+      let rpcArgs: object;
+      if (options.prepare) {
+        rpcArgs = options.prepare(args, ctx);
+      } else if (options.method === RPCMethod.computerUseStopAppSession) {
+        rpcArgs = stopAppSessionParams(ctx);
+      } else {
+        rpcArgs = args;
+      }
       const result = await options.dispatcher.request(options.method, rpcArgs, { signal: ctx.signal });
+      options.afterResult?.(result, args, ctx);
       return {
         content: options.render ? options.render(result, ctx) : [{ type: "text", text: JSON.stringify(result, null, 2) }],
         details: result,
@@ -268,7 +287,85 @@ function stopAppSessionParams(ctx: ToolExecContext): { pid: number } {
   return { pid: ctx.computerUseAppSession.pid };
 }
 
+function mouseEventParams(args: ComputerUseArgs, ctx: ToolExecContext): ComputerUsePostMouseEventParams {
+  const stateId = requireString(args, "stateId");
+  if (!ctx.computerUseStateCache) {
+    throw new ToolUserError("computer use screenshot state cache is unavailable.");
+  }
+  const lookup = ctx.computerUseStateCache.lookup(stateId);
+  if (lookup.kind === "expired") {
+    throw new ToolUserError(`stale screenshot coordinate space for stateId ${stateId}. Call get_app_state with captureMode "vision" again.`);
+  }
+  if (lookup.kind === "missing") {
+    throw new ToolUserError(`no screenshot coordinate space found for stateId ${stateId}. Call get_app_state with captureMode "vision" first.`);
+  }
+  const { record } = lookup;
+  const windowId = requireInteger(args, "windowId");
+  if (record.windowId !== windowId) {
+    throw new ToolUserError(`stateId ${stateId} belongs to window ${record.windowId}, not window ${windowId}.`);
+  }
+  return {
+    windowId,
+    event: mouseEventInScreenPoints(requireEvent(args), record.coordinateSpace),
+  };
+}
+
+function mouseEventInScreenPoints(event: Record<string, unknown>, coordinateSpace: ComputerUseCoordinateSpace): ComputerUseMouseEvent {
+  const kind = requireString(event, "event.kind");
+  switch (kind) {
+    case "click": {
+      const out: ComputerUseMouseEvent = {
+        kind: "click",
+        button: requireMouseButton(event),
+        point: screenshotPointToScreenPoint(requirePoint(event, "point", "event.point"), coordinateSpace),
+      };
+      if ("count" in event) out.count = requirePositiveInteger(event, "event.count");
+      return out;
+    }
+    case "drag":
+      return {
+        kind: "drag",
+        button: requireMouseButton(event),
+        from: screenshotPointToScreenPoint(requirePoint(event, "from", "event.from"), coordinateSpace),
+        to: screenshotPointToScreenPoint(requirePoint(event, "to", "event.to"), coordinateSpace),
+      };
+    default:
+      throw new ToolUserError(`event.kind must be one of click, drag.`);
+  }
+}
+
+function requireMouseButton(event: Record<string, unknown>): "left" | "right" {
+  return requireEnum(event, "event.button", ["left", "right"]) as "left" | "right";
+}
+
+function screenshotPointToScreenPoint(point: ComputerUsePoint, coordinateSpace: ComputerUseCoordinateSpace): ComputerUsePoint {
+  const { windowFrame, pixelSize } = coordinateSpace;
+  if (pixelSize.width <= 0 || pixelSize.height <= 0) {
+    throw new ToolUserError(`screenshot pixelSize must be greater than 0.`);
+  }
+  if (point.x < 0 || point.x > pixelSize.width || point.y < 0 || point.y > pixelSize.height) {
+    throw new ToolUserError(
+      `screenshot point ${point.x},${point.y} is outside screenshot ${pixelSize.width}x${pixelSize.height}.`,
+    );
+  }
+  return {
+    x: windowFrame.x + (point.x / pixelSize.width) * windowFrame.width,
+    y: windowFrame.y + (point.y / pixelSize.height) * windowFrame.height,
+  };
+}
+
+function recordAppStateCoordinateSpace(result: unknown, args: ComputerUseArgs, ctx: ToolExecContext): void {
+  const state = result as ComputerUseGetAppStateResult;
+  if (!state.screenshot || !ctx.computerUseStateCache) return;
+  ctx.computerUseStateCache.record({
+    stateId: state.stateId,
+    windowId: requireInteger(args, "windowId"),
+    coordinateSpace: state.screenshot.coordinateSpace,
+  });
+}
+
 function validateMouseArgs(args: ComputerUseArgs): void {
+  requireString(args, "stateId");
   const event = requireEvent(args);
   const kind = requireString(event, "event.kind");
   switch (kind) {
@@ -422,14 +519,16 @@ function requireNonEmptyStringArray(obj: Record<string, unknown>, path: string):
   return value;
 }
 
-function requirePoint(obj: Record<string, unknown>, key: string, path: string): void {
+function requirePoint(obj: Record<string, unknown>, key: string, path: string): ComputerUsePoint {
   const value = obj[key];
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new ToolUserError(`${path} is required and must be an object.`);
   }
   const point = value as Record<string, unknown>;
-  requireNumber(point, `${path}.x`);
-  requireNumber(point, `${path}.y`);
+  return {
+    x: requireNumber(point, `${path}.x`),
+    y: requireNumber(point, `${path}.y`),
+  };
 }
 
 function leafKey(path: string): string {
@@ -453,10 +552,22 @@ function renderAppStateResult(result: unknown, ctx: ToolExecContext): ToolResult
 
 function renderAppStateText(state: ComputerUseGetAppStateResult): string {
   const lines = ["<app_state>", `App=${renderAppIdentity(state)} (pid ${state.pid})`, `State ID: ${state.stateId}`, `Elements: ${state.elementCount}`];
+  if (state.screenshot) {
+    lines.push(
+      `Screenshot: ${state.screenshot.format} ${state.screenshot.width}x${state.screenshot.height} px @${state.screenshot.scaleFactor}x`,
+      `Screenshot windowFrame: ${renderBounds(state.screenshot.coordinateSpace.windowFrame)}`,
+      `Screenshot windowBounds: ${renderBounds(state.screenshot.coordinateSpace.windowBounds)}`,
+      `Screenshot pixelSize: ${state.screenshot.coordinateSpace.pixelSize.width}x${state.screenshot.coordinateSpace.pixelSize.height} px`,
+    );
+  }
   const tree = state.treeMarkdown.trim();
   if (tree.length > 0) lines.push(tree);
   lines.push("</app_state>");
   return lines.join("\n");
+}
+
+function renderBounds(bounds: ComputerUseBounds): string {
+  return `x=${bounds.x} y=${bounds.y} width=${bounds.width} height=${bounds.height}`;
 }
 
 function renderAppIdentity(state: ComputerUseGetAppStateResult): string {

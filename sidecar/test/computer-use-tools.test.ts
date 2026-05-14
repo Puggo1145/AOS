@@ -1,6 +1,8 @@
 import { test, expect } from "bun:test";
 import { ToolRegistry } from "../src/agent/tools/registry";
 import { registerComputerUseTools } from "../src/agent/tools/computer-use";
+import { ComputerUseStateCache } from "../src/agent/session/computer-use-state-cache";
+import { Session } from "../src/agent/session/session";
 import { validateToolArguments } from "../src/llm/utils/validation";
 import { RPCMethod } from "../src/rpc/rpc-types";
 import type { Dispatcher } from "../src/rpc/dispatcher";
@@ -53,7 +55,7 @@ test("registerComputerUseTools exposes exactly the approved tool names", () => {
   ]);
 });
 
-test("use_mouse calls computerUse.postMouseEvent with the supplied event payload", async () => {
+test("use_mouse converts screenshot-local click coordinates to screen points before RPC dispatch", async () => {
   const registry = new ToolRegistry();
   const { dispatcher, calls } = makeDispatcherSpy();
   registerComputerUseTools(registry, dispatcher);
@@ -61,14 +63,34 @@ test("use_mouse calls computerUse.postMouseEvent with the supplied event payload
   const result = await registry.get("use_mouse")!.execute(
     {
       windowId: 77,
+      stateId: "state-1",
       event: {
         kind: "click",
         button: "left",
-        point: { x: 12, y: 34 },
+        point: { x: 400, y: 300 },
         count: 2,
       },
     },
-    execContext(),
+    {
+      ...execContext(),
+      computerUseStateCache: {
+        lookup: () => ({
+          kind: "found",
+          record: {
+            stateId: "state-1",
+            windowId: 77,
+            recordedAt: 1_000,
+            coordinateSpace: {
+              windowFrame: { x: 10, y: 20, width: 400, height: 300 },
+              windowBounds: { x: 10, y: 20, width: 400, height: 300 },
+              pixelSize: { width: 800, height: 600 },
+            },
+          },
+        }),
+        record: () => {},
+        clear: () => {},
+      },
+    } as any,
   );
 
   expect(result.isError).toBe(false);
@@ -80,12 +102,126 @@ test("use_mouse calls computerUse.postMouseEvent with the supplied event payload
         event: {
           kind: "click",
           button: "left",
-          point: { x: 12, y: 34 },
+          point: { x: 210, y: 170 },
           count: 2,
         },
       },
     },
   ]);
+});
+
+test("get_app_state records screenshot coordinate space for later mouse conversion", async () => {
+  const registry = new ToolRegistry();
+  const appState: ComputerUseGetAppStateResult = {
+    pid: 98530,
+    stateId: "state-1",
+    bundleId: "com.apple.Safari",
+    appName: "Safari",
+    elementCount: 4,
+    treeMarkdown: "0 window",
+    screenshot: {
+      imageBase64: "base64-image",
+      format: "png",
+      width: 800,
+      height: 600,
+      scaleFactor: 2,
+      coordinateSpace: {
+        windowFrame: { x: 10, y: 20, width: 400, height: 300 },
+        windowBounds: { x: 10, y: 20, width: 400, height: 300 },
+        pixelSize: { width: 800, height: 600 },
+      },
+    },
+  };
+  const records: unknown[] = [];
+  const dispatcher = {
+    request: async () => appState,
+  } as unknown as Dispatcher;
+  registerComputerUseTools(registry, dispatcher);
+
+  const result = await registry.get("get_app_state")!.execute(
+    { windowId: 77, captureMode: "vision", maxImageDimension: 0 },
+    {
+      ...execContext(),
+      computerUseStateCache: {
+        lookup: () => undefined,
+        record: (record: unknown) => records.push(record),
+        clear: () => {},
+      },
+    } as any,
+  );
+
+  expect(result.isError).toBe(false);
+  const screenshot = appState.screenshot;
+  if (!screenshot) throw new Error("test setup expected a screenshot");
+  expect(records).toEqual([
+    {
+      stateId: "state-1",
+      windowId: 77,
+      coordinateSpace: screenshot.coordinateSpace,
+    },
+  ]);
+});
+
+test("use_mouse rejects expired screenshot coordinate state before RPC dispatch", async () => {
+  const registry = new ToolRegistry();
+  const { dispatcher, calls } = makeDispatcherSpy();
+  let now = 1_000;
+  const cache = new ComputerUseStateCache({ ttlMilliseconds: 30_000, now: () => now });
+  cache.record({
+    stateId: "state-1",
+    windowId: 77,
+    coordinateSpace: {
+      windowFrame: { x: 10, y: 20, width: 400, height: 300 },
+      windowBounds: { x: 10, y: 20, width: 400, height: 300 },
+      pixelSize: { width: 800, height: 600 },
+    },
+  });
+  now = 31_001;
+  registerComputerUseTools(registry, dispatcher);
+
+  let caught: unknown;
+  try {
+    await registry.get("use_mouse")!.execute(
+      {
+        windowId: 77,
+        stateId: "state-1",
+        event: {
+          kind: "click",
+          button: "left",
+          point: { x: 400, y: 300 },
+        },
+      },
+      {
+        ...execContext(),
+        computerUseStateCache: cache,
+      },
+    );
+  } catch (err) {
+    caught = err;
+  }
+
+  expect(String(caught)).toContain("stale screenshot coordinate space");
+  expect(calls).toEqual([]);
+});
+
+test("replacing the computer use app session clears screenshot coordinate state", () => {
+  const session = new Session({ id: "session-1", createdAt: 0, title: "Test" });
+  session.setComputerUseAppSession({ pid: 123, windowId: 456 });
+  session.computerUseStateCache.record({
+    stateId: "state-1",
+    windowId: 456,
+    coordinateSpace: {
+      windowFrame: { x: 10, y: 20, width: 400, height: 300 },
+      windowBounds: { x: 10, y: 20, width: 400, height: 300 },
+      pixelSize: { width: 800, height: 600 },
+    },
+  });
+
+  expect(session.computerUseStateCache.lookup("state-1").kind).toBe("found");
+
+  session.setComputerUseAppSession({ pid: 789, windowId: 999 });
+
+  expect(session.computerUseStateCache.lookup("state-1").kind).toBe("missing");
 });
 
 test("stop_app_session sends the agent session owned pid to computerUse.stopAppSession", async () => {
@@ -189,6 +325,10 @@ test("get_app_state renders app state as a readable tagged text block", async ()
       'App=com.apple.Safari (pid 98530)\n' +
       'State ID: state-1\n' +
       'Elements: 4\n' +
+      'Screenshot: png 800x600 px @2x\n' +
+      'Screenshot windowFrame: x=10 y=20 width=400 height=300\n' +
+      'Screenshot windowBounds: x=0 y=0 width=400 height=300\n' +
+      'Screenshot pixelSize: 800x600 px\n' +
       'Window: "Apple", App: Safari.\n' +
       '0 standard window Apple\n' +
       '\t1 button Store\n' +
@@ -203,8 +343,10 @@ test("event tool descriptions expose variant-specific required fields and enum v
   registerComputerUseTools(registry, dispatcher);
 
   const mouse = registry.get("use_mouse")!.spec.description;
+  expect(mouse).toContain("stateId from the get_app_state screenshot");
   expect(mouse).toContain("{kind:\"click\", button:\"left\"|\"right\", point:{x:number,y:number}, count?:positive integer}");
   expect(mouse).toContain("{kind:\"drag\", button:\"left\"|\"right\", from:{x:number,y:number}, to:{x:number,y:number}}");
+  expect(mouse).toContain("screenshot-local pixels");
 
   const keyboard = registry.get("use_keyboard")!.spec.description;
   expect(keyboard).toContain("{kind:\"text\", text:string, delayMilliseconds?:integer 0..200}");
@@ -276,6 +418,7 @@ test("use_mouse rejects malformed click events before RPC dispatch", async () =>
     await registry.get("use_mouse")!.execute(
       {
         windowId: 77,
+        stateId: "state-1",
         event: { kind: "click", button: "left" },
       },
       execContext(),
@@ -298,6 +441,7 @@ test("use_mouse rejects non-positive click counts before RPC dispatch", async ()
     await registry.get("use_mouse")!.execute(
       {
         windowId: 77,
+        stateId: "state-1",
         event: {
           kind: "click",
           button: "left",

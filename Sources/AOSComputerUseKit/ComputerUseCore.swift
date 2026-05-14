@@ -333,6 +333,7 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
         AXElementEvent,
         AXElementEventTarget
     ) async throws -> Void
+    private let virtualMouseReflector: VirtualMouseReflector?
     private var activeAppSession: ActiveAppSession?
     private var nextAppSessionId: UInt64 = 1
 
@@ -402,7 +403,8 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
             },
             postAXElementEvent: { event, target in
                 try await axElementEventPoster.post(event, to: target)
-            }
+            },
+            virtualMouseReflector: .live
         )
     }
 
@@ -450,7 +452,8 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
             AXElementEventTarget
         ) async throws -> Void = { _, _ in
             throw ComputerUseError.axElementEventUnavailable("postAXElementEvent dependency was not configured")
-        }
+        },
+        virtualMouseReflector: VirtualMouseReflector? = nil
     ) {
         let snapshot = snapshot ?? AccessibilitySnapshot(webAccessibilityActivator: webAccessibilityActivator)
         self.webAccessibilityActivator = webAccessibilityActivator
@@ -475,6 +478,7 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
         self.postMouseEventToRoute = postMouseEvent
         self.postKeyboardEventToPid = postKeyboardEvent
         self.postAXElementEventToTarget = postAXElementEvent
+        self.virtualMouseReflector = virtualMouseReflector
     }
 
     public func listApps(mode: AppListMode) -> [AppInfo] {
@@ -583,6 +587,7 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
         if activeAppSession?.isSameSession(as: session) == true {
             activeAppSession = nil
         }
+        await virtualMouseReflector?.dismiss()
         return session.result
     }
 
@@ -629,7 +634,7 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
     ) async throws -> AXElementEventResult {
         let session = try requireActiveAppSession()
         let pid = session.pid
-        try validateOwnership(pid: pid, windowId: windowId)
+        let window = try validateOwnership(pid: pid, windowId: windowId)
         try validateAXElementEvent(event)
         let element = try await cache.lookup(
             pid: pid,
@@ -644,7 +649,14 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
             elementIndex: elementIndex,
             element: element
         )
+        let virtualTarget = await virtualMouseReflector?.reflectAXStart(
+            element: element,
+            window: window
+        )
         try await postAXElementEventToTarget(event, target)
+        if let virtualTarget {
+            await virtualMouseReflector?.reflectAXCompletion(event, target: virtualTarget)
+        }
         return AXElementEventResult(
             pid: pid,
             windowId: windowId,
@@ -670,6 +682,7 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
             )
         }
         let target = BackgroundMouseEventTarget(pid: pid, windowId: windowId, windowBounds: window.bounds)
+        await virtualMouseReflector?.reflectCoordinateStart(event, window: window)
         let traceRecorder = tracing ? WindowMouseEventTraceRecorder() : nil
         let orderGuardian = try makeWindowOrderGuardian(targetWindowId: windowId)
         try await prepareActiveAppSessionWindow(
@@ -735,6 +748,7 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
                 )
             }
             try await orderChangeObservation?.finish()
+            await virtualMouseReflector?.reflectCoordinateCompletion(event, window: window)
             let result = WindowMouseEventResult(pid: pid, windowId: windowId, event: event)
             let snapshots = await traceRecorder?.allSnapshots() ?? []
             return WindowMouseEventTraceResult(result: result, snapshots: snapshots)
