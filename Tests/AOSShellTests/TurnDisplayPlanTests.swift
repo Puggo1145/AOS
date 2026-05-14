@@ -106,6 +106,106 @@ struct TurnDisplayPlanTests {
         #expect(ToolCallRunSummary.text(for: records) == "polished 2 times")
     }
 
+    @Test("computer use presenters expose concrete action labels")
+    func computerUsePresentersExposeConcreteActionLabels() {
+        let windows = ToolUIRegistry.presenter(for: "list_windows")
+        let appState = ToolUIRegistry.presenter(for: "get_app_state")
+        let mouse = ToolUIRegistry.presenter(for: "use_mouse")
+        let keyboard = ToolUIRegistry.presenter(for: "use_keyboard")
+        let ax = ToolUIRegistry.presenter(for: "perform_AX_action")
+
+        #expect(windows.label(.object(["pid": .int(123)]), true) == "listing windows")
+        #expect(appState.label(.object([
+            "windowId": .int(456),
+            "captureMode": .string("vision"),
+            "maxImageDimension": .int(0)
+        ]), false) == "read app state")
+
+        #expect(mouse.label(.object([
+            "windowId": .int(456),
+            "event": .object([
+                "kind": .string("click"),
+                "button": .string("left"),
+                "point": .object(["x": .int(12), "y": .int(34)])
+            ])
+        ]), true) == "clicking at 12, 34")
+
+        #expect(keyboard.label(.object([
+            "event": .object([
+                "kind": .string("hotkey"),
+                "modifiers": .array([.string("command"), .string("shift")]),
+                "key": .string("P")
+            ])
+        ]), false) == "pressed command+shift+P")
+
+        #expect(ax.label(.object([
+            "windowId": .int(456),
+            "stateId": .string("state-123"),
+            "elementIndex": .int(7),
+            "event": .object([
+                "kind": .string("action"),
+                "action": .string("press")
+            ])
+        ]), false) == "pressed AX element 7")
+    }
+
+    @Test("computer use expanded details omit implementation identifiers")
+    func computerUseExpandedDetailsOmitImplementationIdentifiers() {
+        let startSession = ToolUIRegistry.presenter(for: "start_app_session")
+        let keyboard = ToolUIRegistry.presenter(for: "use_keyboard")
+        let ax = ToolUIRegistry.presenter(for: "perform_AX_action")
+
+        #expect(startSession.callingBody(.object([
+            "pid": .int(123),
+            "windowId": .int(456)
+        ])) == "target app")
+
+        #expect(keyboard.callingBody(.object([
+            "windowId": .int(456),
+            "event": .object([
+                "kind": .string("hotkey"),
+                "modifiers": .array([.string("command")]),
+                "key": .string("K")
+            ])
+        ])) == "event: hotkey\nkey: K\nmodifiers: command")
+
+        #expect(ax.callingBody(.object([
+            "windowId": .int(456),
+            "stateId": .string("state-123"),
+            "elementIndex": .int(7),
+            "event": .object([
+                "kind": .string("action"),
+                "action": .string("press")
+            ])
+        ])) == "elementIndex: 7\nevent: action\naction: press")
+    }
+
+    @Test("computer use numeric rendering does not narrow oversized doubles")
+    func computerUseNumericRenderingDoesNotNarrowOversizedDoubles() {
+        let mouse = ToolUIRegistry.presenter(for: "use_mouse")
+
+        #expect(mouse.label(.object([
+            "event": .object([
+                "kind": .string("click"),
+                "button": .string("left"),
+                "point": .object(["x": .double(1e300), "y": .int(34)])
+            ])
+        ]), true) == "clicking at 1e+300, 34")
+    }
+
+    @Test("computer use tool run summary uses one action family")
+    func computerUseToolRunSummaryUsesOneActionFamily() {
+        let records = [
+            tool(id: "A", name: "list_apps", status: .completed),
+            tool(id: "B", name: "start_app_session", status: .completed),
+            tool(id: "C", name: "use_mouse", status: .completed),
+            tool(id: "D", name: "use_keyboard", status: .completed),
+            tool(id: "E", name: "perform_AX_action", status: .completed)
+        ]
+
+        #expect(ToolCallRunSummary.text(for: records) == "used computer 5 times")
+    }
+
     private func tool(
         id: String,
         name: String,
