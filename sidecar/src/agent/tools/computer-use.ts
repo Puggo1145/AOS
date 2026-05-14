@@ -429,16 +429,7 @@ function leafKey(path: string): string {
 function renderAppStateResult(result: unknown, ctx: ToolExecContext): ToolResultContent[] {
   const state = result as ComputerUseGetAppStateResult;
   const screenshot = state.screenshot;
-  const textState = screenshot
-    ? {
-        ...state,
-        screenshot: {
-          ...screenshot,
-          imageBase64: `[base64 ${screenshot.imageBase64.length} chars]`,
-        },
-      }
-    : state;
-  const content: ToolResultContent[] = [{ type: "text", text: JSON.stringify(textState, null, 2) }];
+  const content: ToolResultContent[] = [{ type: "text", text: renderAppStateText(state) }];
   if (screenshot && supportsVision(ctx.model)) {
     content.push({
       type: "image",
@@ -447,4 +438,18 @@ function renderAppStateResult(result: unknown, ctx: ToolExecContext): ToolResult
     });
   }
   return content;
+}
+
+function renderAppStateText(state: ComputerUseGetAppStateResult): string {
+  const lines = ["<app_state>", `App=${renderAppIdentity(state)} (pid ${state.pid})`, `State ID: ${state.stateId}`, `Elements: ${state.elementCount}`];
+  const tree = state.treeMarkdown.trim();
+  if (tree.length > 0) lines.push(tree);
+  lines.push("</app_state>");
+  return lines.join("\n");
+}
+
+function renderAppIdentity(state: ComputerUseGetAppStateResult): string {
+  if (state.bundleId) return state.bundleId;
+  if (state.appName) return state.appName;
+  return "unknown";
 }

@@ -159,6 +159,32 @@ test("toolResult emits function_call_output with string output (no images)", () 
   expect(input[0]).toEqual({ type: "function_call_output", call_id: "call_42", output: "result-text" });
 });
 
+test("toolResult with image emits a multimodal function_call_output", () => {
+  const tr: ToolResultMessage = {
+    role: "toolResult",
+    toolCallId: "call_42",
+    toolName: "get_app_state",
+    content: [
+      { type: "text", text: "<app_state>\nApp=Safari\n</app_state>" },
+      { type: "image", data: "base64-image", mimeType: "image/png" },
+    ],
+    isError: false,
+    timestamp: 0,
+  };
+  const payload = buildPayload(makeModel(), makeContext([tr]));
+  const input = payload["input"] as Array<Record<string, unknown>>;
+  expect(input).toEqual([
+    {
+      type: "function_call_output",
+      call_id: "call_42",
+      output: [
+        { type: "input_text", text: "<app_state>\nApp=Safari\n</app_state>" },
+        { type: "input_image", image_url: "data:image/png;base64,base64-image" },
+      ],
+    },
+  ]);
+});
+
 // =============================================================================
 // Streaming dispatch tests (drive a fake SSE response through the provider)
 // =============================================================================

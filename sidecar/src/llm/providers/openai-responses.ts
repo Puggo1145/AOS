@@ -165,18 +165,16 @@ function serializeMessage(msg: Message): Record<string, unknown>[] {
     }
     return items;
   }
-  // toolResult — `function_call_output.output` is a string by spec; only the
-  // image-bearing variant uses the structured list form.
+  // toolResult — Responses supports multimodal function-call output directly:
+  // `output` may be a string or a content array with input_text/input_image.
   const textParts = msg.content.filter((b): b is import("../types").TextContent => b.type === "text").map((b) => b.text);
-  const hasImage = msg.content.some((b) => b.type === "image");
-  let output: unknown;
-  if (hasImage) {
-    output = msg.content.map((b) => b.type === "text"
-      ? { type: "input_text", text: sanitizeSurrogates(b.text) }
-      : { type: "input_image", image_url: `data:${b.mimeType};base64,${b.data}` });
-  } else {
-    output = sanitizeSurrogates(textParts.join("\n"));
-  }
+  const images = msg.content.filter((b): b is import("../types").ImageContent => b.type === "image");
+  const output = images.length > 0
+    ? [
+        { type: "input_text", text: sanitizeSurrogates(textParts.join("\n")) },
+        ...images.map((b) => ({ type: "input_image", image_url: `data:${b.mimeType};base64,${b.data}` })),
+      ]
+    : sanitizeSurrogates(textParts.join("\n"));
   return [{ type: "function_call_output", call_id: msg.toolCallId, output }];
 }
 

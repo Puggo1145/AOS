@@ -4,6 +4,7 @@ import { registerComputerUseTools } from "../src/agent/tools/computer-use";
 import { validateToolArguments } from "../src/llm/utils/validation";
 import { RPCMethod } from "../src/rpc/rpc-types";
 import type { Dispatcher } from "../src/rpc/dispatcher";
+import type { ComputerUseGetAppStateResult } from "../src/rpc/rpc-types";
 
 function makeDispatcherSpy(): { dispatcher: Dispatcher; calls: { method: string; params: object }[] } {
   const calls: { method: string; params: object }[] = [];
@@ -26,6 +27,7 @@ function execContext() {
       provider: "fake",
       id: "fake",
       name: "fake",
+      input: ["text", "image"],
       contextWindow: 1000,
       maxOutputTokens: 100,
     } as any,
@@ -111,6 +113,53 @@ test("get_app_state rejects stale pid arguments before RPC dispatch", () => {
       },
     }),
   ).toThrow(/pid/);
+});
+
+test("get_app_state renders app state as a readable tagged text block", async () => {
+  const registry = new ToolRegistry();
+  const appState: ComputerUseGetAppStateResult = {
+    pid: 98530,
+    stateId: "state-1",
+    bundleId: "com.apple.Safari",
+    appName: "Safari",
+    elementCount: 4,
+    treeMarkdown: 'Window: "Apple", App: Safari.\n0 standard window Apple\n\t1 button Store',
+    screenshot: {
+      imageBase64: "base64-image",
+      format: "png",
+      width: 800,
+      height: 600,
+      scaleFactor: 2,
+      coordinateSpace: {
+        windowFrame: { x: 10, y: 20, width: 400, height: 300 },
+        windowBounds: { x: 0, y: 0, width: 400, height: 300 },
+        pixelSize: { width: 800, height: 600 },
+      },
+    },
+  };
+  const dispatcher = {
+    request: async () => appState,
+  } as unknown as Dispatcher;
+  registerComputerUseTools(registry, dispatcher);
+
+  const result = await registry.get("get_app_state")!.execute(
+    { windowId: 77, captureMode: "vision", maxImageDimension: 0 },
+    execContext(),
+  );
+
+  expect(result.content[0]).toEqual({
+    type: "text",
+    text:
+      '<app_state>\n' +
+      'App=com.apple.Safari (pid 98530)\n' +
+      'State ID: state-1\n' +
+      'Elements: 4\n' +
+      'Window: "Apple", App: Safari.\n' +
+      '0 standard window Apple\n' +
+      '\t1 button Store\n' +
+      '</app_state>',
+  });
+  expect(result.content[1]).toEqual({ type: "image", data: "base64-image", mimeType: "image/png" });
 });
 
 test("event tool descriptions expose variant-specific required fields and enum values", () => {
