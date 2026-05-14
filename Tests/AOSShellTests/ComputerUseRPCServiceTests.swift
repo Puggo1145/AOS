@@ -67,14 +67,77 @@ struct ComputerUseRPCServiceTests {
 
         #expect(await core.calls == ["postEventToAXElement:77:state-1:9:action(press)"])
     }
+
+    @Test("handleStopAppSession returns no-op when there is no active app session")
+    func handleStopAppSessionWithoutActiveSession() async throws {
+        let core = FakeShellComputerUseClient()
+        await core.setCurrentAppSessionError(ComputerUseError.appSessionUnavailable("no active app session"))
+        let service = ComputerUseRPCService(core: core)
+
+        let result = try await service.handleStopAppSession(ComputerUseStopAppSessionParams(pid: 123))
+
+        #expect(await core.calls == ["currentAppSession"])
+        #expect(result.stopped == false)
+        #expect(result.pid == nil)
+    }
+
+    @Test("handleStopAppSession bubbles unexpected current app session errors")
+    func handleStopAppSessionBubblesUnexpectedCurrentSessionErrors() async throws {
+        let core = FakeShellComputerUseClient()
+        await core.setCurrentAppSessionError(ComputerUseRPCTestError.boom)
+        let service = ComputerUseRPCService(core: core)
+
+        do {
+            _ = try await service.handleStopAppSession(ComputerUseStopAppSessionParams(pid: 123))
+            Issue.record("unexpected current app session errors must bubble")
+        } catch ComputerUseRPCTestError.boom {
+            #expect(await core.calls == ["currentAppSession"])
+        }
+    }
+
+    @Test("handleStopAppSession returns no-op when active app session pid does not match")
+    func handleStopAppSessionWithDifferentActiveSession() async throws {
+        let core = FakeShellComputerUseClient()
+        await core.setActiveAppSession(AppSessionResult(pid: 999))
+        let service = ComputerUseRPCService(core: core)
+
+        let result = try await service.handleStopAppSession(ComputerUseStopAppSessionParams(pid: 123))
+
+        #expect(await core.calls == ["currentAppSession"])
+        #expect(result.stopped == false)
+        #expect(result.pid == 999)
+    }
+
+    @Test("handleStopAppSession stops only when an active app session exists")
+    func handleStopAppSessionWithActiveSession() async throws {
+        let core = FakeShellComputerUseClient()
+        await core.setActiveAppSession(AppSessionResult(pid: 123))
+        let service = ComputerUseRPCService(core: core)
+
+        let result = try await service.handleStopAppSession(ComputerUseStopAppSessionParams(pid: 123))
+
+        #expect(await core.calls == ["currentAppSession", "stopAppSession"])
+        #expect(result.stopped == true)
+        #expect(result.pid == 123)
+    }
 }
 
 private actor FakeShellComputerUseClient: ShellComputerUseClient {
     private(set) var calls: [String] = []
     private var apps: [AppInfo] = []
+    private var activeAppSession: AppSessionResult?
+    private var currentAppSessionError: Error?
 
     func setApps(_ apps: [AppInfo]) {
         self.apps = apps
+    }
+
+    func setActiveAppSession(_ session: AppSessionResult?) {
+        self.activeAppSession = session
+    }
+
+    func setCurrentAppSessionError(_ error: Error) {
+        self.currentAppSessionError = error
     }
 
     func listApps(mode: AppListMode) async throws -> [AppInfo] {
@@ -112,6 +175,17 @@ private actor FakeShellComputerUseClient: ShellComputerUseClient {
     func stopAppSession() async throws -> AppSessionResult {
         calls.append("stopAppSession")
         return AppSessionResult(pid: 123)
+    }
+
+    func currentAppSession() async throws -> AppSessionResult {
+        calls.append("currentAppSession")
+        if let currentAppSessionError {
+            throw currentAppSessionError
+        }
+        guard let activeAppSession else {
+            throw ComputerUseError.appSessionUnavailable("no active app session")
+        }
+        return activeAppSession
     }
 
     func postMouseEvent(
@@ -160,4 +234,8 @@ private actor FakeShellComputerUseClient: ShellComputerUseClient {
             return "scroll(\(direction.rawValue),\(pages))"
         }
     }
+}
+
+private enum ComputerUseRPCTestError: Error {
+    case boom
 }

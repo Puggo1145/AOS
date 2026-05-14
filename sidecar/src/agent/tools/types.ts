@@ -30,6 +30,7 @@ export interface ToolExecContext {
   turnId: string;
   toolCallId: string;
   model: Model<Api>;
+  computerUseAppSession?: { pid: number; windowId: number };
   /// Aborted when the parent turn is cancelled or reset. Tools MUST honor
   /// it to avoid leaking subprocesses / file handles.
   signal: AbortSignal;

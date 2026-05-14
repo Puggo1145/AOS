@@ -17,6 +17,11 @@ export interface PendingSteerPrompt {
   citedContext: CitedContext;
 }
 
+export interface ComputerUseAppSessionInfo {
+  pid: number;
+  windowId: number;
+}
+
 export class Session {
   readonly id: SessionId;
   readonly conversation: Conversation;
@@ -36,6 +41,7 @@ export class Session {
   /// counter so the value stays accessible to ambient renderers, which
   /// only get a `Session` handle.
   private _silentToolRounds = 0;
+  private _computerUseAppSession: ComputerUseAppSessionInfo | undefined;
   private _info: SessionInfo;
 
   constructor(info: SessionInfo) {
@@ -60,6 +66,10 @@ export class Session {
 
   get isCompacting(): boolean {
     return this._compacting;
+  }
+
+  get computerUseAppSession(): ComputerUseAppSessionInfo | undefined {
+    return this._computerUseAppSession;
   }
 
   setCompacting(compacting: boolean): void {
@@ -87,6 +97,14 @@ export class Session {
 
   setSilentToolRounds(n: number): void {
     this._silentToolRounds = n < 0 ? 0 : n;
+  }
+
+  setComputerUseAppSession(info: ComputerUseAppSessionInfo): void {
+    this._computerUseAppSession = info;
+  }
+
+  clearComputerUseAppSession(): void {
+    this._computerUseAppSession = undefined;
   }
 
   /// Replace title. Manager calls this once on first user prompt; subsequent

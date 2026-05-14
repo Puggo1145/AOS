@@ -247,7 +247,11 @@ function rpcTool(options: {
     },
     execute: async (args, ctx) => {
       options.validate?.(args);
-      const result = await options.dispatcher.request(options.method, args, { signal: ctx.signal });
+      const rpcArgs =
+        options.method === RPCMethod.computerUseStopAppSession
+          ? stopAppSessionParams(ctx)
+          : args;
+      const result = await options.dispatcher.request(options.method, rpcArgs, { signal: ctx.signal });
       return {
         content: options.render ? options.render(result, ctx) : [{ type: "text", text: JSON.stringify(result, null, 2) }],
         details: result,
@@ -255,6 +259,13 @@ function rpcTool(options: {
       } satisfies ToolExecResult;
     },
   };
+}
+
+function stopAppSessionParams(ctx: ToolExecContext): { pid: number } {
+  if (!ctx.computerUseAppSession) {
+    throw new ToolUserError("no app session was started by this agent session.");
+  }
+  return { pid: ctx.computerUseAppSession.pid };
 }
 
 function validateMouseArgs(args: ComputerUseArgs): void {

@@ -803,10 +803,17 @@ export async function runTurn(
       const toolCalls = extractToolCalls(final);
 
       if (toolCalls.length === 0) {
-        // Terminal: model produced text-only output. Mark done, republish
-        // the dev snapshot so the post-call view includes the assistant
-        // turn (and a fresh ambient tail reflecting any state changes
-        // during this turn), then fire the visible-status closer.
+        // Terminal: model produced text-only output. Ask Shell to stop any
+        // app session, mark done, republish the dev snapshot so the post-call
+        // view includes the assistant turn (and a fresh ambient tail
+        // reflecting any state changes), then fire the visible-status closer.
+        if (session.computerUseAppSession) {
+          await dispatcher.request(
+            RPCMethod.computerUseStopAppSession,
+            { pid: session.computerUseAppSession.pid },
+          );
+          session.clearComputerUseAppSession();
+        }
         const ok = convo.markDone(turnId);
         publishContext(buildOutboundMessages(convo, session));
         closeThinkingIfOpen();
@@ -919,6 +926,7 @@ export async function runTurn(
               turnId,
               toolCallId: tc.id,
               model,
+              computerUseAppSession: session.computerUseAppSession,
               signal,
             });
           } catch (err) {
@@ -964,6 +972,14 @@ export async function runTurn(
             isError: result.isError,
             outputText: renderToolResultForWire(result.content),
           });
+          if (!result.isError && tc.name === "start_app_session") {
+            session.setComputerUseAppSession({
+              pid: outcome.args.pid as number,
+              windowId: outcome.args.windowId as number,
+            });
+          } else if (!result.isError && tc.name === "stop_app_session") {
+            session.clearComputerUseAppSession();
+          }
         }
       }
 

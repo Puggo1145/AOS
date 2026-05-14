@@ -23,6 +23,7 @@ export interface ToolDispatchCtx {
   turnId: string;
   toolCallId: string;
   model: Model<Api>;
+  computerUseAppSession?: { pid: number; windowId: number };
   signal: AbortSignal;
 }
 

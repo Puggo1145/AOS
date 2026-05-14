@@ -88,6 +88,41 @@ test("use_mouse calls computerUse.postMouseEvent with the supplied event payload
   ]);
 });
 
+test("stop_app_session sends the agent session owned pid to computerUse.stopAppSession", async () => {
+  const registry = new ToolRegistry();
+  const { dispatcher, calls } = makeDispatcherSpy();
+  registerComputerUseTools(registry, dispatcher);
+
+  const result = await registry.get("stop_app_session")!.execute(
+    {},
+    { ...execContext(), computerUseAppSession: { pid: 123, windowId: 456 } },
+  );
+
+  expect(result.isError).toBe(false);
+  expect(calls).toEqual([
+    {
+      method: RPCMethod.computerUseStopAppSession,
+      params: { pid: 123 },
+    },
+  ]);
+});
+
+test("stop_app_session fails before RPC dispatch without a session owned app session", async () => {
+  const registry = new ToolRegistry();
+  const { dispatcher, calls } = makeDispatcherSpy();
+  registerComputerUseTools(registry, dispatcher);
+
+  let caught: unknown;
+  try {
+    await registry.get("stop_app_session")!.execute({}, execContext());
+  } catch (err) {
+    caught = err;
+  }
+
+  expect(String(caught)).toContain("no app session was started by this agent session");
+  expect(calls).toEqual([]);
+});
+
 test("computerUse namespace is available for Bun to call Shell", async () => {
   expect(RPCMethod.computerUseListApps).toBe("computerUse.listApps");
   expect(RPCMethod.computerUsePostEventToAXElement).toBe("computerUse.postEventToAXElement");

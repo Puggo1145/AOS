@@ -20,6 +20,7 @@ protocol ShellComputerUseClient: Sendable {
     ) async throws -> AppStateBundle
     func startAppSession(pid: pid_t, windowId: CGWindowID) async throws -> AppSessionResult
     func stopAppSession() async throws -> AppSessionResult
+    func currentAppSession() async throws -> AppSessionResult
     func postMouseEvent(windowId: CGWindowID, event: BackgroundMouseEvent) async throws -> WindowMouseEventResult
     func postKeyboardEvent(windowId: CGWindowID, event: BackgroundKeyboardEvent) async throws -> WindowKeyboardEventResult
     func postEventToAXElement(
@@ -59,6 +60,10 @@ struct LiveShellComputerUseClient: ShellComputerUseClient {
 
     func stopAppSession() async throws -> AppSessionResult {
         try await core.stopAppSession()
+    }
+
+    func currentAppSession() async throws -> AppSessionResult {
+        try await core.currentAppSession()
     }
 
     func postMouseEvent(windowId: CGWindowID, event: BackgroundMouseEvent) async throws -> WindowMouseEventResult {
@@ -132,7 +137,7 @@ final class ComputerUseRPCService: Sendable {
         rpc.registerRequestHandler(
             method: RPCMethod.computerUseStopAppSession,
             as: ComputerUseStopAppSessionParams.self,
-            resultType: ComputerUseAppSessionResult.self
+            resultType: ComputerUseStopAppSessionResult.self
         ) { [self] params in
             try await handleStopAppSession(params)
         }
@@ -189,9 +194,19 @@ final class ComputerUseRPCService: Sendable {
         return ComputerUseAppSessionResult(pid: Int(result.pid))
     }
 
-    func handleStopAppSession(_: ComputerUseStopAppSessionParams) async throws -> ComputerUseAppSessionResult {
+    func handleStopAppSession(_ params: ComputerUseStopAppSessionParams) async throws -> ComputerUseStopAppSessionResult {
+        let expectedPID = try pid(params.pid, name: "pid")
+        let active: AppSessionResult
+        do {
+            active = try await core.currentAppSession()
+        } catch ComputerUseError.appSessionUnavailable {
+            return ComputerUseStopAppSessionResult(stopped: false, pid: nil)
+        }
+        guard active.pid == expectedPID else {
+            return ComputerUseStopAppSessionResult(stopped: false, pid: Int(active.pid))
+        }
         let result = try await core.stopAppSession()
-        return ComputerUseAppSessionResult(pid: Int(result.pid))
+        return ComputerUseStopAppSessionResult(stopped: true, pid: Int(result.pid))
     }
 
     func handlePostMouseEvent(_ params: ComputerUsePostMouseEventParams) async throws -> ComputerUsePostMouseEventResult {

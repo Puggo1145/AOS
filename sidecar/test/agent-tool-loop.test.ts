@@ -14,8 +14,11 @@
 
 import { test, expect, beforeEach, afterEach } from "bun:test";
 import { registerAgentHandlers, setModelResolver, resetModelResolver } from "../src/agent/loop";
+import { SessionManager } from "../src/agent/session/manager";
 import { toolRegistry } from "../src/agent/tools/registry";
 import { ToolUserError } from "../src/agent/tools";
+import { registerComputerUseTools } from "../src/agent/tools/computer-use";
+import { RPCMethod } from "../src/rpc/rpc-types";
 import {
   registerApiProvider,
   unregisterApiProviders,
@@ -54,18 +57,18 @@ function fakeAssistant(model: Model<Api>, content: AssistantMessage["content"], 
 
 // Each call to the fake provider consumes the head of this queue. Lets a
 // test script a multi-round dialog: round 1 tool call, round 2 final reply.
-let scriptedRounds: ((model: Model<Api>) => AssistantMessageEventStream)[] = [];
+let scriptedRounds: ((model: Model<Api>, signal?: AbortSignal) => AssistantMessageEventStream)[] = [];
 let observedContexts: { messages: any[] }[] = [];
 
 beforeEach(() => {
   registerApiProvider({
     api: "openai-responses",
     sourceId: FAKE_SOURCE_ID,
-    stream: (model, ctx) => {
+    stream: (model, ctx, options) => {
       observedContexts.push({ messages: ctx.messages });
       const next = scriptedRounds.shift();
       if (!next) throw new Error("test ran out of scripted rounds");
-      return next(model);
+      return next(model, options?.signal);
     },
   });
   setModelResolver(() => makeFakeModel());
@@ -184,6 +187,168 @@ test("two-round tool-use: assistant calls a tool, then produces a final reply", 
 
   expect(convo.turns[0].status).toBe("done");
   expect(convo.turns[0].reply).toBe("all done");
+});
+
+test("computer-use app session is stopped after the terminal assistant reply", async () => {
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const computerUseRequests: { method: string; params: object }[] = [];
+  (dispatcher as any).request = async (method: string, params: object) => {
+    computerUseRequests.push({ method, params });
+    if (method === RPCMethod.computerUseStopAppSession) return { stopped: true, pid: 123 };
+    return { pid: 123 };
+  };
+  const { manager, convo, sessionId } = setupSession();
+  registerComputerUseTools(toolRegistry, dispatcher);
+  registerAgentHandlers(dispatcher, { manager });
+
+  scriptedRounds.push((model) => {
+    const tc: ToolCall = {
+      type: "toolCall",
+      id: "tc_start",
+      name: "start_app_session",
+      arguments: { pid: 123, windowId: 456 },
+    };
+    return emitStream((s) => {
+      const partial = fakeAssistant(model, [tc], "toolUse");
+      s.push({ type: "toolcall_end", contentIndex: 0, toolCall: tc, partial });
+      s.push({ type: "done", reason: "toolUse", message: partial });
+    });
+  });
+  scriptedRounds.push((model) => {
+    return emitStream((s) => {
+      const partial = fakeAssistant(model, [{ type: "text", text: "done" }], "stop");
+      s.push({ type: "text_delta", contentIndex: 0, delta: "done", partial });
+      s.push({ type: "done", reason: "stop", message: partial });
+    });
+  });
+
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "agent.submit",
+    params: { sessionId, turnId: "T1", prompt: "use app then answer", citedContext: {} },
+  });
+
+  await flush();
+
+  expect(computerUseRequests).toEqual([
+    { method: RPCMethod.computerUseStartAppSession, params: { pid: 123, windowId: 456 } },
+    { method: RPCMethod.computerUseStopAppSession, params: { pid: 123 } },
+  ]);
+  const doneIdx = captured.notifications.findIndex(
+    (n) => n.method === "ui.status" && n.params.status === "done",
+  );
+  expect(doneIdx).toBeGreaterThan(-1);
+  expect(convo.turns[0].status).toBe("done");
+});
+
+test("computer-use stop is not requested after terminal assistant reply without a recorded start", async () => {
+  const { dispatcher, pushInbound } = makeCapturingDispatcher();
+  const computerUseRequests: { method: string; params: object }[] = [];
+  (dispatcher as any).request = async (method: string, params: object) => {
+    computerUseRequests.push({ method, params });
+    return { stopped: false };
+  };
+  const { manager, convo, sessionId } = setupSession();
+  registerAgentHandlers(dispatcher, { manager });
+
+  scriptedRounds.push((model) => {
+    return emitStream((s) => {
+      const partial = fakeAssistant(model, [{ type: "text", text: "done" }], "stop");
+      s.push({ type: "text_delta", contentIndex: 0, delta: "done", partial });
+      s.push({ type: "done", reason: "stop", message: partial });
+    });
+  });
+
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "agent.submit",
+    params: { sessionId, turnId: "T1", prompt: "answer normally", citedContext: {} },
+  });
+
+  await flush();
+
+  expect(computerUseRequests).toEqual([]);
+  expect(convo.turns[0].status).toBe("done");
+});
+
+test("terminal reply in another agent session does not stop this session's app session", async () => {
+  const { dispatcher, pushInbound } = makeCapturingDispatcher();
+  const computerUseRequests: { method: string; params: object }[] = [];
+  (dispatcher as any).request = async (method: string, params: object) => {
+    computerUseRequests.push({ method, params });
+    if (method === RPCMethod.computerUseStopAppSession) return { stopped: true, pid: 123 };
+    return { pid: 123 };
+  };
+  const manager = new SessionManager();
+  const sessionA = manager.create();
+  const sessionB = manager.create();
+  registerComputerUseTools(toolRegistry, dispatcher);
+  registerAgentHandlers(dispatcher, { manager });
+
+  scriptedRounds.push((model) => {
+    const tc: ToolCall = {
+      type: "toolCall",
+      id: "tc_start_b",
+      name: "start_app_session",
+      arguments: { pid: 123, windowId: 456 },
+    };
+    return emitStream((s) => {
+      const partial = fakeAssistant(model, [tc], "toolUse");
+      s.push({ type: "toolcall_end", contentIndex: 0, toolCall: tc, partial });
+      s.push({ type: "done", reason: "toolUse", message: partial });
+    });
+  });
+  scriptedRounds.push((_model, signal) => {
+    const s = new AssistantMessageEventStream();
+    signal?.addEventListener(
+      "abort",
+      () => {
+        const terminal = fakeAssistant(_model, [], "stop");
+        terminal.stopReason = "aborted";
+        s.push({ type: "done", reason: "stop", message: terminal });
+        s.end();
+      },
+      { once: true },
+    );
+    return s;
+  });
+  scriptedRounds.push((model) => {
+    return emitStream((s) => {
+      const partial = fakeAssistant(model, [{ type: "text", text: "A done" }], "stop");
+      s.push({ type: "text_delta", contentIndex: 0, delta: "A done", partial });
+      s.push({ type: "done", reason: "stop", message: partial });
+    });
+  });
+
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "agent.submit",
+    params: { sessionId: sessionB.id, turnId: "TB", prompt: "start app session", citedContext: {} },
+  });
+  await flush();
+
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "agent.submit",
+    params: { sessionId: sessionA.id, turnId: "TA", prompt: "answer normally", citedContext: {} },
+  });
+  await flush();
+
+  expect(computerUseRequests).toEqual([
+    { method: RPCMethod.computerUseStartAppSession, params: { pid: 123, windowId: 456 } },
+  ]);
+
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 3,
+    method: "agent.cancel",
+    params: { sessionId: sessionB.id, turnId: "TB" },
+  });
+  await flush();
 });
 
 test("unknown tool surfaces as isError result, loop continues to terminal reply", async () => {

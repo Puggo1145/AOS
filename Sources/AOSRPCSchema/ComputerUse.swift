@@ -250,8 +250,22 @@ public struct ComputerUseAppSessionResult: Codable, Sendable, Equatable {
     }
 }
 
+public struct ComputerUseStopAppSessionResult: Codable, Sendable, Equatable {
+    public let stopped: Bool
+    public let pid: Int?
+
+    public init(stopped: Bool, pid: Int?) {
+        self.stopped = stopped
+        self.pid = pid
+    }
+}
+
 public struct ComputerUseStopAppSessionParams: Codable, Sendable, Equatable {
-    public init() {}
+    public let pid: Int
+
+    public init(pid: Int) {
+        self.pid = pid
+    }
 }
 
 public enum ComputerUseMouseButton: String, Codable, Sendable, Equatable {

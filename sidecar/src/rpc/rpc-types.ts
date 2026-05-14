@@ -334,10 +334,17 @@ export interface ComputerUseStartAppSessionParams {
   windowId: number;
 }
 
-export type ComputerUseStopAppSessionParams = Record<string, never>;
+export interface ComputerUseStopAppSessionParams {
+  pid: number;
+}
 
 export interface ComputerUseAppSessionResult {
   pid: number;
+}
+
+export interface ComputerUseStopAppSessionResult {
+  stopped: boolean;
+  pid?: number;
 }
 
 export type ComputerUseMouseButton = "left" | "right";

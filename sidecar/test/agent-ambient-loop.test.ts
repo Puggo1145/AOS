@@ -110,6 +110,10 @@ function makeCapturingDispatcher(): {
 } {
   const inbound: string[] = [];
   const inboundWaiters: ((s: string) => void)[] = [];
+  const pushInboundLine = (line: string): void => {
+    if (inboundWaiters.length > 0) inboundWaiters.shift()!(line);
+    else inbound.push(line);
+  };
   const source: ByteSource = (async function* () {
     while (true) {
       if (inbound.length > 0) {
@@ -126,6 +130,8 @@ function makeCapturingDispatcher(): {
       const frame = JSON.parse(trimmed);
       if ("method" in frame && !("id" in frame)) {
         captured.notifications.push({ method: frame.method, params: frame.params });
+      } else if (frame.method === "computerUse.stopAppSession") {
+        pushInboundLine(JSON.stringify({ jsonrpc: "2.0", id: frame.id, result: { stopped: true, pid: 123 } }) + "\n");
       }
       return true;
     },
@@ -137,9 +143,7 @@ function makeCapturingDispatcher(): {
     dispatcher,
     captured,
     pushInbound: (frame: object) => {
-      const line = JSON.stringify(frame) + "\n";
-      if (inboundWaiters.length > 0) inboundWaiters.shift()!(line);
-      else inbound.push(line);
+      pushInboundLine(JSON.stringify(frame) + "\n");
     },
   };
 }
