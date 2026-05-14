@@ -7,6 +7,33 @@ import Testing
 
 @Suite("ComputerUseCore AX element events")
 struct AXElementEventTests {
+    @Test("postEventToAXElement requires an active app session")
+    func postEventToAXElementRequiresAnActiveAppSession() async throws {
+        let cache = StateCache(ttlSeconds: 30)
+        let element = AXUIElementCreateSystemWide()
+        let stateId = await cache.store(pid: 123, windowId: 456, elements: [7: element])
+        let core = ComputerUseCore(
+            cache: cache,
+            windowLookup: { windowId in
+                windowId == 456 ? Self.window(id: 456, pid: 123) : nil
+            },
+            focusWindowWithoutRaising: { _, _ in },
+            deactivateWindowWithoutRaising: { _, _ in },
+            postAXElementEvent: { _, _ in
+                Issue.record("AX events must not post without an active app session")
+            }
+        )
+
+        await #expect(throws: ComputerUseError.self) {
+            try await core.postEventToAXElement(
+                windowId: 456,
+                stateId: stateId,
+                elementIndex: 7,
+                event: .action(.press)
+            )
+        }
+    }
+
     @Test("postEventToAXElement resolves cached state and bypasses coordinate focus")
     func postEventToAXElementResolvesCachedStateAndBypassesCoordinateFocus() async throws {
         guard StateCache.isElementAlive(Self.aliveElement()) else { return }
@@ -29,8 +56,9 @@ struct AXElementEventTests {
             }
         )
 
+        _ = try await core.startAppSession(pid: 123, windowId: 456)
+        await recorder.removeAll()
         let result = try await core.postEventToAXElement(
-            pid: 123,
             windowId: 456,
             stateId: stateId,
             elementIndex: 7,
@@ -70,17 +98,16 @@ struct AXElementEventTests {
             windowLookup: { windowId in
                 windowId == 456 ? Self.window(id: 456, pid: 123) : nil
             },
-            focusWindowWithoutRaising: { _, _ in
-                Issue.record("AX events must not call coordinate focus")
-            },
+            focusWindowWithoutRaising: { _, _ in },
             deactivateWindowWithoutRaising: { _, _ in },
             postAXElementEvent: { event, target in
                 await recorder.record(.ax(event: event, target: target))
             }
         )
 
+        _ = try await core.startAppSession(pid: 123, windowId: 456)
+        await recorder.removeAll()
         _ = try await core.postEventToAXElement(
-            pid: 123,
             windowId: 456,
             stateId: stateId,
             elementIndex: 0,
@@ -146,8 +173,9 @@ struct AXElementEventTests {
             }
         )
 
+        _ = try await core.startAppSession(pid: 30, windowId: 300)
+        await recorder.removeAll()
         _ = try await core.postEventToAXElement(
-            pid: 30,
             windowId: 300,
             stateId: stateId,
             elementIndex: 7,
@@ -554,6 +582,10 @@ private actor AXElementEventRecorder {
 
     func record(_ event: AXElementEventRecord) {
         recordedEvents.append(event)
+    }
+
+    func removeAll() {
+        recordedEvents.removeAll()
     }
 }
 

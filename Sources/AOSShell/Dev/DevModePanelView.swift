@@ -1,5 +1,4 @@
 import SwiftUI
-import AOSComputerUseKit
 import AOSRPCSchema
 import AOSOSSenseKit
 
@@ -12,7 +11,6 @@ import AOSOSSenseKit
 struct DevModePanelView: View {
     let contextService: DevContextService
     let senseStore: SenseStore
-    let computerUseCore: ComputerUseCore
     var sessionStore: SessionStore?
 
     @State private var selected: Section = .context
@@ -20,7 +18,6 @@ struct DevModePanelView: View {
     enum Section: String, CaseIterable, Identifiable, Hashable {
         case context = "Context"
         case osSense = "OS Sense"
-        case computerUse = "Computer Use"
         var id: String { rawValue }
     }
 
@@ -37,8 +34,6 @@ struct DevModePanelView: View {
                 DevContextSectionView(service: contextService, sessionStore: sessionStore)
             case .osSense:
                 DevOSSenseSectionView(senseStore: senseStore)
-            case .computerUse:
-                DevComputerUseSectionView(core: computerUseCore)
             }
         }
         .task {
@@ -52,7 +47,6 @@ struct DevModePanelView: View {
         switch section {
         case .context: return "doc.text"
         case .osSense: return "eye"
-        case .computerUse: return "macwindow"
         }
     }
 }

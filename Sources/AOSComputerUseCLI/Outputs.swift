@@ -194,7 +194,7 @@ struct AppStateOutput: Encodable, ReadableOutput {
     let screenshot: ScreenshotOutput?
 
     init(request: AppStateRequest, state: AppStateBundle) {
-        self.pid = request.pid
+        self.pid = state.pid
         self.windowId = request.windowId
         self.mode = request.captureMode.rawValue
         self.maxImageDimension = request.maxImageDimension

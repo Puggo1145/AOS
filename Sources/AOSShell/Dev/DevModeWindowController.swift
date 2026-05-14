@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import AOSComputerUseKit
 import AOSOSSenseKit
 
 // MARK: - Notification.Name
@@ -32,19 +31,16 @@ public extension Notification.Name {
 public final class DevModeWindowController: NSObject, NSWindowDelegate {
     private let contextService: DevContextService
     private let senseStore: SenseStore
-    private let computerUseCore: ComputerUseCore
     private weak var sessionStore: SessionStore?
     private var window: NSWindow?
 
     public init(
         contextService: DevContextService,
         senseStore: SenseStore,
-        computerUseCore: ComputerUseCore,
         sessionStore: SessionStore? = nil
     ) {
         self.contextService = contextService
         self.senseStore = senseStore
-        self.computerUseCore = computerUseCore
         self.sessionStore = sessionStore
     }
 
@@ -68,7 +64,6 @@ public final class DevModeWindowController: NSObject, NSWindowDelegate {
             rootView: DevModePanelView(
                 contextService: contextService,
                 senseStore: senseStore,
-                computerUseCore: computerUseCore,
                 sessionStore: sessionStore
             )
         )

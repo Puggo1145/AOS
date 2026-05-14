@@ -101,9 +101,20 @@ function checkValue(schema: JSONSchema, value: unknown, path: string, errors: Va
             }
           }
         }
-        // pass-through unknown keys (additionalProperties default-true)
+        // pass-through unknown keys unless the schema explicitly closes the object.
         for (const k of Object.keys(obj)) {
-          if (!(k in out)) out[k] = obj[k];
+          if (schema.properties && k in schema.properties) continue;
+          const childPath = path ? `${path}.${k}` : k;
+          if (schema.additionalProperties === false) {
+            pushError(errors, childPath, "unknown field");
+            continue;
+          }
+          if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
+            const coerced = coerce(schema.additionalProperties, obj[k]);
+            out[k] = checkValue(schema.additionalProperties, coerced, childPath, errors);
+            continue;
+          }
+          out[k] = obj[k];
         }
         return out;
       }

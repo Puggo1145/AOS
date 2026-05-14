@@ -10,7 +10,6 @@ public protocol ComputerUseCoreClient: Sendable {
     func getAppType(pid: pid_t) async throws -> AppTypeResult
     func listWindows(pid: pid_t) async throws -> [WindowInfo]
     func getAppState(
-        pid: pid_t,
         windowId: CGWindowID,
         captureMode: CaptureMode,
         maxImageDimension: Int
@@ -33,7 +32,6 @@ public protocol ComputerUseCoreClient: Sendable {
     ) async throws -> WindowKeyboardEventResult
     /// Posts a semantic AX event to an element from a cached app-state snapshot.
     func postEventToAXElement(
-        pid: pid_t,
         windowId: CGWindowID,
         stateId: StateID,
         elementIndex: Int,

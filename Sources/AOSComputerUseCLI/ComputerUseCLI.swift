@@ -57,7 +57,6 @@ public enum ComputerUseCLI {
                 return try success(ListWindowsOutput(pid: pid, windows: windows), format: parsed.outputFormat)
             case .getAppState(let request):
                 let state = try await core.getAppState(
-                    pid: request.pid,
                     windowId: request.windowId,
                     captureMode: request.captureMode,
                     maxImageDimension: request.maxImageDimension
@@ -106,7 +105,6 @@ public enum ComputerUseCLI {
                 return try success(KeyboardEventPostOutput(request: request, result: result), format: parsed.outputFormat)
             case .axElementEventCommand(let request):
                 let result = try await core.postEventToAXElement(
-                    pid: request.pid,
                     windowId: request.windowId,
                     stateId: request.stateId,
                     elementIndex: request.elementIndex,

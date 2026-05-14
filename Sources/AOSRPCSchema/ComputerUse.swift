@@ -189,18 +189,15 @@ public struct ComputerUseListWindowsResult: Codable, Sendable, Equatable {
 }
 
 public struct ComputerUseGetAppStateParams: Codable, Sendable, Equatable {
-    public let pid: Int
     public let windowId: Int
     public let captureMode: ComputerUseCaptureMode
     public let maxImageDimension: Int
 
     public init(
-        pid: Int,
         windowId: Int,
         captureMode: ComputerUseCaptureMode,
         maxImageDimension: Int
     ) {
-        self.pid = pid
         self.windowId = windowId
         self.captureMode = captureMode
         self.maxImageDimension = maxImageDimension
@@ -208,6 +205,7 @@ public struct ComputerUseGetAppStateParams: Codable, Sendable, Equatable {
 }
 
 public struct ComputerUseGetAppStateResult: Codable, Sendable, Equatable {
+    public let pid: Int
     public let stateId: String
     public let treeMarkdown: String
     public let elementCount: Int
@@ -216,6 +214,7 @@ public struct ComputerUseGetAppStateResult: Codable, Sendable, Equatable {
     public let appName: String?
 
     public init(
+        pid: Int,
         stateId: String,
         treeMarkdown: String,
         elementCount: Int,
@@ -223,6 +222,7 @@ public struct ComputerUseGetAppStateResult: Codable, Sendable, Equatable {
         bundleId: String?,
         appName: String?
     ) {
+        self.pid = pid
         self.stateId = stateId
         self.treeMarkdown = treeMarkdown
         self.elementCount = elementCount
@@ -608,20 +608,17 @@ extension ComputerUseAXElementEvent: Codable {
 }
 
 public struct ComputerUsePostEventToAXElementParams: Codable, Sendable, Equatable {
-    public let pid: Int
     public let windowId: Int
     public let stateId: String
     public let elementIndex: Int
     public let event: ComputerUseAXElementEvent
 
     public init(
-        pid: Int,
         windowId: Int,
         stateId: String,
         elementIndex: Int,
         event: ComputerUseAXElementEvent
     ) {
-        self.pid = pid
         self.windowId = windowId
         self.stateId = stateId
         self.elementIndex = elementIndex

@@ -1,6 +1,7 @@
 import { test, expect } from "bun:test";
 import { ToolRegistry } from "../src/agent/tools/registry";
 import { registerComputerUseTools } from "../src/agent/tools/computer-use";
+import { validateToolArguments } from "../src/llm/utils/validation";
 import { RPCMethod } from "../src/rpc/rpc-types";
 import type { Dispatcher } from "../src/rpc/dispatcher";
 
@@ -90,6 +91,28 @@ test("computerUse namespace is available for Bun to call Shell", async () => {
   expect(RPCMethod.computerUsePostEventToAXElement).toBe("computerUse.postEventToAXElement");
 });
 
+test("get_app_state rejects stale pid arguments before RPC dispatch", () => {
+  const registry = new ToolRegistry();
+  const { dispatcher } = makeDispatcherSpy();
+  registerComputerUseTools(registry, dispatcher);
+
+  const tool = registry.get("get_app_state")!.spec;
+
+  expect(() =>
+    validateToolArguments(tool, {
+      type: "toolCall",
+      id: "tool-1",
+      name: "get_app_state",
+      arguments: {
+        pid: 1234,
+        windowId: 77,
+        captureMode: "ax",
+        maxImageDimension: 0,
+      },
+    }),
+  ).toThrow(/pid/);
+});
+
 test("event tool descriptions expose variant-specific required fields and enum values", () => {
   const registry = new ToolRegistry();
   const { dispatcher } = makeDispatcherSpy();
@@ -144,7 +167,6 @@ test("perform_AX_action rejects malformed scroll events before RPC dispatch", as
   try {
     await registry.get("perform_AX_action")!.execute(
       {
-        pid: 123,
         windowId: 77,
         stateId: "state-1",
         elementIndex: 9,
@@ -262,7 +284,6 @@ test("perform_AX_action rejects non-positive scroll pages before RPC dispatch", 
   try {
     await registry.get("perform_AX_action")!.execute(
       {
-        pid: 123,
         windowId: 77,
         stateId: "state-1",
         elementIndex: 9,

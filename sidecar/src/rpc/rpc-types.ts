@@ -314,13 +314,13 @@ export interface ComputerUseListWindowsResult {
 }
 
 export interface ComputerUseGetAppStateParams {
-  pid: number;
   windowId: number;
   captureMode: ComputerUseCaptureMode;
   maxImageDimension: number;
 }
 
 export interface ComputerUseGetAppStateResult {
+  pid: number;
   stateId: string;
   treeMarkdown: string;
   elementCount: number;
@@ -396,7 +396,6 @@ export type ComputerUseAXElementEvent =
   | { kind: "scroll"; direction: ComputerUseAXScrollDirection; pages: number };
 
 export interface ComputerUsePostEventToAXElementParams {
-  pid: number;
   windowId: number;
   stateId: string;
   elementIndex: number;

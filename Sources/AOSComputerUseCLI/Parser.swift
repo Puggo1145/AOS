@@ -63,14 +63,12 @@ struct ParsedCommand {
             try options.rejectUnused()
             command = .listWindows(pid: pid)
         case "get-app-state":
-            let pid = try options.requiredPID("--pid")
             let windowId = try options.requiredWindowID("--window-id")
             let captureMode = try options.optionalEnum("--mode", CaptureMode.self) ?? .vision
             let maxImageDimension = try options.optionalInt("--max-image-dimension") ?? 0
             let screenshotOutput = try options.optionalString("--screenshot-output")
             try options.rejectUnused()
             command = .getAppState(AppStateRequest(
-                pid: pid,
                 windowId: windowId,
                 captureMode: captureMode,
                 maxImageDimension: maxImageDimension,
@@ -155,14 +153,12 @@ struct ParsedCommand {
                 event: .hotkey(modifiers: modifiers, key: key)
             ))
         case "post-ax-event":
-            let pid = try options.requiredPID("--pid")
             let windowId = try options.requiredWindowID("--window-id")
             let stateId = try options.requiredStateID("--state-id")
             let elementIndex = try options.requiredElementIndex("--element-index")
             let event = try options.requiredAXElementEvent()
             try options.rejectUnused()
             command = .axElementEventCommand(AXElementEventCommandRequest(
-                pid: pid,
                 windowId: windowId,
                 stateId: stateId,
                 elementIndex: elementIndex,
@@ -482,7 +478,6 @@ struct ComputerUseCLIInvariantError: Error, CustomStringConvertible {
 }
 
 struct AppStateRequest: Sendable {
-    let pid: pid_t
     let windowId: CGWindowID
     let captureMode: CaptureMode
     let maxImageDimension: Int
@@ -511,7 +506,6 @@ struct KeyboardEventCommandRequest: Sendable {
 }
 
 struct AXElementEventCommandRequest: Sendable {
-    let pid: pid_t
     let windowId: CGWindowID
     let stateId: StateID
     let elementIndex: Int

@@ -35,11 +35,10 @@ enum InteractiveCLICommandCatalog {
             return ["get-app-type", "--pid", "\(pid)"]
         },
         command("get-app-state") { context in
-            let target = try await promptTarget(context)
+            let target = try await promptCurrentSessionWindow(context)
             let mode = try await select("Capture mode", options: CaptureMode.allCases, context: context)
             var arguments = [
                 "get-app-state",
-                "--pid", "\(target.pid)",
                 "--window-id", "\(target.windowId)",
                 "--mode", mode.rawValue,
             ]
@@ -203,10 +202,9 @@ enum InteractiveCLICommandCatalog {
             ["grant-permissions"]
         },
         command("post-ax-event") { context in
-            let target = try await promptTarget(context)
+            let target = try await promptCurrentSessionWindow(context)
             var arguments = [
                 "post-ax-event",
-                "--pid", "\(target.pid)",
                 "--window-id", "\(target.windowId)",
                 "--state-id", try await context.io.promptRequired("State ID: "),
                 "--element-index", try await context.io.promptRequired("Element index: "),

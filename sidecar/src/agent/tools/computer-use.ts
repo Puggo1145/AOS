@@ -69,17 +69,17 @@ export function createComputerUseTools(dispatcher: Dispatcher): ToolHandler[] {
     }),
     rpcTool({
       name: "get_app_state",
-      description: "Read a target window's AX tree and optionally a screenshot. Returns stateId for AX element actions.",
+      description:
+        "Read a target window's AX tree and optionally a screenshot in the active Computer Use app session. Returns stateId for AX element actions.",
       method: RPCMethod.computerUseGetAppState,
       parameters: {
         type: "object",
         properties: {
-          pid: { type: "integer" },
           windowId: { type: "integer" },
           captureMode: { type: "string", enum: ["vision", "ax"] },
           maxImageDimension: { type: "integer", description: "0 means no explicit dimension cap" },
         },
-        required: ["pid", "windowId", "captureMode", "maxImageDimension"],
+        required: ["windowId", "captureMode", "maxImageDimension"],
         additionalProperties: false,
       },
       dispatcher,
@@ -87,7 +87,7 @@ export function createComputerUseTools(dispatcher: Dispatcher): ToolHandler[] {
     }),
     rpcTool({
       name: "start_app_session",
-      description: "Start a Computer Use app session for coordinate mouse and keyboard events.",
+      description: "Start a Computer Use app session for app state reads and mouse, keyboard, and AX element actions.",
       method: RPCMethod.computerUseStartAppSession,
       parameters: {
         type: "object",
@@ -192,7 +192,6 @@ export function createComputerUseTools(dispatcher: Dispatcher): ToolHandler[] {
       parameters: {
         type: "object",
         properties: {
-          pid: { type: "integer" },
           windowId: { type: "integer" },
           stateId: { type: "string" },
           elementIndex: { type: "integer" },
@@ -222,7 +221,7 @@ export function createComputerUseTools(dispatcher: Dispatcher): ToolHandler[] {
             },
           },
         },
-        required: ["pid", "windowId", "stateId", "elementIndex", "event"],
+        required: ["windowId", "stateId", "elementIndex", "event"],
         additionalProperties: false,
       },
       dispatcher,

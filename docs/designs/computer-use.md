@@ -53,13 +53,13 @@ Sources/AOSComputerUseKit/
 - `listApps(mode:) -> [AppInfo]`
 - `getAppType(pid:) -> AppTypeResult`
 - `listWindows(pid:) -> [WindowInfo]`
-- `getAppState(pid:windowId:captureMode:maxImageDimension:) -> AppStateBundle`
+- `getAppState(windowId:captureMode:maxImageDimension:) -> AppStateBundle`
 - `startAppSession(pid:windowId:) -> AppSessionResult`
 - `stopAppSession() -> AppSessionResult`
 - `currentAppSession() -> AppSessionResult`
 - `postMouseEvent(windowId:event:) -> WindowMouseEventResult`
 - `postKeyboardEvent(windowId:event:) -> WindowKeyboardEventResult`
-- `postEventToAXElement(pid:windowId:stateId:elementIndex:event:) -> AXElementEventResult`
+- `postEventToAXElement(windowId:stateId:elementIndex:event:) -> AXElementEventResult`
 
 Diagnostics 不属于业务 surface，统一挂在 core 的 diagnostics namespace 下：
 
@@ -90,7 +90,8 @@ Scroll Down`，同时保留 `ID`、`Description`、`Placeholder`、`Help` 等定
 是投放路径层，当前将 AppKit route 和 web-content SkyLight route 分开。`ComputerUseCore`
 只编排 validation、app session、focus、event post、window-order guard 和 cleanup，不保留
 left-click 兼容包装。`startAppSession` 是唯一能切换 current app session 的入口；
-mouse / keyboard event post 不接收 pid，必须在 active app session 内按 windowId 投放。
+app-state read、mouse / keyboard event post 和 AX element event post 不接收 pid，
+必须在 active app session 内按 windowId 投放。
 core 只在 session 中记录 pid；每次 event post 都用 current session pid 校验传入
 windowId 的 ownership，并在需要投放前重新 focus 该 window。`stopAppSession` 现场读取
 frontmost window，按 session pid 重新枚举当前所有 layer-0 windows，并只对非 frontmost
@@ -99,10 +100,10 @@ frontmost window，按 session pid 重新枚举当前所有 layer-0 windows，�
 AppKit route 只支持 left/right click。Drag 仍是鼠标行为层的一种 event，但只由
 web-content route 承接。
 
-`postEventToAXElement` 是独立于 coordinate mouse/keyboard session 的 AX 语义投放路径，
-不进入 app session，也不复用 coordinate window-order guard。调用方必须传入同一次
-`getAppState` 返回的 `stateId` 与 `elementIndex`；core 只校验 `pid/windowId`
-ownership，并从 `StateCache` 取活体 `AXUIElement`。AX 投放层采用 CUA-style 专用
+`postEventToAXElement` 是 active app session 内的 AX 语义投放路径，不复用 coordinate
+window-order guard。调用方必须传入同一次 `getAppState` 返回的 `stateId` 与
+`elementIndex`；core 使用 current session pid 校验 window ownership，并从
+`StateCache` 取活体 `AXUIElement`。AX 投放层采用 CUA-style 专用
 focus suppression：先做 Chromium/Electron AX activation，再用临时 synthetic AX focus
 包住 `AXPerformAction` / `AXSetAttribute`，同时在 AX action 周期内监听
 `NSWorkspace.didActivateApplicationNotification`；如果目标 app 自激活，立即重新 activate
@@ -117,12 +118,12 @@ Sidecar agent 只暴露以下业务工具名，并一一映射到 `ComputerUseCo
 
 - `list_apps` -> `listApps(mode:)`
 - `list_windows` -> `listWindows(pid:)`
-- `get_app_state` -> `getAppState(pid:windowId:captureMode:maxImageDimension:)`
+- `get_app_state` -> `getAppState(windowId:captureMode:maxImageDimension:)`
 - `start_app_session` -> `startAppSession(pid:windowId:)`
 - `stop_app_session` -> `stopAppSession()`
 - `use_mouse` -> `postMouseEvent(windowId:event:)`
 - `use_keyboard` -> `postKeyboardEvent(windowId:event:)`
-- `perform_AX_action` -> `postEventToAXElement(pid:windowId:stateId:elementIndex:event:)`
+- `perform_AX_action` -> `postEventToAXElement(windowId:stateId:elementIndex:event:)`
 
 Shell owns the live `ComputerUseCore` instance and registers `computerUse.*`
 request handlers on the stdio JSON-RPC channel. `Sources/AOSRPCSchema/ComputerUse.swift`
@@ -137,9 +138,6 @@ Not exposed as agent business tools:
 - `core.diagnostics.*`
 - CLI-only diagnostics such as coordinate target, post-cursor, window-order measurement,
   and mouse-event observation.
-
-Dev Mode can still inject `ComputerUseCore` directly and use `core.diagnostics`
-for local diagnostics.
 
 ## CLI
 
@@ -210,9 +208,10 @@ windowId；session 内只记录 pid。后续 mouse / keyboard / trace / measurem
 post-cursor 命令每次都要求选择当前 windowId，并使用 current session pid 校验 window
 ownership。没有 active app session 时 event command 直接失败。`stop-app-session` 重新枚举
 session pid 下当前所有窗口，只对非 frontmost 的 session windows 执行 deactivate cleanup。
-`post-ax-event` 不使用 active app session；它要求显式传入 pid、windowId、stateId 和
-elementIndex，并投放 `--focus`、`--action`、`--set-value`、`--set-selected-text` 或
-`--scroll` 其中一种 AX semantic event。
+`get-app-state` 和 `post-ax-event` 使用 active app session；它们要求传入当前 session
+内的 windowId，并通过 session pid 校验 ownership。`post-ax-event` 还要求传入
+`stateId` 和 `elementIndex`，并投放 `--focus`、`--action`、`--set-value`、
+`--set-selected-text` 或 `--scroll` 其中一种 AX semantic event。
 `focus-window`、trace 和 window-order observe 是 CLI diagnostics command，通过
 `core.diagnostics` 调用，不进入业务协议。
 
@@ -245,7 +244,6 @@ section，随后 command palette 在自己的可清理区域重绘。该模式�
 flowchart TD
   CLI["AOSComputerUseCLI"] --> Service
   Caller["Swift caller"] --> Service["ComputerUseCore actor"]
-  DevMode["Dev Mode Computer Use diagnostics"] --> Service
   Service --> Apps["AppEnumerator"]
   Service --> Windows["WindowEnumerator"]
   Service --> Snapshot["AccessibilitySnapshot"]

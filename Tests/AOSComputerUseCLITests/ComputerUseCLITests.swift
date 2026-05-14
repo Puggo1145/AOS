@@ -142,6 +142,7 @@ struct ComputerUseCLITests {
     func getAppStateParsesModeAndEmitsReadableStateSummary() async throws {
         let fake = FakeComputerUseCore()
         await fake.setState(AppStateBundle(
+            pid: 123,
             stateId: StateID("state_123"),
             treeMarkdown: "[0] AXButton title=\"OK\"",
             elementCount: 1,
@@ -165,7 +166,6 @@ struct ComputerUseCLITests {
         let result = try await ComputerUseCLI.run(
             arguments: [
                 "get-app-state",
-                "--pid", "123",
                 "--window-id", "456",
                 "--mode", "vision",
                 "--max-image-dimension", "1024"
@@ -189,6 +189,7 @@ struct ComputerUseCLITests {
     func getAppStateVisionModeIncludesAXState() async throws {
         let fake = FakeComputerUseCore()
         await fake.setState(AppStateBundle(
+            pid: 123,
             stateId: StateID("state_vision"),
             treeMarkdown: "[0] AXButton title=\"OK\"",
             elementCount: 1,
@@ -200,7 +201,6 @@ struct ComputerUseCLITests {
         let result = try await ComputerUseCLI.run(
             arguments: [
                 "get-app-state",
-                "--pid", "123",
                 "--window-id", "456",
                 "--mode", "vision"
             ],
@@ -648,7 +648,6 @@ struct ComputerUseCLITests {
                 .confirm,
                 .confirm,
                 .confirm,
-                .confirm,
                 .quit,
             ]
         )
@@ -1018,7 +1017,6 @@ struct ComputerUseCLITests {
         let result = try await ComputerUseCLI.run(
             arguments: [
                 "post-ax-event",
-                "--pid", "123",
                 "--window-id", "456",
                 "--state-id", "state_abc",
                 "--element-index", "7",
@@ -1045,7 +1043,6 @@ struct ComputerUseCLITests {
         let result = try await ComputerUseCLI.run(
             arguments: [
                 "post-ax-event",
-                "--pid", "123",
                 "--window-id", "456",
                 "--state-id", "state_abc",
                 "--element-index", "0",
@@ -1068,7 +1065,6 @@ struct ComputerUseCLITests {
         let result = try await ComputerUseCLI.run(
             arguments: [
                 "post-ax-event",
-                "--pid", "123",
                 "--window-id", "456",
                 "--state-id", "state_abc",
                 "--element-index", "0",
@@ -2111,11 +2107,11 @@ private actor FakeComputerUseCore: ComputerUseCoreClient, ComputerUseDiagnostics
     }
 
     func getAppState(
-        pid: pid_t,
         windowId: CGWindowID,
         captureMode: CaptureMode,
         maxImageDimension: Int
     ) async throws -> AppStateBundle {
+        let pid = try await currentAppSession().pid
         requestedStatePID = pid
         requestedStateWindowID = windowId
         requestedCaptureMode = captureMode
@@ -2208,12 +2204,12 @@ private actor FakeComputerUseCore: ComputerUseCoreClient, ComputerUseDiagnostics
     }
 
     func postEventToAXElement(
-        pid: pid_t,
         windowId: CGWindowID,
         stateId: StateID,
         elementIndex: Int,
         event: AXElementEvent
     ) async throws -> AXElementEventResult {
+        let pid = try await currentAppSession().pid
         requestedAXEventPID = pid
         requestedAXEventWindowID = windowId
         requestedAXEventStateID = stateId

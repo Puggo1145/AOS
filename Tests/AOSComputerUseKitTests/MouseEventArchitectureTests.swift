@@ -79,13 +79,13 @@ struct MouseEventArchitectureTests {
             "`listApps(mode:) -> [AppInfo]`",
             "`getAppType(pid:) -> AppTypeResult`",
             "`listWindows(pid:) -> [WindowInfo]`",
-            "`getAppState(pid:windowId:captureMode:maxImageDimension:) -> AppStateBundle`",
+            "`getAppState(windowId:captureMode:maxImageDimension:) -> AppStateBundle`",
             "`startAppSession(pid:windowId:) -> AppSessionResult`",
             "`stopAppSession() -> AppSessionResult`",
             "`currentAppSession() -> AppSessionResult`",
             "`postMouseEvent(windowId:event:) -> WindowMouseEventResult`",
             "`postKeyboardEvent(windowId:event:) -> WindowKeyboardEventResult`",
-            "`postEventToAXElement(pid:windowId:stateId:elementIndex:event:) -> AXElementEventResult`",
+            "`postEventToAXElement(windowId:stateId:elementIndex:event:) -> AXElementEventResult`",
         ]
 
         for entry in expectedEntries {
@@ -94,6 +94,22 @@ struct MouseEventArchitectureTests {
         #expect(doc.contains("`core.diagnostics.focusWindowWithoutRaise(pid:windowId:) -> WindowFocusResult`"))
         #expect(doc.contains("`core.diagnostics.postMouseEventTrace(windowId:event:) -> WindowMouseEventTraceResult`"))
         #expect(doc.contains("`core.diagnostics.observeWindowOrder(pid:windowId:durationMilliseconds:intervalMilliseconds:) -> [WindowOrderObservationSample]`"))
+    }
+
+    @Test("session scoped action RPC params do not accept explicit pid")
+    func sessionScopedActionRPCParamsDoNotAcceptExplicitPID() throws {
+        let schema = try Self.source("Sources/AOSRPCSchema/ComputerUse.swift")
+
+        #expect(Self.structBody("ComputerUseGetAppStateParams", in: schema)?.contains("public let pid:") == false)
+        #expect(Self.structBody("ComputerUsePostEventToAXElementParams", in: schema)?.contains("public let pid:") == false)
+    }
+
+    @Test("core exposes only session scoped getAppState without inspect variants")
+    func coreExposesOnlySessionScopedGetAppStateWithoutInspectVariants() throws {
+        let core = try Self.source("Sources/AOSComputerUseKit/ComputerUseCore.swift")
+
+        #expect(!core.contains("inspectAppState"))
+        #expect(core.contains("public func getAppState("))
     }
 
     private static func publicTypeDeclarations(file: String = #filePath) throws -> Set<String> {
@@ -132,5 +148,32 @@ struct MouseEventArchitectureTests {
             .deletingLastPathComponent()
             .appendingPathComponent(path)
         return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    private static func structBody(_ name: String, in source: String) -> String? {
+        guard let declaration = source.range(of: "public struct \(name)") else {
+            return nil
+        }
+        guard let openBrace = source[declaration.lowerBound...].firstIndex(of: "{") else {
+            return nil
+        }
+
+        var depth = 0
+        var cursor = openBrace
+        while cursor < source.endIndex {
+            switch source[cursor] {
+            case "{":
+                depth += 1
+            case "}":
+                depth -= 1
+                if depth == 0 {
+                    return String(source[openBrace...cursor])
+                }
+            default:
+                break
+            }
+            cursor = source.index(after: cursor)
+        }
+        return nil
     }
 }

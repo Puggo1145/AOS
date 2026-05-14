@@ -14,7 +14,6 @@ protocol ShellComputerUseClient: Sendable {
     func listApps(mode: AppListMode) async throws -> [AppInfo]
     func listWindows(pid: pid_t) async throws -> [WindowInfo]
     func getAppState(
-        pid: pid_t,
         windowId: CGWindowID,
         captureMode: CaptureMode,
         maxImageDimension: Int
@@ -24,7 +23,6 @@ protocol ShellComputerUseClient: Sendable {
     func postMouseEvent(windowId: CGWindowID, event: BackgroundMouseEvent) async throws -> WindowMouseEventResult
     func postKeyboardEvent(windowId: CGWindowID, event: BackgroundKeyboardEvent) async throws -> WindowKeyboardEventResult
     func postEventToAXElement(
-        pid: pid_t,
         windowId: CGWindowID,
         stateId: StateID,
         elementIndex: Int,
@@ -44,13 +42,11 @@ struct LiveShellComputerUseClient: ShellComputerUseClient {
     }
 
     func getAppState(
-        pid: pid_t,
         windowId: CGWindowID,
         captureMode: CaptureMode,
         maxImageDimension: Int
     ) async throws -> AppStateBundle {
         try await core.getAppState(
-            pid: pid,
             windowId: windowId,
             captureMode: captureMode,
             maxImageDimension: maxImageDimension
@@ -74,14 +70,12 @@ struct LiveShellComputerUseClient: ShellComputerUseClient {
     }
 
     func postEventToAXElement(
-        pid: pid_t,
         windowId: CGWindowID,
         stateId: StateID,
         elementIndex: Int,
         event: AXElementEvent
     ) async throws -> AXElementEventResult {
         try await core.postEventToAXElement(
-            pid: pid,
             windowId: windowId,
             stateId: stateId,
             elementIndex: elementIndex,
@@ -180,7 +174,6 @@ final class ComputerUseRPCService: Sendable {
 
     func handleGetAppState(_ params: ComputerUseGetAppStateParams) async throws -> ComputerUseGetAppStateResult {
         let state = try await core.getAppState(
-            pid: try pid(params.pid, name: "pid"),
             windowId: try windowId(params.windowId),
             captureMode: CaptureMode(params.captureMode),
             maxImageDimension: params.maxImageDimension
@@ -223,7 +216,6 @@ final class ComputerUseRPCService: Sendable {
         _ params: ComputerUsePostEventToAXElementParams
     ) async throws -> ComputerUsePostEventToAXElementResult {
         let result = try await core.postEventToAXElement(
-            pid: try pid(params.pid, name: "pid"),
             windowId: try windowId(params.windowId),
             stateId: StateID(params.stateId),
             elementIndex: params.elementIndex,
@@ -342,6 +334,7 @@ private extension ComputerUseScreenshot {
 private extension ComputerUseGetAppStateResult {
     init(_ state: AppStateBundle) {
         self.init(
+            pid: Int(state.pid),
             stateId: state.stateId.raw,
             treeMarkdown: state.treeMarkdown,
             elementCount: state.elementCount,

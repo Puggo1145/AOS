@@ -11,6 +11,7 @@ import Foundation
 // mouse-event dispatch, and snapshot cache ownership.
 
 public struct AppStateBundle: Sendable {
+    public let pid: pid_t
     public let stateId: StateID
     public let treeMarkdown: String
     public let elementCount: Int
@@ -19,6 +20,7 @@ public struct AppStateBundle: Sendable {
     public let appName: String?
 
     public init(
+        pid: pid_t,
         stateId: StateID,
         treeMarkdown: String,
         elementCount: Int,
@@ -26,6 +28,7 @@ public struct AppStateBundle: Sendable {
         bundleId: String?,
         appName: String?
     ) {
+        self.pid = pid
         self.stateId = stateId
         self.treeMarkdown = treeMarkdown
         self.elementCount = elementCount
@@ -504,11 +507,12 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
     }
 
     public func getAppState(
-        pid: pid_t,
         windowId: CGWindowID,
         captureMode: CaptureMode = .vision,
         maxImageDimension: Int = 0
     ) async throws -> AppStateBundle {
+        let session = try requireActiveAppSession()
+        let pid = session.pid
         try validateOwnership(pid: pid, windowId: windowId)
 
         let app = NSRunningApplication(processIdentifier: pid)
@@ -535,6 +539,7 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
         }
 
         return AppStateBundle(
+            pid: pid,
             stateId: stateId,
             treeMarkdown: result.treeMarkdown,
             elementCount: result.elements.count,
@@ -617,12 +622,13 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
 
     /// Posts a semantic AX event to an element from a prior app-state snapshot.
     public func postEventToAXElement(
-        pid: pid_t,
         windowId: CGWindowID,
         stateId: StateID,
         elementIndex: Int,
         event: AXElementEvent
     ) async throws -> AXElementEventResult {
+        let session = try requireActiveAppSession()
+        let pid = session.pid
         try validateOwnership(pid: pid, windowId: windowId)
         try validateAXElementEvent(event)
         let element = try await cache.lookup(

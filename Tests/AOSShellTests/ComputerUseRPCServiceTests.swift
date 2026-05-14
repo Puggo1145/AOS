@@ -58,7 +58,6 @@ struct ComputerUseRPCServiceTests {
 
         _ = try await service.handlePostEventToAXElement(
             ComputerUsePostEventToAXElementParams(
-                pid: 123,
                 windowId: 77,
                 stateId: "state-1",
                 elementIndex: 9,
@@ -66,7 +65,7 @@ struct ComputerUseRPCServiceTests {
             )
         )
 
-        #expect(await core.calls == ["postEventToAXElement:123:77:state-1:9:action(press)"])
+        #expect(await core.calls == ["postEventToAXElement:77:state-1:9:action(press)"])
     }
 }
 
@@ -89,13 +88,13 @@ private actor FakeShellComputerUseClient: ShellComputerUseClient {
     }
 
     func getAppState(
-        pid: pid_t,
         windowId: CGWindowID,
         captureMode: CaptureMode,
         maxImageDimension: Int
     ) async throws -> AppStateBundle {
-        calls.append("getAppState:\(pid):\(windowId):\(captureMode.rawValue):\(maxImageDimension)")
+        calls.append("getAppState:\(windowId):\(captureMode.rawValue):\(maxImageDimension)")
         return AppStateBundle(
+            pid: 123,
             stateId: StateID("state"),
             treeMarkdown: "",
             elementCount: 0,
@@ -132,15 +131,14 @@ private actor FakeShellComputerUseClient: ShellComputerUseClient {
     }
 
     func postEventToAXElement(
-        pid: pid_t,
         windowId: CGWindowID,
         stateId: StateID,
         elementIndex: Int,
         event: AXElementEvent
     ) async throws -> AXElementEventResult {
-        calls.append("postEventToAXElement:\(pid):\(windowId):\(stateId.raw):\(elementIndex):\(Self.describe(event))")
+        calls.append("postEventToAXElement:\(windowId):\(stateId.raw):\(elementIndex):\(Self.describe(event))")
         return AXElementEventResult(
-            pid: pid,
+            pid: 123,
             windowId: windowId,
             stateId: stateId,
             elementIndex: elementIndex,
