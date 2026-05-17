@@ -76,6 +76,14 @@ public final class SessionStore {
         return mirrors[id]
     }
 
+    /// `+` should only mint a session when the current active conversation
+    /// already contains user-visible work. An empty active mirror is already
+    /// the blank conversation the user is asking for.
+    public var canCreateNewConversation: Bool {
+        guard let activeMirror else { return true }
+        return !activeMirror.turns.isEmpty || activeMirror.lastErrorMessage?.isEmpty == false
+    }
+
     /// Apply a `session.activate` response atomically: merge the snapshot
     /// into the target mirror and flip `activeId` in the same statement.
     /// Called by `SessionService.activate` once the response arrives.

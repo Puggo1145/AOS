@@ -54,13 +54,15 @@ struct NotchHeaderStripsView: View {
 
     private var newConversationButton: some View {
         Button {
+            let store = viewModel.agentService.sessionStore
+            guard store.canCreateNewConversation else { return }
             // SessionService.create auto-activates via SessionStore.adoptCreated
             // so the mirror + activeId flip atomically before SwiftUI reads them.
             Task {
                 do {
                     _ = try await viewModel.sessionService.create()
                 } catch {
-                    viewModel.agentService.sessionStore.setActionError(
+                    store.setActionError(
                         SessionActionError(
                             kind: .create,
                             message: "Failed to start a new conversation: \(error.localizedDescription)",
@@ -73,6 +75,7 @@ struct NotchHeaderStripsView: View {
             headerIcon("plus")
         }
         .buttonStyle(.notchPressable)
+        .disabled(!viewModel.agentService.sessionStore.canCreateNewConversation)
         .accessibilityLabel(Text("New conversation"))
     }
 

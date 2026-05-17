@@ -271,4 +271,30 @@ struct SessionStoreTests {
         #expect(store.list.first?.title == "A renamed")
         #expect(store.list.first?.turnCount == 1)
     }
+
+    @Test("new conversation is disabled while active session is already empty")
+    func newConversationDisabledForEmptyActiveSession() {
+        let (store, agent) = makeStore()
+        store.adoptCreated(SessionListItem(
+            id: "A", title: "A", createdAt: 0, turnCount: 0, lastActivityAt: 0
+        ))
+        #expect(store.canCreateNewConversation == false)
+
+        agent.handleTurnStarted(turnStarted("Ta", sessionId: "A", prompt: "hi"))
+        #expect(store.canCreateNewConversation == true)
+
+        store.applyActivate(sessionId: "B", snapshot: [])
+        #expect(store.canCreateNewConversation == false)
+    }
+
+    @Test("new conversation is enabled for visible submit error without turns")
+    func newConversationEnabledForSubmitErrorWithoutTurns() {
+        let (store, _) = makeStore()
+        store.adoptCreated(SessionListItem(
+            id: "A", title: "A", createdAt: 0, turnCount: 0, lastActivityAt: 0
+        ))
+        store.activeMirror?.setSubmitError("Send failed before turn registration.")
+        #expect(store.activeMirror?.turns.isEmpty == true)
+        #expect(store.canCreateNewConversation == true)
+    }
 }
