@@ -36,22 +36,25 @@ test("read returns the file contents", async () => {
   await Bun.write(path, "hello\nworld");
   const r = await createReadTool().execute({ path }, ctx());
   expect(r.isError).toBe(false);
-  expect(textOf(r)).toBe("hello\nworld");
+  expect(textOf(r)).toBe("1 | hello\n2 | world");
   expect(r.details?.returnedLines).toBe(2);
   expect(r.details?.truncated).toBe(false);
 });
 
-test("read with limit head-truncates and appends a marker", async () => {
+test("read defaults to 500 lines from start and appends remaining-line marker", async () => {
   const dir = tempDir();
   const path = join(dir, "lines.txt");
-  await Bun.write(path, "a\nb\nc\nd\ne");
-  const r = await createReadTool().execute({ path, limit: 2 }, ctx());
+  const content = Array.from({ length: 503 }, (_, i) => `line-${i + 1}`).join("\n");
+  await Bun.write(path, content);
+  const r = await createReadTool().execute({ path }, ctx());
   expect(r.isError).toBe(false);
   const t = textOf(r);
-  expect(t.startsWith("a\nb")).toBe(true);
-  expect(t).toContain("[truncated:");
+  expect(t.startsWith("1 | line-1\n2 | line-2")).toBe(true);
+  expect(t).toContain("500 | line-500");
+  expect(t).not.toContain("501 | line-501");
+  expect(t.endsWith("[还有 3 more lines]")).toBe(true);
   expect(r.details?.truncated).toBe(true);
-  expect(r.details?.returnedLines).toBe(2);
+  expect(r.details?.returnedLines).toBe(500);
 });
 
 test("read on a missing file throws ToolUserError (recoverable)", async () => {
@@ -61,13 +64,70 @@ test("read on a missing file throws ToolUserError (recoverable)", async () => {
   ).rejects.toBeInstanceOf(ToolUserError);
 });
 
-test("read rejects a non-positive limit", async () => {
+test("read returns an inclusive start/end range and reports lines after end", async () => {
+  const dir = tempDir();
+  const path = join(dir, "range.txt");
+  await Bun.write(path, "a\nb\nc\nd\ne\nf");
+  const r = await createReadTool().execute({ path, start: 3, end: 4 }, ctx());
+  expect(r.isError).toBe(false);
+  expect(textOf(r)).toBe("3 | c\n4 | d\n[还有 2 more lines]");
+  expect(r.details?.returnedLines).toBe(2);
+  expect(r.details?.truncated).toBe(true);
+});
+
+test("read with start and no end returns 500 lines from start", async () => {
+  const dir = tempDir();
+  const path = join(dir, "start.txt");
+  const content = Array.from({ length: 1002 }, (_, i) => `line-${i + 1}`).join("\n");
+  await Bun.write(path, content);
+  const r = await createReadTool().execute({ path, start: 501 }, ctx());
+  expect(r.isError).toBe(false);
+  const t = textOf(r);
+  expect(t.startsWith("501 | line-501\n502 | line-502")).toBe(true);
+  expect(t).toContain("1000 | line-1000");
+  expect(t).not.toContain("1001 | line-1001");
+  expect(t.endsWith("[还有 2 more lines]")).toBe(true);
+  expect(r.details?.returnedLines).toBe(500);
+});
+
+test("read omits remaining-line marker when range reaches EOF", async () => {
+  const dir = tempDir();
+  const path = join(dir, "whole.txt");
+  await Bun.write(path, "a\nb\nc");
+  const r = await createReadTool().execute({ path, start: 2, end: 3 }, ctx());
+  expect(r.isError).toBe(false);
+  expect(textOf(r)).toBe("2 | b\n3 | c");
+  expect(r.details?.truncated).toBe(false);
+});
+
+test("read reports when start is beyond EOF", async () => {
+  const dir = tempDir();
+  const path = join(dir, "short.txt");
+  await Bun.write(path, "a\nb\nc");
+  const r = await createReadTool().execute({ path, start: 10 }, ctx());
+  expect(r.isError).toBe(false);
+  expect(textOf(r)).toBe("(requested range starts after EOF; file has 3 lines)");
+  expect(r.details?.returnedLines).toBe(0);
+  expect(r.details?.truncated).toBe(false);
+  expect(r.details?.remainingLines).toBe(0);
+});
+
+test("read rejects an invalid range", async () => {
   const dir = tempDir();
   const path = join(dir, "x.txt");
   await Bun.write(path, "x");
   await expect(
-    createReadTool().execute({ path, limit: 0 }, ctx()),
-  ).rejects.toThrow(/invalid limit/);
+    createReadTool().execute({ path, start: 2, end: 1 }, ctx()),
+  ).rejects.toThrow(/invalid range/);
+});
+
+test("read rejects explicit ranges larger than 500 lines", async () => {
+  const dir = tempDir();
+  const path = join(dir, "x.txt");
+  await Bun.write(path, "x");
+  await expect(
+    createReadTool().execute({ path, start: 1, end: 501 }, ctx()),
+  ).rejects.toThrow(/range too large/);
 });
 
 test("read expands a leading ~ to the user's home directory", async () => {
@@ -77,44 +137,6 @@ test("read expands a leading ~ to the user's home directory", async () => {
   await expect(
     createReadTool().execute({ path: "~/__aos_does_not_exist__" }, ctx()),
   ).rejects.toThrow(new RegExp(home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-});
-
-test("read caps oversized files at the byte budget and reports truncated", async () => {
-  // Make the file comfortably larger than the 50 KB cap so we exercise the
-  // bounded-IO path. The output must end with a truncation marker and
-  // bytesRead must equal the cap, not the file size.
-  const dir = tempDir();
-  const path = join(dir, "big.txt");
-  const big = "x".repeat(120_000);
-  await Bun.write(path, big);
-  const r = await createReadTool().execute({ path }, ctx());
-  expect(r.isError).toBe(false);
-  expect(r.details?.truncated).toBe(true);
-  expect(r.details?.bytesRead).toBe(50_000);
-  const t = textOf(r);
-  expect(t).toContain("[truncated: file is 120000 bytes");
-});
-
-test("read produces valid UTF-8 when truncating mid multi-byte char", async () => {
-  // Build a payload where the byte cap lands in the middle of a 3-byte CJK
-  // sequence (U+4E2D `中` = E4 B8 AD). Filler is exactly 49,999 bytes so the
-  // cap at 50,000 falls one byte into the multi-byte char. The decoder must
-  // drop the partial sequence rather than emit U+FFFD.
-  const dir = tempDir();
-  const path = join(dir, "utf8.txt");
-  const filler = "a".repeat(49_999);
-  const payload = filler + "中" + "尾巴".repeat(1000);
-  await Bun.write(path, payload);
-  const r = await createReadTool().execute({ path }, ctx());
-  expect(r.isError).toBe(false);
-  const t = textOf(r);
-  // Body part before the truncation marker must contain no replacement char.
-  const bodyEnd = t.indexOf("\n[truncated:");
-  const body = bodyEnd === -1 ? t : t.slice(0, bodyEnd);
-  expect(body).not.toContain("�");
-  expect(body.startsWith(filler)).toBe(true);
-  // The partial `中` byte must have been dropped, not appended as garbage.
-  expect(body.length).toBe(filler.length);
 });
 
 // --- write ---
