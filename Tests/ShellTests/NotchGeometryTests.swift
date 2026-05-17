@@ -180,6 +180,100 @@ struct NotchGeometryTests {
         #expect(r2.height - r1.height == 80)
     }
 
+    @Test("local notch-window clicks do not close when measured panel height is stale")
+    func localNotchWindowClickDoesNotCloseWithStaleHeight() {
+        let staleMeasuredRect = NotchViewModel.makeOpenedTotalRect(
+            screenRect: screenRect,
+            totalSize: CGSize(width: 500, height: 120)
+        )
+        let clickedSettingsRow = NSPoint(x: screenRect.midX, y: screenRect.maxY - 260)
+
+        #expect(NotchViewModel.shouldCloseOpenedClick(
+            point: clickedSettingsRow,
+            isLocalNotchWindowEvent: true,
+            openedTotalRect: staleMeasuredRect,
+            deviceNotchRect: deviceNotchRect
+        ) == false)
+    }
+
+    @Test("opened click-through gate uses max overlay budget while measured height is stale")
+    func openedClickThroughGateUsesMaxOverlayBudgetWhileMeasuredHeightIsStale() {
+        let staleMeasuredRect = NotchViewModel.makeOpenedTotalRect(
+            screenRect: screenRect,
+            totalSize: CGSize(width: 500, height: 120)
+        )
+        let staleVisible = NotchViewModel.makeOpenedVisibleRect(openedTotalRect: staleMeasuredRect)
+        let mouseActive = NotchViewModel.makeOpenedMouseActiveRect(
+            visibleRect: staleVisible,
+            screenRect: screenRect,
+            width: 500,
+            maxHeight: 480 + 240,
+            measurementPending: true
+        )
+        let clickedSettingsRow = NSPoint(x: screenRect.midX, y: screenRect.maxY - 260)
+
+        #expect(staleVisible.contains(clickedSettingsRow) == false)
+        #expect(NotchWindowController.shouldIgnoreMouseEvents(
+            mouse: clickedSettingsRow,
+            mouseActiveRect: mouseActive
+        ) == false)
+    }
+
+    @Test("opened click-through gate ignores blank space after measurement lands")
+    func openedClickThroughGateIgnoresBlankSpaceAfterMeasurementLands() {
+        let visible = NotchViewModel.makeOpenedVisibleRect(openedTotalRect:
+            NotchViewModel.makeOpenedTotalRect(
+                screenRect: screenRect,
+                totalSize: CGSize(width: 500, height: 120)
+            )
+        )
+        let mouseActive = NotchViewModel.makeOpenedMouseActiveRect(
+            visibleRect: visible,
+            screenRect: screenRect,
+            width: 500,
+            maxHeight: 480 + 240,
+            measurementPending: false
+        )
+        let blankBelowActualUI = NSPoint(x: screenRect.midX, y: screenRect.maxY - 260)
+
+        #expect(visible.contains(blankBelowActualUI) == false)
+        #expect(NotchWindowController.shouldIgnoreMouseEvents(
+            mouse: blankBelowActualUI,
+            mouseActiveRect: mouseActive
+        ))
+    }
+
+    @Test("global outside clicks still close the opened notch")
+    func globalOutsideClickClosesOpenedNotch() {
+        let rect = NotchViewModel.makeOpenedTotalRect(
+            screenRect: screenRect,
+            totalSize: CGSize(width: 500, height: 240)
+        )
+        let outside = NSPoint(x: screenRect.midX, y: rect.minY - 1)
+
+        #expect(NotchViewModel.shouldCloseOpenedClick(
+            point: outside,
+            isLocalNotchWindowEvent: false,
+            openedTotalRect: rect,
+            deviceNotchRect: deviceNotchRect
+        ))
+    }
+
+    @Test("local physical-notch re-click closes the opened notch")
+    func localPhysicalNotchClickClosesOpenedNotch() {
+        let rect = NotchViewModel.makeOpenedTotalRect(
+            screenRect: screenRect,
+            totalSize: CGSize(width: 500, height: 240)
+        )
+
+        #expect(NotchViewModel.shouldCloseOpenedClick(
+            point: NSPoint(x: deviceNotchRect.midX, y: deviceNotchRect.midY),
+            isLocalNotchWindowEvent: true,
+            openedTotalRect: rect,
+            deviceNotchRect: deviceNotchRect
+        ))
+    }
+
     // MARK: - Visible hit rects
 
     @Test("opened visible rect extends 18pt past the logical rect on each side")

@@ -384,9 +384,7 @@ private struct SettingsMeasurement: ViewModifier {
                 // animate. Real content changes (row added, picker page
                 // pushed) are always >> 1pt and still flow through.
                 let rounded = h.rounded()
-                if viewModel.settingsContentHeight != rounded {
-                    viewModel.settingsContentHeight = rounded
-                }
+                viewModel.markSettingsMeasured(height: rounded)
             }
     }
 }
@@ -421,9 +419,7 @@ private struct HistoryMeasurement: ViewModifier {
             )
             .onPreferenceChange(HistoryPanelHeightKey.self) { h in
                 let rounded = h.rounded()
-                if viewModel.historyPanelContentHeight != rounded {
-                    viewModel.historyPanelContentHeight = rounded
-                }
+                viewModel.markHistoryMeasured(height: rounded)
             }
     }
 }

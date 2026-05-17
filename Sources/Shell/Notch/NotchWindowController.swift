@@ -13,7 +13,7 @@ import OSSenseKit
 //
 // Region-based click-through is implemented at the window level: a global
 // mouse-location stream toggles `window.ignoresMouseEvents` based on whether
-// the cursor is over `viewModel.visibleHotRect`. This is the only reliable
+// the cursor is over `viewModel.mouseActiveRect`. This is the only reliable
 // way on macOS — `NSHostingView` returns self from `hitTest` for any point
 // in its bounds (even where SwiftUI has no view), so neither view-level
 // `hitTest` overrides nor "make the SwiftUI tree small" tricks can produce
@@ -135,10 +135,20 @@ public final class NotchWindowController {
             }
             return
         }
-        let shouldIgnore = !viewModel.visibleHotRect.contains(mouse)
+        let shouldIgnore = Self.shouldIgnoreMouseEvents(
+            mouse: mouse,
+            mouseActiveRect: viewModel.mouseActiveRect
+        )
         if window.ignoresMouseEvents != shouldIgnore {
             window.ignoresMouseEvents = shouldIgnore
         }
+    }
+
+    nonisolated static func shouldIgnoreMouseEvents(
+        mouse: NSPoint,
+        mouseActiveRect: CGRect
+    ) -> Bool {
+        !mouseActiveRect.contains(mouse)
     }
 
     /// Tear down per notch-dev-guide §3.4: cancel subscriptions, drop view

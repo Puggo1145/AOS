@@ -33,7 +33,7 @@ extension NotchViewModel {
 
         events.mouseDown
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
+            .sink { [weak self] event in
                 guard let self else { return }
                 let p = NSEvent.mouseLocation
                 let hot = self.closedHotRect
@@ -51,7 +51,12 @@ extension NotchViewModel {
                     // for the re-click check because the top band of the
                     // opened panel hosts the header-strip buttons (gear,
                     // new conversation) right next to the cutout.
-                    if !self.notchOpenedTotalRect.contains(p) || self.deviceNotchRect.contains(p) {
+                    if Self.shouldCloseOpenedClick(
+                        point: p,
+                        isLocalNotchWindowEvent: event?.window is NotchWindow,
+                        openedTotalRect: self.notchOpenedTotalRect,
+                        deviceNotchRect: self.deviceNotchRect
+                    ) {
                         self.notchClose()
                     }
                 case .closed, .popping:
@@ -113,6 +118,18 @@ extension Notification.Name {
 
 @MainActor
 extension NotchViewModel {
+    nonisolated static func shouldCloseOpenedClick(
+        point: NSPoint,
+        isLocalNotchWindowEvent: Bool,
+        openedTotalRect: CGRect,
+        deviceNotchRect: CGRect
+    ) -> Bool {
+        if isLocalNotchWindowEvent {
+            return deviceNotchRect.contains(point)
+        }
+        return !openedTotalRect.contains(point) || deviceNotchRect.contains(point)
+    }
+
     func broadcastStatus() {
         NotificationCenter.default.post(name: .notchStatusChanged, object: status)
     }

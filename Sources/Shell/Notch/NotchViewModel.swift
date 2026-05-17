@@ -50,7 +50,13 @@ public final class NotchViewModel {
     public var inputFocused: Bool = false
     /// Settings panel overlay. Reachable from the gear button in
     /// OpenedPanelView; reset to false on close.
-    public var showSettings: Bool = false
+    public var showSettings: Bool = false {
+        didSet {
+            if showSettings, !oldValue {
+                settingsMeasurementPending = true
+            }
+        }
+    }
 
     // MARK: - Constants
 
@@ -76,12 +82,14 @@ public final class NotchViewModel {
     /// `notchOpenedSize` clamps it into [compactMin, max]. Adding/removing
     /// rows in Settings no longer needs a hand-tuned constant.
     public var settingsContentHeight: CGFloat = 0
+    private var settingsMeasurementPending: Bool = false
 
     /// Measured natural height of SessionHistoryPanelView. Same content-driven
     /// pattern as Settings: PreferenceKey reports the intrinsic height,
     /// `notchOpenedSize` clamps it into [compactMin, max]; the inner
     /// ScrollView takes over once the list exceeds the ceiling.
     public var historyPanelContentHeight: CGFloat = 0
+    private var historyMeasurementPending: Bool = false
 
     /// Vertical chrome around the dynamic content inside OpenedPanelView:
     /// top safe inset + spacing(8) between history and composer + bottom
@@ -320,7 +328,13 @@ public final class NotchViewModel {
     public let visualCapturePolicyStore: VisualCapturePolicyStore
 
     /// History popup visibility — driven by the header history button.
-    public var showHistory: Bool = false
+    public var showHistory: Bool = false {
+        didSet {
+            if showHistory, !oldValue {
+                historyMeasurementPending = true
+            }
+        }
+    }
 
     /// Composer input state. Owned here (not by `ComposerCard`) so the
     /// rich text + chips survive notch close/reopen cycles — the panel
@@ -400,24 +414,58 @@ public final class NotchViewModel {
     }
 
     /// Screen-space rect of the currently-visible notch silhouette. Drives
-    /// `NSWindow.ignoresMouseEvents` in `NotchWindowController` so clicks
-    /// outside this rect pass through to the underlying app at the OS level
-    /// — `NSHostingView`'s hit-testing returns self for any point in its
-    /// bounds even where no SwiftUI view paints, so view-level filtering
-    /// (NotchDrop-style or `hitTest`-override style) cannot achieve real
-    /// click-through on macOS.
+    /// paint-aligned hit math such as hover affordances. Mouse click-through
+    /// uses `mouseActiveRect`; opened-state content height can lag SwiftUI
+    /// measurement by a frame, and using this rect for OS-level click-through
+    /// can drop legitimate clicks before SwiftUI receives them.
     public var visibleHotRect: CGRect {
         // `NotchShape` renders the silhouette `2 * shoulderRadius` wider than
         // the logical panel/bar rect (the shoulders extend horizontally past
         // `mainMinX/mainMaxX`). The hit rect must match the rendered bounding
         // box, otherwise clicks landing on the visible shoulder pixels fall
-        // outside `ignoresMouseEvents` and pass through to the app below.
+        // outside the paint-aligned interaction affordance.
         // Keep these in sync with `NotchShape.shoulderRadius`.
         switch status {
         case .opened:
             return NotchGeometryModel.makeOpenedVisibleRect(openedTotalRect: notchOpenedTotalRect)
         case .closed, .popping:
             return NotchGeometryModel.makeClosedVisibleRect(closedBarRect: closedBarRect)
+        }
+    }
+
+    /// Screen-space rect that keeps the overlay mouse-active. In opened
+    /// state this deliberately uses the maximum panel+tray budget instead
+    /// of the currently measured silhouette height: settings and history
+    /// pages report height asynchronously, and a stale smaller measurement
+    /// must not flip `ignoresMouseEvents` before an in-panel click arrives.
+    public var mouseActiveRect: CGRect {
+        switch status {
+        case .opened:
+            let measurementPending = (showSettings && settingsMeasurementPending)
+                || (showHistory && historyMeasurementPending)
+            return NotchGeometryModel.makeOpenedMouseActiveRect(
+                visibleRect: visibleHotRect,
+                screenRect: screenRect,
+                width: notchOpenedWidth,
+                maxHeight: notchOpenedMaxHeight + notchTrayMaxHeight,
+                measurementPending: measurementPending
+            )
+        case .closed, .popping:
+            return visibleHotRect
+        }
+    }
+
+    func markSettingsMeasured(height: CGFloat) {
+        settingsContentHeight = height
+        if height > 0 {
+            settingsMeasurementPending = false
+        }
+    }
+
+    func markHistoryMeasured(height: CGFloat) {
+        historyPanelContentHeight = height
+        if height > 0 {
+            historyMeasurementPending = false
         }
     }
 
@@ -486,6 +534,22 @@ public final class NotchViewModel {
 
     public nonisolated static func makeOpenedVisibleRect(openedTotalRect: CGRect) -> CGRect {
         NotchGeometryModel.makeOpenedVisibleRect(openedTotalRect: openedTotalRect)
+    }
+
+    public nonisolated static func makeOpenedMouseActiveRect(
+        visibleRect: CGRect,
+        screenRect: CGRect,
+        width: CGFloat,
+        maxHeight: CGFloat,
+        measurementPending: Bool
+    ) -> CGRect {
+        NotchGeometryModel.makeOpenedMouseActiveRect(
+            visibleRect: visibleRect,
+            screenRect: screenRect,
+            width: width,
+            maxHeight: maxHeight,
+            measurementPending: measurementPending
+        )
     }
 
     public nonisolated static func makeClosedVisibleRect(closedBarRect: CGRect) -> CGRect {

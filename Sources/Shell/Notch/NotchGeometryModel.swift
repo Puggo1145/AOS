@@ -77,6 +77,21 @@ public enum NotchGeometryModel {
         openedTotalRect.insetBy(dx: -openedShoulderRadius, dy: 0)
     }
 
+    public static func makeOpenedMouseActiveRect(
+        visibleRect: CGRect,
+        screenRect: CGRect,
+        width: CGFloat,
+        maxHeight: CGFloat,
+        measurementPending: Bool
+    ) -> CGRect {
+        guard measurementPending else { return visibleRect }
+        let maxRect = makeOpenedTotalRect(
+            screenRect: screenRect,
+            totalSize: CGSize(width: width, height: maxHeight)
+        )
+        return makeOpenedVisibleRect(openedTotalRect: maxRect)
+    }
+
     public static func makeClosedVisibleRect(closedBarRect: CGRect) -> CGRect {
         closedBarRect.insetBy(dx: -closedShoulderRadius, dy: 0)
     }

@@ -22,10 +22,10 @@ public final class EventMonitors {
     /// current location at start).
     public let mouseLocation = CurrentValueSubject<NSPoint, Never>(.zero)
 
-    /// Fires once per left-mouse-down. We deliberately do not surface the
-    /// event itself — consumers re-read `NSEvent.mouseLocation` so that a
-    /// stale captured location can't be used.
-    public let mouseDown = PassthroughSubject<Void, Never>()
+    /// Fires once per left-mouse-down. The event is preserved so downstream
+    /// can distinguish a local click inside the Notch window from a global
+    /// outside click; the live mouse location remains the coordinate truth.
+    public let mouseDown = PassthroughSubject<NSEvent?, Never>()
 
     /// Fires the keyCode of every keyDown. Subscribers filter for ESC (53).
     public let keyDown = PassthroughSubject<UInt16, Never>()
@@ -46,8 +46,8 @@ public final class EventMonitors {
         let move = EventMonitor(mask: .mouseMoved) { [weak self] _ in
             self?.mouseLocation.send(NSEvent.mouseLocation)
         }
-        let down = EventMonitor(mask: .leftMouseDown) { [weak self] _ in
-            self?.mouseDown.send()
+        let down = EventMonitor(mask: .leftMouseDown) { [weak self] event in
+            self?.mouseDown.send(event)
         }
         let key = EventMonitor(mask: .keyDown) { [weak self] event in
             guard let event else { return }
