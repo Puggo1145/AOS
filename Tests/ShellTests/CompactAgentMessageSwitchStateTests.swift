@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Shell
 
@@ -50,8 +51,8 @@ struct CompactAgentMessageSwitchStateTests {
         #expect(state.switchingTargetID == nil)
     }
 
-    @Test("render identity changes when streamed reply text grows")
-    func renderIdentityChangesWhenStreamedReplyTextGrows() {
+    @Test("render identity remains stable when streamed reply text grows")
+    func renderIdentityRemainsStableWhenStreamedReplyTextGrows() {
         let partial = TurnDisplaySegment.segment(.reply(ReplySegment(
             id: "reply",
             text: "Hi! 👋 How can I"
@@ -62,6 +63,24 @@ struct CompactAgentMessageSwitchStateTests {
         )))
 
         #expect(partial.id == complete.id)
-        #expect(partial.compactRenderID != complete.compactRenderID)
+        #expect(partial.compactRenderID == complete.compactRenderID)
+    }
+
+    @Test("render identity remains stable when streamed thinking text grows")
+    func renderIdentityRemainsStableWhenStreamedThinkingTextGrows() {
+        let startedAt = Date()
+        let partial = TurnDisplaySegment.segment(.thinking(ThinkingSegment(
+            id: "thinking",
+            text: "checking the active app",
+            startedAt: startedAt
+        )))
+        let complete = TurnDisplaySegment.segment(.thinking(ThinkingSegment(
+            id: "thinking",
+            text: "checking the active app and current window contents",
+            startedAt: startedAt
+        )))
+
+        #expect(partial.id == complete.id)
+        #expect(partial.compactRenderID == complete.compactRenderID)
     }
 }

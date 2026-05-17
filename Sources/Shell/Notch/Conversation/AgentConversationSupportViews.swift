@@ -22,8 +22,8 @@ struct CompactAgentMessageSwitcher: View {
             .onAppear {
                 switchState.appear(message)
             }
-            .onChange(of: message.compactRenderID) { _, _ in
-                handleMessageChange(message)
+            .onChange(of: message) { _, newMessage in
+                handleMessageChange(newMessage)
             }
             .onDisappear {
                 switchTask?.cancel()
@@ -96,25 +96,15 @@ struct CompactAgentMessageSwitcher: View {
 }
 
 extension TurnDisplaySegment {
+    /// Stable SwiftUI identity for compact rendering. Streaming text changes
+    /// must update the existing child view so measured state inside
+    /// `ThinkingView` is preserved while new rows push old rows upward.
     var compactRenderID: String {
         switch self {
         case .segment(let segment):
-            return segment.compactRenderID
+            return segment.id
         case .toolRun(let run):
-            return "\(run.id):\(run.segments.map(\.compactRenderID).joined(separator: "|"))"
-        }
-    }
-}
-
-private extension TurnSegment {
-    var compactRenderID: String {
-        switch self {
-        case .thinking(let s):
-            return "think:\(s.id):\(s.text):\(s.isOpenForAppend):\(s.endedAt?.timeIntervalSinceReferenceDate ?? -1)"
-        case .toolCall(let id):
-            return "tool:\(id)"
-        case .reply(let s):
-            return "reply:\(s.id):\(s.text)"
+            return run.id
         }
     }
 }
