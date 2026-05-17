@@ -477,19 +477,21 @@ struct AgentConversationView: View {
             )
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            if let latestAgentMessage = compactPlan.latestAgentMessage {
+            if compactPlan.shouldShowAgentStatus {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     turnEmojiView(turn)
                         .notchFont(size: contentScale.agentEmojiFontSize, design: .monospaced)
                         .foregroundStyle(.white)
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
-                    CompactAgentMessageSwitcher(
-                        message: latestAgentMessage,
-                        toolCallById: toolCallById,
-                        contentScale: contentScale
-                    )
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    if let latestAgentMessage = compactPlan.latestAgentMessage {
+                        CompactAgentMessageSwitcher(
+                            message: latestAgentMessage,
+                            toolCallById: toolCallById,
+                            contentScale: contentScale
+                        )
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
             }
 

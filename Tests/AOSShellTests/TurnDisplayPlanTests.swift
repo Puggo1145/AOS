@@ -99,6 +99,21 @@ struct TurnDisplayPlanTests {
         #expect(plan.latestAgentMessage == nil)
     }
 
+    @Test("compact plan still shows status while working before sidecar output")
+    func compactPlanShowsStatusWhileWorkingBeforeSidecarOutput() {
+        let current = turn(
+            id: "current",
+            prompt: "Initial prompt",
+            status: .working,
+            segments: []
+        )
+
+        let plan = TurnDisplayPlanner.compactPlan(for: current)
+
+        #expect(plan.latestAgentMessage == nil)
+        #expect(plan.shouldShowAgentStatus)
+    }
+
     @Test("virtual mouse activity shows only open thinking")
     func virtualMouseActivityShowsOnlyOpenThinking() {
         let openThinking = turn(

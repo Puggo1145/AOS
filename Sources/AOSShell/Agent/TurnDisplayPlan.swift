@@ -39,17 +39,20 @@ public struct CompactTurnDisplayPlan: Equatable {
     public let prompt: String
     public let clipboardLabels: [String]
     public let latestAgentMessage: TurnDisplaySegment?
+    public let shouldShowAgentStatus: Bool
 
     public init(
         turnId: String,
         prompt: String,
         clipboardLabels: [String],
-        latestAgentMessage: TurnDisplaySegment?
+        latestAgentMessage: TurnDisplaySegment?,
+        shouldShowAgentStatus: Bool
     ) {
         self.turnId = turnId
         self.prompt = prompt
         self.clipboardLabels = clipboardLabels
         self.latestAgentMessage = latestAgentMessage
+        self.shouldShowAgentStatus = shouldShowAgentStatus
     }
 }
 
@@ -120,15 +123,26 @@ public enum TurnDisplayPlanner {
     @MainActor
     public static func compactPlan(for turn: ConversationTurn) -> CompactTurnDisplayPlan {
         let toolCallsById = Dictionary(uniqueKeysWithValues: turn.toolCalls.map { ($0.id, $0) })
+        let latest = latestMessage(
+            segments: turn.segments,
+            toolCallsById: toolCallsById
+        )
         return CompactTurnDisplayPlan(
             turnId: turn.id,
             prompt: turn.prompt,
             clipboardLabels: turn.context.clipboardLabels,
-            latestAgentMessage: latestMessage(
-                segments: turn.segments,
-                toolCallsById: toolCallsById
-            )
+            latestAgentMessage: latest,
+            shouldShowAgentStatus: latest != nil || shouldShowEmptyAgentStatus(for: turn.status)
         )
+    }
+
+    private static func shouldShowEmptyAgentStatus(for status: AgentStatus) -> Bool {
+        switch status {
+        case .working, .waiting, .error:
+            return true
+        case .idle, .listening, .done:
+            return false
+        }
     }
 
     private static func shouldCollapse(
