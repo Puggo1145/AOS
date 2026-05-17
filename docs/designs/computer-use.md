@@ -52,7 +52,7 @@ Sources/AOSComputerUseKit/
 
 - `listApps(mode:) -> [AppInfo]`
 - `getAppType(pid:) -> AppTypeResult`
-- `listWindows(pid:) -> [WindowInfo]`
+- `listWindows(pid:) async throws -> [WindowInfo]`
 - `getAppState(windowId:captureMode:) -> AppStateBundle`
 - `startAppSession(pid:windowId:) -> AppSessionResult`
 - `stopAppSession() -> AppSessionResult`
@@ -98,6 +98,11 @@ point。这样窗口在截图和点击之间只移动、未 resize 时，点击�
 left-click 兼容包装。`startAppSession` 是唯一能切换 current app session 的入口；
 app-state read、mouse / keyboard event post 和 AX element event post 不接收 pid，
 必须在 active app session 内按 windowId 投放。
+`listWindows(pid:)` 只返回 on-screen 且尺寸可操作的 layer-0 app window。如果目标 pid
+是运行中的 app，但当前只有 off-screen / hidden / minimized window 或完全没有窗口，
+会先用 `open -g -b <bundle id>` 对该 app 发送后台 reopen，再重新枚举窗口；如果 app
+不存在、reopen 失败，或最多两次 reopen 后仍没有可见窗口，错误直接冒泡，不能把不可见
+windowId 交给后续高亮/点击链路。
 core 只在 session 中记录 pid；每次 event post 都用 current session pid 校验传入
 windowId 的 ownership，并在需要投放前重新 focus 该 window。`stopAppSession` 释放
 当前 active app session 和 Computer Use 视觉 overlay，不再向 target window 发送

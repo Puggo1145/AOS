@@ -6,6 +6,165 @@ import Testing
 
 @Suite("ComputerUseCore focus without raise")
 struct WindowFocusTests {
+    @Test("listWindows reopens a running app in the background when it has no windows")
+    func listWindowsReopensRunningAppInBackgroundWhenItHasNoWindows() async throws {
+        let targetPID = pid_t.random(in: 1_000..<50_000)
+        let targetWindowID = CGWindowID.random(in: 1..<UInt32.max)
+        let recorder = ReopenRecorder()
+        let window = WindowInfo(
+            id: targetWindowID,
+            pid: targetPID,
+            owner: "Notes",
+            title: "Draft",
+            bounds: WindowBounds(x: 10, y: 20, width: 800, height: 600),
+            zIndex: 1,
+            isOnScreen: true,
+            layer: 0
+        )
+        let core = ComputerUseCore(
+            windowLookup: { _ in nil },
+            windowsForPIDLookup: { _ in
+                recorder.nextWindowLookupCount() == 1 ? [] : [window]
+            },
+            runningApplicationLookup: { pid in
+                pid == targetPID ? RunningApplicationInfo(pid: pid, bundleIdentifier: "com.apple.Notes") : nil
+            },
+            reopenApplicationInBackground: { app in
+                recorder.recordReopen(app)
+            },
+            windowAvailabilityPollDelays: [0],
+            sleepForWindowAvailabilityPoll: { _ in },
+            focusWindowWithoutRaising: { _, _ in }
+        )
+
+        let windows = try await core.listWindows(pid: targetPID)
+
+        #expect(windows == [window])
+        #expect(recorder.reopenedApps == [RunningApplicationInfo(
+            pid: targetPID,
+            bundleIdentifier: "com.apple.Notes"
+        )])
+    }
+
+    @Test("listWindows reopens a running app when its only windows are off screen")
+    func listWindowsReopensRunningAppWhenOnlyWindowsAreOffScreen() async throws {
+        let targetPID = pid_t.random(in: 1_000..<50_000)
+        let recorder = ReopenRecorder()
+        let offscreenWindow = WindowInfo(
+            id: CGWindowID.random(in: 1..<UInt32.max),
+            pid: targetPID,
+            owner: "Notes",
+            title: "Hidden Draft",
+            bounds: WindowBounds(x: -2000, y: -2000, width: 800, height: 600),
+            zIndex: 3,
+            isOnScreen: false,
+            layer: 0
+        )
+        let visibleWindow = WindowInfo(
+            id: CGWindowID.random(in: 1..<UInt32.max),
+            pid: targetPID,
+            owner: "Notes",
+            title: "Draft",
+            bounds: WindowBounds(x: 10, y: 20, width: 800, height: 600),
+            zIndex: 2,
+            isOnScreen: true,
+            layer: 0
+        )
+        let core = ComputerUseCore(
+            windowLookup: { _ in nil },
+            windowsForPIDLookup: { _ in
+                recorder.nextWindowLookupCount() == 1 ? [offscreenWindow] : [offscreenWindow, visibleWindow]
+            },
+            runningApplicationLookup: { pid in
+                pid == targetPID ? RunningApplicationInfo(pid: pid, bundleIdentifier: "com.apple.Notes") : nil
+            },
+            reopenApplicationInBackground: { app in
+                recorder.recordReopen(app)
+            },
+            windowAvailabilityPollDelays: [0],
+            sleepForWindowAvailabilityPoll: { _ in },
+            focusWindowWithoutRaising: { _, _ in }
+        )
+
+        let windows = try await core.listWindows(pid: targetPID)
+
+        #expect(windows == [visibleWindow])
+        #expect(recorder.reopenedApps == [RunningApplicationInfo(
+            pid: targetPID,
+            bundleIdentifier: "com.apple.Notes"
+        )])
+    }
+
+    @Test("listWindows does not return off-screen windows after background reopen fails to expose one")
+    func listWindowsDoesNotReturnOffScreenWindowsAfterBackgroundReopenFailsToExposeOne() async throws {
+        let targetPID = pid_t.random(in: 1_000..<50_000)
+        let recorder = ReopenRecorder()
+        let offscreenWindow = WindowInfo(
+            id: CGWindowID.random(in: 1..<UInt32.max),
+            pid: targetPID,
+            owner: "Notes",
+            title: "Hidden Draft",
+            bounds: WindowBounds(x: -2000, y: -2000, width: 800, height: 600),
+            zIndex: 3,
+            isOnScreen: false,
+            layer: 0
+        )
+        let core = ComputerUseCore(
+            windowLookup: { _ in nil },
+            windowsForPIDLookup: { _ in
+                _ = recorder.nextWindowLookupCount()
+                return [offscreenWindow]
+            },
+            runningApplicationLookup: { pid in
+                pid == targetPID ? RunningApplicationInfo(pid: pid, bundleIdentifier: "com.apple.Notes") : nil
+            },
+            reopenApplicationInBackground: { app in
+                recorder.recordReopen(app)
+            },
+            windowAvailabilityPollDelays: [0],
+            sleepForWindowAvailabilityPoll: { _ in },
+            focusWindowWithoutRaising: { _, _ in }
+        )
+
+        await #expect(throws: ComputerUseError.self) {
+            try await core.listWindows(pid: targetPID)
+        }
+        #expect(recorder.reopenedApps == [
+            RunningApplicationInfo(pid: targetPID, bundleIdentifier: "com.apple.Notes"),
+            RunningApplicationInfo(pid: targetPID, bundleIdentifier: "com.apple.Notes"),
+        ])
+    }
+
+    @Test("listWindows retries background reopen twice before reporting no visible window")
+    func listWindowsRetriesBackgroundReopenTwiceBeforeReportingNoVisibleWindow() async throws {
+        let targetPID = pid_t.random(in: 1_000..<50_000)
+        let recorder = ReopenRecorder()
+        let core = ComputerUseCore(
+            windowLookup: { _ in nil },
+            windowsForPIDLookup: { _ in
+                _ = recorder.nextWindowLookupCount()
+                return []
+            },
+            runningApplicationLookup: { pid in
+                pid == targetPID ? RunningApplicationInfo(pid: pid, bundleIdentifier: "com.apple.Notes") : nil
+            },
+            reopenApplicationInBackground: { app in
+                recorder.recordReopen(app)
+            },
+            windowAvailabilityPollDelays: [0],
+            sleepForWindowAvailabilityPoll: { _ in },
+            focusWindowWithoutRaising: { _, _ in }
+        )
+
+        await #expect(throws: ComputerUseError.self) {
+            try await core.listWindows(pid: targetPID)
+        }
+        #expect(recorder.reopenedApps == [
+            RunningApplicationInfo(pid: targetPID, bundleIdentifier: "com.apple.Notes"),
+            RunningApplicationInfo(pid: targetPID, bundleIdentifier: "com.apple.Notes"),
+        ])
+    }
+
     @Test("diagnostics rejects non-positive window order sampling values before probing windows")
     func diagnosticsRejectsNonPositiveWindowOrderSamplingValuesBeforeProbingWindows() async throws {
         let core = ComputerUseCore(
@@ -307,6 +466,31 @@ private actor FocusRecorder {
 private struct FocusCall: Equatable {
     let pid: pid_t
     let windowId: CGWindowID
+}
+
+private final class ReopenRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var windowLookupCount = 0
+    private var recordedReopenedApps: [RunningApplicationInfo] = []
+
+    var reopenedApps: [RunningApplicationInfo] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedReopenedApps
+    }
+
+    func nextWindowLookupCount() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        windowLookupCount += 1
+        return windowLookupCount
+    }
+
+    func recordReopen(_ app: RunningApplicationInfo) {
+        lock.lock()
+        defer { lock.unlock() }
+        recordedReopenedApps.append(app)
+    }
 }
 
 /// Synchronous recorder for `postEventRecord` calls. The focuser's poster

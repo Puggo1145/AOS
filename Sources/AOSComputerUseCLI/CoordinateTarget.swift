@@ -78,13 +78,35 @@ public struct LiveCoorTestTargetClient: CoorTestTargetClient {
     }
 
     private func waitForWindow(pid: pid_t) async throws -> WindowInfo {
-        for _ in 0..<80 {
-            if let window = try await core.listWindows(pid: pid)
-                .filter({ $0.isOnScreen })
+        try await CoordinateTargetWindowWaiter.waitForWindow(
+            pid: pid,
+            attempts: 80,
+            pollDelayNanoseconds: 25_000_000,
+            windowsForPIDLookup: { pid in
+                WindowServerWindowLookup.appWindows(forPid: pid)
+            },
+            sleep: { delay in
+                try await Task.sleep(nanoseconds: delay)
+            }
+        )
+    }
+}
+
+enum CoordinateTargetWindowWaiter {
+    static func waitForWindow(
+        pid: pid_t,
+        attempts: Int,
+        pollDelayNanoseconds: UInt64,
+        windowsForPIDLookup: @Sendable (pid_t) -> [WindowInfo],
+        sleep: @Sendable (UInt64) async throws -> Void
+    ) async throws -> WindowInfo {
+        for _ in 0..<attempts {
+            if let window = windowsForPIDLookup(pid)
+                .filter({ $0.isOnScreen && $0.layer == 0 })
                 .max(by: { $0.zIndex < $1.zIndex }) {
                 return window
             }
-            try await Task.sleep(nanoseconds: 25_000_000)
+            try await sleep(pollDelayNanoseconds)
         }
         throw CoorTestTargetError("coordinate target pid \(pid) did not publish an on-screen window")
     }

@@ -62,7 +62,7 @@ struct LiveShellComputerUseClient: ShellComputerUseClient {
     }
 
     func listWindows(pid: pid_t) async throws -> [WindowInfo] {
-        await core.listWindows(pid: pid)
+        try await core.listWindows(pid: pid)
     }
 
     func getAppState(

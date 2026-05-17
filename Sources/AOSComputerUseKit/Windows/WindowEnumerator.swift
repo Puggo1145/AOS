@@ -5,13 +5,12 @@ import Foundation
 //
 // Wraps `CGWindowListCopyWindowInfo` into typed `WindowInfo` records. Per
 // `docs/designs/computer-use.md` §"Window 选择规则" the Kit's anchor for a
-// pid is layer-0 + on-screen + on-current-Space + maximum zIndex; if no
-// such window exists we fall back to layer-0 maximum-area (covers
-// hidden-launched / fully-minimized cases).
+// pid is layer-0 + on-screen + on-current-Space + maximum zIndex.
 //
-// `listWindows` returns app-window candidates, not every layer-0 helper
-// surface WindowServer reports. Coordinate / capture paths use the same
-// selector internally so screenshot anchor and click anchor always agree.
+// `appWindows` returns layer-0 app-window candidates, including off-screen
+// windows. `ComputerUseCore.listWindows` narrows that raw set to visible,
+// operable windows and can ask LaunchServices to reopen a running app in the
+// background before returning a target to the agent.
 
 enum WindowEnumerator {
 
@@ -34,12 +33,11 @@ enum WindowEnumerator {
         appWindows(forPid: pid, from: allWindows())
     }
 
-    /// Pick the operable "frontmost" window for `pid` per the design's
-    /// selection rule:
+    /// Pick the best known window for `pid`:
     ///
     /// 1. Layer 0, on-screen, on-current-Space, non-degenerate bounds → max
     ///    zIndex wins.
-    /// 2. Otherwise: layer 0 max area (covers hidden-launched / all-minimized).
+    /// 2. Otherwise: layer 0 max area.
     ///
     /// Returns `nil` if `pid` has no layer-0 window at all.
     public static func selectFrontmostWindow(forPid pid: pid_t) -> WindowInfo? {
@@ -125,5 +123,11 @@ enum WindowEnumerator {
             isOnScreen: isOnScreen,
             layer: layer
         )
+    }
+}
+
+public enum WindowServerWindowLookup {
+    public static func appWindows(forPid pid: pid_t) -> [WindowInfo] {
+        WindowEnumerator.appWindows(forPid: pid)
     }
 }

@@ -58,6 +58,11 @@ public struct AppSessionResult: Sendable, Equatable {
     }
 }
 
+struct RunningApplicationInfo: Sendable, Equatable {
+    let pid: pid_t
+    let bundleIdentifier: String
+}
+
 /// Result of posting a coordinate-based mouse event to a WindowServer window.
 public struct WindowMouseEventResult: Sendable, Equatable {
     public let pid: pid_t
@@ -241,6 +246,7 @@ public enum ComputerUseError: Error, CustomStringConvertible, Sendable {
     case appSessionUnavailable(String)
     case diagnosticsUnavailable(String)
     case windowNotFound(windowId: CGWindowID)
+    case windowUnavailable(String)
 
     public var description: String {
         switch self {
@@ -268,6 +274,8 @@ public enum ComputerUseError: Error, CustomStringConvertible, Sendable {
             return "diagnostics unavailable: \(message)"
         case .windowNotFound(let windowId):
             return "no window with id \(windowId)"
+        case .windowUnavailable(let message):
+            return "window unavailable: \(message)"
         }
     }
 }
@@ -305,6 +313,10 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
     private let capture: WindowCapture
     private let windowLookup: @Sendable (CGWindowID) -> WindowInfo?
     private let windowsForPIDLookup: @Sendable (pid_t) -> [WindowInfo]
+    private let runningApplicationLookup: @Sendable (pid_t) async -> RunningApplicationInfo?
+    private let reopenApplicationInBackground: @Sendable (RunningApplicationInfo) async throws -> Void
+    private let windowAvailabilityPollDelays: [UInt64]
+    private let sleepForWindowAvailabilityPoll: @Sendable (UInt64) async throws -> Void
     private let visibleWindowsLookup: @Sendable () -> [WindowInfo]
     private let frontmostWindowLookup: @Sendable () -> WindowInfo?
     private let mouseEventDeliveryRoute: @Sendable (pid_t) -> BackgroundMouseEventDeliveryRoute
@@ -358,6 +370,18 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
             },
             windowsForPIDLookup: { pid in
                 WindowEnumerator.appWindows(forPid: pid)
+            },
+            runningApplicationLookup: { pid in
+                await MainActor.run {
+                    Self.runningApplicationInfo(pid: pid)
+                }
+            },
+            reopenApplicationInBackground: { app in
+                try await Self.reopenApplicationInBackground(app)
+            },
+            windowAvailabilityPollDelays: Self.liveWindowAvailabilityPollDelays,
+            sleepForWindowAvailabilityPoll: { delay in
+                try await Task.sleep(nanoseconds: delay)
             },
             visibleWindowsLookup: {
                 WindowEnumerator.visibleWindows()
@@ -414,6 +438,10 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
         capture: WindowCapture = WindowCapture(),
         windowLookup: @escaping @Sendable (CGWindowID) -> WindowInfo?,
         windowsForPIDLookup: (@Sendable (pid_t) -> [WindowInfo])? = nil,
+        runningApplicationLookup: @escaping @Sendable (pid_t) async -> RunningApplicationInfo? = { _ in nil },
+        reopenApplicationInBackground: @escaping @Sendable (RunningApplicationInfo) async throws -> Void = { _ in },
+        windowAvailabilityPollDelays: [UInt64] = [],
+        sleepForWindowAvailabilityPoll: @escaping @Sendable (UInt64) async throws -> Void = { _ in },
         visibleWindowsLookup: @escaping @Sendable () -> [WindowInfo] = { [] },
         frontmostWindowLookup: @escaping @Sendable () -> WindowInfo? = { nil },
         mouseEventDeliveryRoute: @escaping @Sendable (pid_t) -> BackgroundMouseEventDeliveryRoute = { _ in .appKit },
@@ -460,6 +488,10 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
         self.windowsForPIDLookup = windowsForPIDLookup ?? { pid in
             visibleWindowsLookup().filter { $0.pid == pid && $0.layer == 0 }
         }
+        self.runningApplicationLookup = runningApplicationLookup
+        self.reopenApplicationInBackground = reopenApplicationInBackground
+        self.windowAvailabilityPollDelays = windowAvailabilityPollDelays
+        self.sleepForWindowAvailabilityPoll = sleepForWindowAvailabilityPoll
         self.frontmostWindowLookup = frontmostWindowLookup
         self.mouseEventDeliveryRoute = mouseEventDeliveryRoute
         self.requiresPreEventFocus = requiresPreEventFocus
@@ -501,8 +533,29 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
         )
     }
 
-    public func listWindows(pid: pid_t) -> [WindowInfo] {
-        windowsForPIDLookup(pid)
+    public func listWindows(pid: pid_t) async throws -> [WindowInfo] {
+        let windows = windowsForPIDLookup(pid)
+        let visibleWindows = Self.operableVisibleWindows(from: windows)
+        if !visibleWindows.isEmpty {
+            return visibleWindows
+        }
+        guard let app = await runningApplicationLookup(pid) else {
+            throw ComputerUseError.appNotFound(pid: pid)
+        }
+        for _ in 0..<Self.liveWindowAvailabilityReopenAttemptCount {
+            try await reopenApplicationInBackground(app)
+            for delay in windowAvailabilityPollDelays {
+                try await sleepForWindowAvailabilityPoll(delay)
+                let reopenedWindows = windowsForPIDLookup(pid)
+                let visibleReopenedWindows = Self.operableVisibleWindows(from: reopenedWindows)
+                if !visibleReopenedWindows.isEmpty {
+                    return visibleReopenedWindows
+                }
+            }
+        }
+        throw ComputerUseError.windowUnavailable(
+            "running app \(app.bundleIdentifier) for pid \(pid) did not expose an on-screen app window after background reopen"
+        )
     }
 
     public func getAppState(
@@ -1255,6 +1308,11 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
 private extension ComputerUseCore {
     static let liveActiveStateGuardInterval: UInt64 = 5_000_000
     static let liveActiveStateGuardWindow: UInt64 = 300_000_000
+    static let liveWindowAvailabilityPollDelays: [UInt64] = Array(
+        repeating: 50_000_000,
+        count: 20
+    )
+    static let liveWindowAvailabilityReopenAttemptCount = 2
     static let liveActiveStateGuardDelays: [UInt64] = [
         0,
     ] + Array(
@@ -1271,6 +1329,37 @@ private extension ComputerUseCore {
                 && window.layer == 0
                 && window.bounds.width >= 64
                 && window.bounds.height >= 64
+        }
+    }
+
+    static func operableVisibleWindows(from windows: [WindowInfo]) -> [WindowInfo] {
+        windows.filter { window in
+            window.isOnScreen
+                && window.layer == 0
+                && window.bounds.width >= 64
+                && window.bounds.height >= 64
+        }
+    }
+
+    static func runningApplicationInfo(pid: pid_t) -> RunningApplicationInfo? {
+        guard let app = NSRunningApplication(processIdentifier: pid),
+              let bundleIdentifier = app.bundleIdentifier
+        else {
+            return nil
+        }
+        return RunningApplicationInfo(pid: pid, bundleIdentifier: bundleIdentifier)
+    }
+
+    static func reopenApplicationInBackground(_ app: RunningApplicationInfo) async throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = ["-g", "-b", app.bundleIdentifier]
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw ComputerUseError.windowUnavailable(
+                "open -g -b \(app.bundleIdentifier) exited with status \(process.terminationStatus)"
+            )
         }
     }
 }

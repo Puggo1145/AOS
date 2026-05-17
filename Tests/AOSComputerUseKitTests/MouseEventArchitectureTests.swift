@@ -81,7 +81,7 @@ struct MouseEventArchitectureTests {
         let expectedEntries = [
             "`listApps(mode:) -> [AppInfo]`",
             "`getAppType(pid:) -> AppTypeResult`",
-            "`listWindows(pid:) -> [WindowInfo]`",
+            "`listWindows(pid:) async throws -> [WindowInfo]`",
             "`getAppState(windowId:captureMode:) -> AppStateBundle`",
             "`startAppSession(pid:windowId:) -> AppSessionResult`",
             "`stopAppSession() -> AppSessionResult`",
