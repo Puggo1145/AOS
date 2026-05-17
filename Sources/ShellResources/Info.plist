@@ -6,6 +6,8 @@
     <string>Notch Agent</string>
     <key>CFBundleExecutable</key>
     <string>Notch Agent</string>
+    <key>CFBundleIconFile</key>
+    <string>NotchAgent</string>
     <key>CFBundleIdentifier</key>
     <string>com.notch-agent.shell</string>
     <key>CFBundleName</key>

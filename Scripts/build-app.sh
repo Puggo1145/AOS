@@ -41,6 +41,7 @@ find "$BUILD_DIR" -maxdepth 1 -type d -name '*.bundle' -exec cp -R {} "$APP_BUND
 # build number — TCC keys off cdhash, not version, so this is purely for
 # diagnostic legibility.
 cp Sources/ShellResources/Info.plist "$APP_BUNDLE/Contents/Info.plist"
+cp Sources/ShellResources/NotchAgent.icns "$APP_BUNDLE/Contents/Resources/NotchAgent.icns"
 APP_VERSION="$(node -e "console.log(require('./sidecar/package.json').version)" 2>/dev/null \
   || python3 -c "import json; print(json.load(open('sidecar/package.json'))['version'])" 2>/dev/null \
   || echo "0.0.0")"
