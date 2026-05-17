@@ -9,46 +9,49 @@ struct CompactAgentMessageSwitcher: View {
     let contentScale: ConversationContentScale
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var displayedMessage: TurnDisplaySegment?
+    @State private var switchState = CompactAgentMessageSwitchState()
     @State private var blurRadius: CGFloat = 0
     @State private var switchTask: Task<Void, Never>?
 
     var body: some View {
-        compactMessageView(displayedMessage ?? message)
+        let renderedMessage = switchState.displayedMessage ?? message
+        compactMessageView(renderedMessage)
+            .id(renderedMessage.compactRenderID)
             .blur(radius: blurRadius)
             .opacity(blurRadius > 0 ? 0.72 : 1)
             .onAppear {
-                if displayedMessage == nil {
-                    displayedMessage = message
-                }
+                switchState.appear(message)
             }
-            .onChange(of: message) { _, newMessage in
-                guard displayedMessage?.id != newMessage.id else {
-                    displayedMessage = newMessage
-                    return
-                }
-                switchTo(newMessage)
+            .onChange(of: message.compactRenderID) { _, _ in
+                handleMessageChange(message)
             }
             .onDisappear {
                 switchTask?.cancel()
+                switchState.cancelTransition()
             }
     }
 
-    private func switchTo(_ next: TurnDisplaySegment) {
-        switchTask?.cancel()
-        if reduceMotion {
-            displayedMessage = next
+    private func handleMessageChange(_ newMessage: TurnDisplaySegment) {
+        switch switchState.receive(newMessage, reduceMotion: reduceMotion) {
+        case .displayImmediately:
+            switchTask?.cancel()
             blurRadius = 0
-            return
+        case .updatePendingTarget:
+            break
+        case .startTransition:
+            switchToPendingMessage()
         }
+    }
 
+    private func switchToPendingMessage() {
+        switchTask?.cancel()
         switchTask = Task { @MainActor in
             withAnimation(.easeOut(duration: 0.10)) {
                 blurRadius = 14
             }
             try? await Task.sleep(for: .milliseconds(105))
             guard !Task.isCancelled else { return }
-            displayedMessage = next
+            switchState.finishTransition()
             withAnimation(.easeOut(duration: 0.18)) {
                 blurRadius = 0
             }
@@ -89,6 +92,81 @@ struct CompactAgentMessageSwitcher: View {
                 ReplyMarkdownView(text: s.text, theme: contentScale.replyTheme)
             }
         }
+    }
+}
+
+extension TurnDisplaySegment {
+    var compactRenderID: String {
+        switch self {
+        case .segment(let segment):
+            return segment.compactRenderID
+        case .toolRun(let run):
+            return "\(run.id):\(run.segments.map(\.compactRenderID).joined(separator: "|"))"
+        }
+    }
+}
+
+private extension TurnSegment {
+    var compactRenderID: String {
+        switch self {
+        case .thinking(let s):
+            return "think:\(s.id):\(s.text):\(s.isOpenForAppend):\(s.endedAt?.timeIntervalSinceReferenceDate ?? -1)"
+        case .toolCall(let id):
+            return "tool:\(id)"
+        case .reply(let s):
+            return "reply:\(s.id):\(s.text)"
+        }
+    }
+}
+
+enum CompactAgentMessageSwitchDecision: Equatable {
+    case displayImmediately
+    case startTransition
+    case updatePendingTarget
+}
+
+struct CompactAgentMessageSwitchState {
+    private(set) var displayedMessage: TurnDisplaySegment?
+    private(set) var pendingMessage: TurnDisplaySegment?
+    private(set) var switchingTargetID: String?
+
+    mutating func appear(_ message: TurnDisplaySegment) {
+        if displayedMessage == nil {
+            displayedMessage = message
+        }
+    }
+
+    mutating func receive(
+        _ newMessage: TurnDisplaySegment,
+        reduceMotion: Bool
+    ) -> CompactAgentMessageSwitchDecision {
+        if reduceMotion || displayedMessage?.id == newMessage.id {
+            displayedMessage = newMessage
+            pendingMessage = nil
+            switchingTargetID = nil
+            return .displayImmediately
+        }
+
+        if switchingTargetID == newMessage.id {
+            pendingMessage = newMessage
+            return .updatePendingTarget
+        }
+
+        pendingMessage = newMessage
+        switchingTargetID = newMessage.id
+        return .startTransition
+    }
+
+    mutating func finishTransition() {
+        guard let pendingMessage else { return }
+        displayedMessage = pendingMessage
+        self.pendingMessage = nil
+        switchingTargetID = nil
+    }
+
+    mutating func cancelTransition() {
+        pendingMessage = nil
+        switchingTargetID = nil
     }
 }
 

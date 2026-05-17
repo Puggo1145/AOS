@@ -45,6 +45,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         pidTimer?.invalidate()
         pidTimer = nil
-        Task { @MainActor in compositionRoot.stop() }
+        compositionRoot.stop()
     }
 }
