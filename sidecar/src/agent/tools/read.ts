@@ -6,8 +6,7 @@
 // toward `~/.aos/workspace/` via the system prompt.
 //
 // The implementation streams line-by-line rather than loading the file into
-// memory. We still scan to EOF so the trailing "[还有 N more lines]" marker is
-// exact.
+// memory. We still scan to EOF so the trailing remaining-line marker is exact.
 
 import { promises as fs } from "node:fs";
 import { createReadStream } from "node:fs";

@@ -82,7 +82,7 @@ struct MouseEventArchitectureTests {
             "`listApps(mode:) -> [AppInfo]`",
             "`getAppType(pid:) -> AppTypeResult`",
             "`listWindows(pid:) -> [WindowInfo]`",
-            "`getAppState(windowId:captureMode:maxImageDimension:) -> AppStateBundle`",
+            "`getAppState(windowId:captureMode:) -> AppStateBundle`",
             "`startAppSession(pid:windowId:) -> AppSessionResult`",
             "`stopAppSession() -> AppSessionResult`",
             "`currentAppSession() -> AppSessionResult`",

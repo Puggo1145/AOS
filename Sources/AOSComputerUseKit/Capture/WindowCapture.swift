@@ -24,8 +24,8 @@ public struct Screenshot: Sendable {
     public let height: Int
     public let scaleFactor: Double
     public let coordinateSpace: ScreenshotCoordinateSpace
-    /// When the image was downscaled by `maxImageDimension`, the original
-    /// width before resizing. nil when no resize happened.
+    /// When the image was downscaled to fit `ScreenshotPayloadPolicy`, the
+    /// original width before resizing. nil when no resize happened.
     public let originalWidth: Int?
     public let originalHeight: Int?
 
@@ -52,53 +52,26 @@ public struct Screenshot: Sendable {
 
 // MARK: - ScreenshotPayloadPolicy
 //
-// Pure decision helper for `ComputerUseCore.getAppState`'s capture
-// retry loop. Lives here (next to `WindowCapture`) so the retry policy
-// is co-located with the encoder it controls.
-//
-// The wire cap is on base64 size (`docs/designs/rpc-protocol.md` §"二进
-// 制 payload 规则": 1 MB per screenshot, 2 MB per NDJSON line). base64
-// inflates by ~4/3, so the raw-byte budget the encoder must hit is
-// `ceil(base64Limit * 3/4)`. We keep a safety margin below that.
-//
-// PNG/JPEG file size scales roughly with pixel count = dimension². So
-// the next target dimension is `currentDim × √(budget/currentBytes)`
-// with a 0.85 fudge factor to absorb non-quadratic compression behavior.
+// Business-level screenshot quality policy. Screenshot bytes are written to
+// `.aos/tmp/` and referenced from RPC metadata, so JSON-RPC line limits do not
+// define image compression behavior.
 enum ScreenshotPayloadPolicy {
-    /// 1 MB base64 cap from the wire protocol, minus headroom. Leaves
-    /// room for the rest of the JSON envelope (axTree + bookkeeping).
-    public static let defaultRawByteBudget: Int = 700_000
+    /// Screenshots at or below this encoded byte size are returned untouched.
+    /// Larger screenshots are resized from the same captured frame until the
+    /// encoded image fits.
+    public static let maxUncompressedBytes: Int = 1 * 1024 * 1024
 
-    /// Smallest side we'll downscale to before giving up. A 256×256
-    /// thumbnail is still useful for the model; below that the image
-    /// stops carrying actionable detail.
+    /// Last useful image side before failing loudly. Below this, coordinate
+    /// intent becomes too coarse for reliable computer-use actions.
     public static let minDimension: Int = 256
 
-    /// Returns the next `maxImageDimension` to retry the capture at.
-    /// `nil` means the current encoding already fits — caller should
-    /// stop. `0` means even a capture at `minDim` was already attempted
-    /// and didn't fit — caller should give up and throw `payloadTooLarge`.
-    ///
-    /// Floor handling: when the computed ratio target falls below
-    /// `minDim` we still return `minDim` **as long as the current capture
-    /// wasn't already at `minDim`**. A 256×256 PNG is typically tens of
-    /// KB, well under any reasonable budget, so we always prove it
-    /// doesn't fit before giving up. Only when the previous attempt was
-    /// already at the floor do we return 0.
-    public static func nextMaxDim(
-        currentBytes: Int,
-        currentMaxDim: Int,
-        rawByteBudget: Int = defaultRawByteBudget,
-        minDim: Int = minDimension
-    ) -> Int? {
-        if currentBytes <= rawByteBudget { return nil }
-        guard currentMaxDim > 0 else { return 0 }
-        if currentMaxDim <= minDim { return 0 }
-        let ratio = (Double(rawByteBudget) / Double(currentBytes)).squareRoot()
-        let next = Int(Double(currentMaxDim) * ratio * 0.85)
-        if next < minDim { return minDim }
-        if next >= currentMaxDim { return max(minDim, currentMaxDim - 1) }
-        return next
+    public static func nextResizeMaxDimension(currentMaxDimension: Int, currentBytes: Int) -> Int {
+        let ratio = (Double(maxUncompressedBytes) / Double(currentBytes)).squareRoot()
+        let next = Int(Double(currentMaxDimension) * ratio * 0.95)
+        if next >= currentMaxDimension {
+            return max(minDimension, currentMaxDimension - 1)
+        }
+        return max(minDimension, next)
     }
 }
 
@@ -106,6 +79,7 @@ enum CaptureError: Error, Sendable, CustomStringConvertible {
     case noDisplay
     case permissionDenied
     case encodeFailed
+    case payloadTooLarge(bytes: Int, limit: Int)
     case captureFailed(String)
     case windowNotFound(CGWindowID)
 
@@ -114,6 +88,8 @@ enum CaptureError: Error, Sendable, CustomStringConvertible {
         case .noDisplay: return "no main display found"
         case .permissionDenied: return "Screen Recording permission not granted"
         case .encodeFailed: return "failed to encode CGImage"
+        case .payloadTooLarge(let bytes, let limit):
+            return "screenshot payload \(bytes) bytes exceeds raw limit \(limit) bytes after resize retries"
         case .captureFailed(let msg): return "capture failed: \(msg)"
         case .windowNotFound(let id): return "no shareable window with id \(id)"
         }
@@ -127,14 +103,10 @@ actor WindowCapture {
     /// default; pass `format: .jpeg` for ~10x smaller payloads when the
     /// caller (e.g. agent vision input) tolerates lossy.
     ///
-    /// `maxImageDimension > 0` proportionally downscales so neither side
-    /// exceeds the limit — essential for keeping the wire response under
-    /// the 1MB cap from `docs/designs/rpc-protocol.md` §"二进制 payload 规则".
     public func captureWindow(
         windowID: CGWindowID,
         format: ImageFormat = .png,
-        quality: Int = 95,
-        maxImageDimension: Int = 0
+        quality: Int = 95
     ) async throws -> Screenshot {
         let content: SCShareableContent
         do {
@@ -165,14 +137,12 @@ actor WindowCapture {
             throw classify(error)
         }
 
-        let origW = cgImage.width
-        let origH = cgImage.height
-        let resized = resizeIfNeeded(cgImage, maxDim: maxImageDimension)
-        let didResize = resized.width != origW || resized.height != origH
+        let encoded = try encodeWithResizePolicy(cgImage, format: format, quality: quality)
+        let resized = encoded.image
+        let didResize = resized.width != cgImage.width || resized.height != cgImage.height
 
-        let data = try encode(resized, format: format, quality: quality)
         return Screenshot(
-            imageData: data,
+            imageData: encoded.data,
             format: format,
             width: resized.width,
             height: resized.height,
@@ -187,14 +157,46 @@ actor WindowCapture {
                 windowBounds: windowInfo.bounds,
                 pixelSize: CGSize(width: resized.width, height: resized.height)
             ),
-            originalWidth: didResize ? origW : nil,
-            originalHeight: didResize ? origH : nil
+            originalWidth: didResize ? cgImage.width : nil,
+            originalHeight: didResize ? cgImage.height : nil
         )
     }
 
     // MARK: - Internals
 
-    private func resizeIfNeeded(_ image: CGImage, maxDim: Int) -> CGImage {
+    private func encodeWithResizePolicy(
+        _ image: CGImage,
+        format: ImageFormat,
+        quality: Int
+    ) throws -> (image: CGImage, data: Data) {
+        var current = image
+        var data = try encode(current, format: format, quality: quality)
+        if data.count <= ScreenshotPayloadPolicy.maxUncompressedBytes {
+            return (current, data)
+        }
+
+        for _ in 0..<8 {
+            let nextMaxDim = ScreenshotPayloadPolicy.nextResizeMaxDimension(
+                currentMaxDimension: max(current.width, current.height),
+                currentBytes: data.count
+            )
+            current = try resize(current, maxDim: nextMaxDim)
+            data = try encode(current, format: format, quality: quality)
+            if data.count <= ScreenshotPayloadPolicy.maxUncompressedBytes {
+                return (current, data)
+            }
+            if max(current.width, current.height) <= ScreenshotPayloadPolicy.minDimension {
+                break
+            }
+        }
+
+        throw CaptureError.payloadTooLarge(
+            bytes: data.count,
+            limit: ScreenshotPayloadPolicy.maxUncompressedBytes
+        )
+    }
+
+    private func resize(_ image: CGImage, maxDim: Int) throws -> CGImage {
         let w = image.width, h = image.height
         guard maxDim > 0, max(w, h) > maxDim else { return image }
         let scale = Double(maxDim) / Double(max(w, h))
@@ -209,10 +211,13 @@ actor WindowCapture {
             space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
                 | CGBitmapInfo.byteOrder32Little.rawValue
-        ) else { return image }
+        ) else { throw CaptureError.encodeFailed }
         ctx.interpolationQuality = .high
         ctx.draw(image, in: CGRect(x: 0, y: 0, width: newW, height: newH))
-        return ctx.makeImage() ?? image
+        guard let resized = ctx.makeImage() else {
+            throw CaptureError.encodeFailed
+        }
+        return resized
     }
 
     private func classify(_ error: Error) -> CaptureError {

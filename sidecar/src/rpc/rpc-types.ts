@@ -287,7 +287,7 @@ export interface ComputerUseCoordinateSpace {
 }
 
 export interface ComputerUseScreenshot {
-  imageBase64: string;
+  imagePath: string;
   format: string;
   width: number;
   height: number;
@@ -316,7 +316,6 @@ export interface ComputerUseListWindowsResult {
 export interface ComputerUseGetAppStateParams {
   windowId: number;
   captureMode: ComputerUseCaptureMode;
-  maxImageDimension: number;
 }
 
 export interface ComputerUseGetAppStateResult {

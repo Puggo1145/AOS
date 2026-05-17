@@ -42,9 +42,6 @@ enum InteractiveCLICommandCatalog {
                 "--window-id", "\(target.windowId)",
                 "--mode", mode.rawValue,
             ]
-            if let maxImageDimension = try await context.io.promptOptional("Max image dimension (empty for 0): ") {
-                arguments += ["--max-image-dimension", maxImageDimension]
-            }
             if let screenshotOutput = try await context.io.promptOptional("Screenshot output path (empty to skip): ") {
                 arguments += ["--screenshot-output", screenshotOutput]
             }

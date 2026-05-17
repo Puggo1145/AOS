@@ -300,8 +300,7 @@ struct TurnDisplayPlanTests {
         #expect(windows.label(.object(["pid": .int(123)]), true) == "listing windows")
         #expect(appState.label(.object([
             "windowId": .int(456),
-            "captureMode": .string("vision"),
-            "maxImageDimension": .int(0)
+            "captureMode": .string("vision")
         ]), false) == "read app state")
 
         #expect(mouse.label(.object([

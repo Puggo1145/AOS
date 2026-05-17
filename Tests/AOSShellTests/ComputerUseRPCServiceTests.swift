@@ -1,6 +1,7 @@
 import AOSComputerUseKit
 import AOSRPCSchema
 import CoreGraphics
+import Foundation
 import Testing
 @testable import AOSShell
 
@@ -121,6 +122,49 @@ struct ComputerUseRPCServiceTests {
         #expect(result.stopped == true)
         #expect(result.pid == 123)
     }
+
+    @Test("handleGetAppState writes screenshot bytes to .aos tmp and returns a file reference")
+    func handleGetAppStateWritesScreenshotFileReference() async throws {
+        let core = FakeShellComputerUseClient()
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("aos-rpc-screenshot-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent(".aos", isDirectory: true)
+            .appendingPathComponent("tmp", isDirectory: true)
+        await core.setAppState(AppStateBundle(
+            pid: 123,
+            stateId: StateID("state-ref"),
+            treeMarkdown: "",
+            elementCount: 0,
+            screenshot: Screenshot(
+                imageData: Data([1, 2, 3]),
+                format: .png,
+                width: 10,
+                height: 20,
+                scaleFactor: 2,
+                coordinateSpace: ScreenshotCoordinateSpace(
+                    windowFrame: WindowBounds(x: 0, y: 0, width: 5, height: 10),
+                    pixelSize: CGSize(width: 10, height: 20)
+                ),
+                originalWidth: nil,
+                originalHeight: nil
+            ),
+            bundleId: nil,
+            appName: nil
+        ))
+        let service = ComputerUseRPCService(
+            core: core,
+            screenshotStore: ScreenshotFileStore(directory: tmpDir)
+        )
+
+        let result = try await service.handleGetAppState(
+            ComputerUseGetAppStateParams(windowId: 77, captureMode: .vision)
+        )
+
+        let imagePath = try #require(result.screenshot?.imagePath)
+        #expect(imagePath.hasPrefix(tmpDir.path))
+        #expect(imagePath.contains(".aos/tmp/computer-use-state-ref-"))
+        #expect(try Data(contentsOf: URL(fileURLWithPath: imagePath)) == Data([1, 2, 3]))
+    }
 }
 
 private actor FakeShellComputerUseClient: ShellComputerUseClient {
@@ -128,6 +172,7 @@ private actor FakeShellComputerUseClient: ShellComputerUseClient {
     private var apps: [AppInfo] = []
     private var activeAppSession: AppSessionResult?
     private var currentAppSessionError: Error?
+    private var appState: AppStateBundle?
 
     func setApps(_ apps: [AppInfo]) {
         self.apps = apps
@@ -139,6 +184,10 @@ private actor FakeShellComputerUseClient: ShellComputerUseClient {
 
     func setCurrentAppSessionError(_ error: Error) {
         self.currentAppSessionError = error
+    }
+
+    func setAppState(_ state: AppStateBundle) {
+        self.appState = state
     }
 
     func listApps(mode: AppListMode) async throws -> [AppInfo] {
@@ -153,10 +202,12 @@ private actor FakeShellComputerUseClient: ShellComputerUseClient {
 
     func getAppState(
         windowId: CGWindowID,
-        captureMode: CaptureMode,
-        maxImageDimension: Int
+        captureMode: CaptureMode
     ) async throws -> AppStateBundle {
-        calls.append("getAppState:\(windowId):\(captureMode.rawValue):\(maxImageDimension)")
+        calls.append("getAppState:\(windowId):\(captureMode.rawValue)")
+        if let appState {
+            return appState
+        }
         return AppStateBundle(
             pid: 123,
             stateId: StateID("state"),

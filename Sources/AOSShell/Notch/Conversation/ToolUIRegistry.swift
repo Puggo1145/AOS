@@ -314,7 +314,7 @@ public enum ToolUIRegistry {
             label: { _, isCalling in
                 "\(isCalling ? "reading" : "read") app state"
             },
-            callingBody: { args in computerKeyValueBody(args, keys: ["captureMode", "maxImageDimension"]) },
+            callingBody: { args in computerKeyValueBody(args, keys: ["captureMode"]) },
             resultBody: { _, output, _ in output },
             icon: "eye",
             summaryUnit: computerSummaryUnit

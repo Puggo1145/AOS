@@ -19,6 +19,10 @@ enum AOSPaths {
         aosDir.appendingPathComponent("run", isDirectory: true)
     }
 
+    static var tmpDir: URL {
+        aosDir.appendingPathComponent("tmp", isDirectory: true)
+    }
+
     static var pidFile: URL {
         runDir.appendingPathComponent("aos.pid")
     }

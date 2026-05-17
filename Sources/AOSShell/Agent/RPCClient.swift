@@ -490,12 +490,10 @@ public final class RPCClient: @unchecked Sendable {
     /// `maxLineBytes` cap. Mirror of the outbound `outboundPayloadTooLarge`
     /// guard in `request(...)`: the sidecar treats any inbound NDJSON line
     /// > 2 MiB as fatal and closes the channel, which would crash the agent
-    /// loop mid-conversation. A getAppState response (screenshot + AX tree)
-    /// is the only realistic way to hit this in production, but the screenshot
-    /// payload cap (`ScreenshotPayloadPolicy.defaultRawByteBudget`, 700KB raw
-    /// ≈ 1MB base64) plus the AX tree node cap (`maxRenderedNodes = 2000`)
-    /// can in pathological cases still combine past 2 MiB. Defending the
-    /// boundary here so any new oversize source can't take down the channel.
+    /// loop mid-conversation. Screenshot bytes are passed by `.aos/tmp/`
+    /// file reference, but large structured payloads can still exceed the
+    /// cap. Defending the boundary here so any oversize source can't take
+    /// down the channel.
     ///
     /// On overflow we substitute a `payloadTooLarge` error response keyed to
     /// the same id so the sidecar continuation gets resolved instead of

@@ -240,7 +240,6 @@ public enum ComputerUseError: Error, CustomStringConvertible, Sendable {
     case axElementEventUnavailable(String)
     case appSessionUnavailable(String)
     case diagnosticsUnavailable(String)
-    case payloadTooLarge(bytes: Int, limit: Int)
     case windowNotFound(windowId: CGWindowID)
 
     public var description: String {
@@ -267,8 +266,6 @@ public enum ComputerUseError: Error, CustomStringConvertible, Sendable {
             return "app session unavailable: \(message)"
         case .diagnosticsUnavailable(let message):
             return "diagnostics unavailable: \(message)"
-        case .payloadTooLarge(let bytes, let limit):
-            return "screenshot payload \(bytes) bytes exceeds raw limit \(limit) bytes after downscale retries"
         case .windowNotFound(let windowId):
             return "no window with id \(windowId)"
         }
@@ -510,8 +507,7 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
 
     public func getAppState(
         windowId: CGWindowID,
-        captureMode: CaptureMode = .vision,
-        maxImageDimension: Int = 0
+        captureMode: CaptureMode = .vision
     ) async throws -> AppStateBundle {
         let session = try requireActiveAppSession()
         let pid = session.pid
@@ -527,10 +523,7 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
 
         var shot: Screenshot?
         if captureMode == .vision {
-            shot = try await captureWithPayloadCap(
-                windowId: windowId,
-                initialMaxImageDimension: maxImageDimension
-            )
+            shot = try await captureWindow(windowId: windowId)
         }
 
         if let shot {
@@ -1246,48 +1239,16 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
         }
     }
 
-    private func captureWithPayloadCap(
-        windowId: CGWindowID,
-        initialMaxImageDimension: Int
-    ) async throws -> Screenshot {
-        try await Self.capturePayloadLoop(initialMaxImageDimension: initialMaxImageDimension) { [capture] dim in
-            do {
-                return try await capture.captureWindow(
-                    windowID: windowId,
-                    format: .png,
-                    quality: 95,
-                    maxImageDimension: dim
-                )
-            } catch let err as CaptureError {
-                throw ComputerUseError.captureUnavailable(err.description)
-            }
+    private func captureWindow(windowId: CGWindowID) async throws -> Screenshot {
+        do {
+            return try await capture.captureWindow(
+                windowID: windowId,
+                format: .png,
+                quality: 95
+            )
+        } catch let err as CaptureError {
+            throw ComputerUseError.captureUnavailable(err.description)
         }
-    }
-
-    static func capturePayloadLoop(
-        initialMaxImageDimension: Int,
-        maxAttempts: Int = 8,
-        capture: (Int) async throws -> Screenshot
-    ) async throws -> Screenshot {
-        var maxDim = initialMaxImageDimension
-        var lastBytes = 0
-        for _ in 0..<maxAttempts {
-            let shot = try await capture(maxDim)
-            lastBytes = shot.imageData.count
-            let currentDim = maxDim > 0 ? maxDim : max(shot.width, shot.height)
-            guard let next = ScreenshotPayloadPolicy.nextMaxDim(
-                currentBytes: lastBytes,
-                currentMaxDim: currentDim
-            ) else {
-                return shot
-            }
-            if next == 0 { break }
-            maxDim = next
-        }
-        throw ComputerUseError.payloadTooLarge(
-            bytes: lastBytes,
-            limit: ScreenshotPayloadPolicy.defaultRawByteBudget
-        )
     }
 }
 

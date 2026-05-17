@@ -58,8 +58,7 @@ public enum ComputerUseCLI {
             case .getAppState(let request):
                 let state = try await core.getAppState(
                     windowId: request.windowId,
-                    captureMode: request.captureMode,
-                    maxImageDimension: request.maxImageDimension
+                    captureMode: request.captureMode
                 )
                 if let outputPath = request.screenshotOutput,
                    let screenshot = state.screenshot {

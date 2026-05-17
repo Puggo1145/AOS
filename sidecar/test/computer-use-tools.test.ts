@@ -1,4 +1,7 @@
 import { test, expect } from "bun:test";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ToolRegistry } from "../src/agent/tools/registry";
 import { registerComputerUseTools } from "../src/agent/tools/computer-use";
 import { ComputerUseStateCache } from "../src/agent/session/computer-use-state-cache";
@@ -7,6 +10,13 @@ import { validateToolArguments } from "../src/llm/utils/validation";
 import { RPCMethod } from "../src/rpc/rpc-types";
 import type { Dispatcher } from "../src/rpc/dispatcher";
 import type { ComputerUseGetAppStateResult } from "../src/rpc/rpc-types";
+
+function tempScreenshotPath(bytes = "fake-image-bytes"): string {
+  const dir = mkdtempSync(join(tmpdir(), "aos-computer-use-screenshot-"));
+  const path = join(dir, "screenshot.png");
+  writeFileSync(path, bytes);
+  return path;
+}
 
 function makeDispatcherSpy(): { dispatcher: Dispatcher; calls: { method: string; params: object }[] } {
   const calls: { method: string; params: object }[] = [];
@@ -121,7 +131,7 @@ test("get_app_state records screenshot coordinate space for later mouse conversi
     elementCount: 4,
     treeMarkdown: "0 window",
     screenshot: {
-      imageBase64: "base64-image",
+      imagePath: tempScreenshotPath(),
       format: "png",
       width: 800,
       height: 600,
@@ -140,7 +150,7 @@ test("get_app_state records screenshot coordinate space for later mouse conversi
   registerComputerUseTools(registry, dispatcher);
 
   const result = await registry.get("get_app_state")!.execute(
-    { windowId: 77, captureMode: "vision", maxImageDimension: 0 },
+    { windowId: 77, captureMode: "vision" },
     {
       ...execContext(),
       computerUseStateCache: {
@@ -159,6 +169,53 @@ test("get_app_state records screenshot coordinate space for later mouse conversi
       stateId: "state-1",
       windowId: 77,
       coordinateSpace: screenshot.coordinateSpace,
+    },
+  ]);
+});
+
+test("get_app_state does not expose or forward image dimension controls", async () => {
+  const registry = new ToolRegistry();
+  const calls: { method: string; params: object }[] = [];
+  const dispatcher = {
+    request: async (_method: string, _params: object) => {
+      calls.push({ method: _method, params: _params });
+      return {
+        pid: 98530,
+        stateId: "state-1",
+        elementCount: 1,
+        treeMarkdown: "0 window",
+      } satisfies ComputerUseGetAppStateResult;
+    },
+  } as unknown as Dispatcher;
+  registerComputerUseTools(registry, dispatcher);
+
+  const tool = registry.get("get_app_state")!.spec;
+  expect(tool.parameters).toEqual({
+    type: "object",
+    properties: {
+      windowId: { type: "integer" },
+      captureMode: { type: "string", enum: ["vision", "ax"] },
+    },
+    required: ["windowId", "captureMode"],
+    additionalProperties: false,
+  });
+
+  await registry.get("get_app_state")!.execute(
+    { windowId: 77, captureMode: "vision" },
+    {
+      ...execContext(),
+      computerUseStateCache: {
+        lookup: () => undefined,
+        record: () => {},
+        clear: () => {},
+      },
+    } as any,
+  );
+
+  expect(calls).toEqual([
+    {
+      method: RPCMethod.computerUseGetAppState,
+      params: { windowId: 77, captureMode: "vision" },
     },
   ]);
 });
@@ -327,7 +384,6 @@ test("get_app_state rejects stale pid arguments before RPC dispatch", () => {
         pid: 1234,
         windowId: 77,
         captureMode: "ax",
-        maxImageDimension: 0,
       },
     }),
   ).toThrow(/pid/);
@@ -335,6 +391,7 @@ test("get_app_state rejects stale pid arguments before RPC dispatch", () => {
 
 test("get_app_state renders app state as a readable tagged text block", async () => {
   const registry = new ToolRegistry();
+  const imagePath = tempScreenshotPath("base64-image");
   const appState: ComputerUseGetAppStateResult = {
     pid: 98530,
     stateId: "state-1",
@@ -343,7 +400,7 @@ test("get_app_state renders app state as a readable tagged text block", async ()
     elementCount: 4,
     treeMarkdown: 'Window: "Apple", App: Safari.\n0 standard window Apple\n\t1 button Store',
     screenshot: {
-      imageBase64: "base64-image",
+      imagePath,
       format: "png",
       width: 800,
       height: 600,
@@ -361,7 +418,7 @@ test("get_app_state renders app state as a readable tagged text block", async ()
   registerComputerUseTools(registry, dispatcher);
 
   const result = await registry.get("get_app_state")!.execute(
-    { windowId: 77, captureMode: "vision", maxImageDimension: 0 },
+    { windowId: 77, captureMode: "vision" },
     execContext(),
   );
 
@@ -381,7 +438,45 @@ test("get_app_state renders app state as a readable tagged text block", async ()
       '\t1 button Store\n' +
       '</app_state>',
   });
-  expect(result.content[1]).toEqual({ type: "image", data: "base64-image", mimeType: "image/png" });
+  expect(result.content[1]).toEqual({ type: "image", data: "YmFzZTY0LWltYWdl", mimeType: "image/png" });
+  expect(existsSync(imagePath)).toBe(false);
+});
+
+test("get_app_state deletes screenshot file even when the model cannot receive images", async () => {
+  const registry = new ToolRegistry();
+  const imagePath = tempScreenshotPath("image-for-text-model");
+  const appState: ComputerUseGetAppStateResult = {
+    pid: 98530,
+    stateId: "state-1",
+    elementCount: 1,
+    treeMarkdown: "0 window",
+    screenshot: {
+      imagePath,
+      format: "png",
+      width: 800,
+      height: 600,
+      scaleFactor: 2,
+      coordinateSpace: {
+        windowFrame: { x: 10, y: 20, width: 400, height: 300 },
+        windowBounds: { x: 0, y: 0, width: 400, height: 300 },
+        pixelSize: { width: 800, height: 600 },
+      },
+    },
+  };
+  const dispatcher = {
+    request: async () => appState,
+  } as unknown as Dispatcher;
+  registerComputerUseTools(registry, dispatcher);
+
+  const context = execContext();
+  context.model.input = ["text"];
+  const result = await registry.get("get_app_state")!.execute(
+    { windowId: 77, captureMode: "vision" },
+    context,
+  );
+
+  expect(result.content).toHaveLength(1);
+  expect(existsSync(imagePath)).toBe(false);
 });
 
 test("event tool descriptions expose variant-specific required fields and enum values", () => {

@@ -1,8 +1,11 @@
 import { supportsVision } from "../../llm/models/capabilities";
 import type { ToolResultContent } from "../../llm/types";
+import { readFileSync, unlinkSync } from "node:fs";
 import {
   RPCMethod,
   type ComputerUseBounds,
+  type ComputerUseCaptureMode,
+  type ComputerUseGetAppStateParams,
   type ComputerUseGetAppStateResult,
   type ComputerUseMouseEvent,
   type ComputerUsePoint,
@@ -84,12 +87,12 @@ export function createComputerUseTools(dispatcher: Dispatcher): ToolHandler[] {
         properties: {
           windowId: { type: "integer" },
           captureMode: { type: "string", enum: ["vision", "ax"] },
-          maxImageDimension: { type: "integer", description: "0 means no explicit dimension cap" },
         },
-        required: ["windowId", "captureMode", "maxImageDimension"],
+        required: ["windowId", "captureMode"],
         additionalProperties: false,
       },
       dispatcher,
+      prepare: getAppStateParams,
       render: renderAppStateResult,
       afterResult: recordAppStateCoordinateSpace,
     }),
@@ -284,6 +287,21 @@ function stopAppSessionParams(ctx: ToolExecContext): { pid: number } {
     throw new ToolUserError("no app session was started by this agent session.");
   }
   return { pid: ctx.computerUseAppSession.pid };
+}
+
+function getAppStateParams(args: ComputerUseArgs): ComputerUseGetAppStateParams {
+  return {
+    windowId: requireInteger(args, "windowId"),
+    captureMode: requireCaptureMode(args),
+  };
+}
+
+function requireCaptureMode(args: ComputerUseArgs): ComputerUseCaptureMode {
+  const captureMode = requireString(args, "captureMode");
+  if (captureMode !== "vision" && captureMode !== "ax") {
+    throw new ToolUserError(`captureMode must be "vision" or "ax".`);
+  }
+  return captureMode;
 }
 
 function mouseEventParams(args: ComputerUseArgs, ctx: ToolExecContext): ComputerUsePostMouseEventParams {
@@ -531,14 +549,27 @@ function renderAppStateResult(result: unknown, ctx: ToolExecContext): ToolResult
   const state = result as ComputerUseGetAppStateResult;
   const screenshot = state.screenshot;
   const content: ToolResultContent[] = [{ type: "text", text: renderAppStateText(state) }];
-  if (screenshot && supportsVision(ctx.model)) {
-    content.push({
-      type: "image",
-      data: screenshot.imageBase64,
-      mimeType: screenshot.format === "jpeg" ? "image/jpeg" : "image/png",
-    });
+  if (screenshot) {
+    const imageContent = consumeScreenshotFile(screenshot, ctx);
+    if (imageContent) content.push(imageContent);
   }
   return content;
+}
+
+function consumeScreenshotFile(
+  screenshot: NonNullable<ComputerUseGetAppStateResult["screenshot"]>,
+  ctx: ToolExecContext,
+): ToolResultContent | null {
+  try {
+    if (!supportsVision(ctx.model)) return null;
+    return {
+      type: "image",
+      data: readFileSync(screenshot.imagePath).toString("base64"),
+      mimeType: screenshot.format === "jpeg" ? "image/jpeg" : "image/png",
+    };
+  } finally {
+    unlinkSync(screenshot.imagePath);
+  }
 }
 
 function renderAppStateText(state: ComputerUseGetAppStateResult): string {

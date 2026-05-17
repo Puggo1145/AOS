@@ -65,13 +65,11 @@ struct ParsedCommand {
         case "get-app-state":
             let windowId = try options.requiredWindowID("--window-id")
             let captureMode = try options.optionalEnum("--mode", CaptureMode.self) ?? .vision
-            let maxImageDimension = try options.optionalInt("--max-image-dimension") ?? 0
             let screenshotOutput = try options.optionalString("--screenshot-output")
             try options.rejectUnused()
             command = .getAppState(AppStateRequest(
                 windowId: windowId,
                 captureMode: captureMode,
-                maxImageDimension: maxImageDimension,
                 screenshotOutput: screenshotOutput
             ))
         case "focus-window":
@@ -480,7 +478,6 @@ struct ComputerUseCLIInvariantError: Error, CustomStringConvertible {
 struct AppStateRequest: Sendable {
     let windowId: CGWindowID
     let captureMode: CaptureMode
-    let maxImageDimension: Int
     let screenshotOutput: String?
 }
 

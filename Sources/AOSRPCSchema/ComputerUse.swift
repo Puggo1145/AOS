@@ -126,7 +126,7 @@ public struct ComputerUsePixelSize: Codable, Sendable, Equatable {
 }
 
 public struct ComputerUseScreenshot: Codable, Sendable, Equatable {
-    public let imageBase64: String
+    public let imagePath: String
     public let format: String
     public let width: Int
     public let height: Int
@@ -136,7 +136,7 @@ public struct ComputerUseScreenshot: Codable, Sendable, Equatable {
     public let originalHeight: Int?
 
     public init(
-        imageBase64: String,
+        imagePath: String,
         format: String,
         width: Int,
         height: Int,
@@ -145,7 +145,7 @@ public struct ComputerUseScreenshot: Codable, Sendable, Equatable {
         originalWidth: Int?,
         originalHeight: Int?
     ) {
-        self.imageBase64 = imageBase64
+        self.imagePath = imagePath
         self.format = format
         self.width = width
         self.height = height
@@ -191,16 +191,13 @@ public struct ComputerUseListWindowsResult: Codable, Sendable, Equatable {
 public struct ComputerUseGetAppStateParams: Codable, Sendable, Equatable {
     public let windowId: Int
     public let captureMode: ComputerUseCaptureMode
-    public let maxImageDimension: Int
 
     public init(
         windowId: Int,
-        captureMode: ComputerUseCaptureMode,
-        maxImageDimension: Int
+        captureMode: ComputerUseCaptureMode
     ) {
         self.windowId = windowId
         self.captureMode = captureMode
-        self.maxImageDimension = maxImageDimension
     }
 }
 

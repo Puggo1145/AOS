@@ -185,7 +185,6 @@ struct AppStateOutput: Encodable, ReadableOutput {
     let pid: pid_t
     let windowId: CGWindowID
     let mode: String
-    let maxImageDimension: Int
     let appName: String?
     let bundleId: String?
     let stateId: String
@@ -197,7 +196,6 @@ struct AppStateOutput: Encodable, ReadableOutput {
         self.pid = state.pid
         self.windowId = request.windowId
         self.mode = request.captureMode.rawValue
-        self.maxImageDimension = request.maxImageDimension
         self.appName = state.appName
         self.bundleId = state.bundleId
         self.stateId = state.stateId.raw

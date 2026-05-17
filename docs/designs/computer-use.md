@@ -53,7 +53,7 @@ Sources/AOSComputerUseKit/
 - `listApps(mode:) -> [AppInfo]`
 - `getAppType(pid:) -> AppTypeResult`
 - `listWindows(pid:) -> [WindowInfo]`
-- `getAppState(windowId:captureMode:maxImageDimension:) -> AppStateBundle`
+- `getAppState(windowId:captureMode:) -> AppStateBundle`
 - `startAppSession(pid:windowId:) -> AppSessionResult`
 - `stopAppSession() -> AppSessionResult`
 - `currentAppSession() -> AppSessionResult`
@@ -125,7 +125,7 @@ Sidecar agent 只暴露以下业务工具名，并一一映射到 `ComputerUseCo
 
 - `list_apps` -> `listApps(mode:)`
 - `list_windows` -> `listWindows(pid:)`
-- `get_app_state` -> `getAppState(windowId:captureMode:maxImageDimension:)`
+- `get_app_state` -> `getAppState(windowId:captureMode:)`
 - `start_app_session` -> `startAppSession(pid:windowId:)`
 - `stop_app_session` -> `stopAppSession()`
 - `use_mouse` -> `postMouseEvent(windowId:stateId:event:)`

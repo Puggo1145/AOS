@@ -15,8 +15,7 @@ protocol ShellComputerUseClient: Sendable {
     func listWindows(pid: pid_t) async throws -> [WindowInfo]
     func getAppState(
         windowId: CGWindowID,
-        captureMode: CaptureMode,
-        maxImageDimension: Int
+        captureMode: CaptureMode
     ) async throws -> AppStateBundle
     func startAppSession(pid: pid_t, windowId: CGWindowID) async throws -> AppSessionResult
     func stopAppSession() async throws -> AppSessionResult
@@ -35,6 +34,26 @@ protocol ShellComputerUseClient: Sendable {
     ) async throws -> AXElementEventResult
 }
 
+protocol ScreenshotFileWriting: Sendable {
+    func write(_ screenshot: Screenshot, stateId: String) throws -> String
+}
+
+struct ScreenshotFileStore: ScreenshotFileWriting {
+    let directory: URL
+
+    init(directory: URL = AOSPaths.tmpDir) {
+        self.directory = directory
+    }
+
+    func write(_ screenshot: Screenshot, stateId: String) throws -> String {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fileName = "computer-use-\(stateId)-\(UUID().uuidString).\(screenshot.format.rawValue)"
+        let url = directory.appendingPathComponent(fileName, isDirectory: false)
+        try screenshot.imageData.write(to: url, options: .atomic)
+        return url.path
+    }
+}
+
 struct LiveShellComputerUseClient: ShellComputerUseClient {
     let core: ComputerUseCore
 
@@ -48,13 +67,11 @@ struct LiveShellComputerUseClient: ShellComputerUseClient {
 
     func getAppState(
         windowId: CGWindowID,
-        captureMode: CaptureMode,
-        maxImageDimension: Int
+        captureMode: CaptureMode
     ) async throws -> AppStateBundle {
         try await core.getAppState(
             windowId: windowId,
-            captureMode: captureMode,
-            maxImageDimension: maxImageDimension
+            captureMode: captureMode
         )
     }
 
@@ -99,9 +116,14 @@ struct LiveShellComputerUseClient: ShellComputerUseClient {
 
 final class ComputerUseRPCService: Sendable {
     private let core: any ShellComputerUseClient
+    private let screenshotStore: any ScreenshotFileWriting
 
-    init(core: any ShellComputerUseClient) {
+    init(
+        core: any ShellComputerUseClient,
+        screenshotStore: any ScreenshotFileWriting = ScreenshotFileStore()
+    ) {
         self.core = core
+        self.screenshotStore = screenshotStore
     }
 
     convenience init(rpc: RPCClient, core: any ShellComputerUseClient) {
@@ -188,10 +210,9 @@ final class ComputerUseRPCService: Sendable {
     func handleGetAppState(_ params: ComputerUseGetAppStateParams) async throws -> ComputerUseGetAppStateResult {
         let state = try await core.getAppState(
             windowId: try windowId(params.windowId),
-            captureMode: CaptureMode(params.captureMode),
-            maxImageDimension: params.maxImageDimension
+            captureMode: CaptureMode(params.captureMode)
         )
-        return ComputerUseGetAppStateResult(state)
+        return try ComputerUseGetAppStateResult(state, screenshotStore: screenshotStore)
     }
 
     func handleStartAppSession(_ params: ComputerUseStartAppSessionParams) async throws -> ComputerUseAppSessionResult {
@@ -341,9 +362,9 @@ private extension ComputerUseCoordinateSpace {
 }
 
 private extension ComputerUseScreenshot {
-    init(_ screenshot: Screenshot) {
+    init(_ screenshot: Screenshot, stateId: String, screenshotStore: any ScreenshotFileWriting) throws {
         self.init(
-            imageBase64: screenshot.imageData.base64EncodedString(),
+            imagePath: try screenshotStore.write(screenshot, stateId: stateId),
             format: screenshot.format.rawValue,
             width: screenshot.width,
             height: screenshot.height,
@@ -356,13 +377,15 @@ private extension ComputerUseScreenshot {
 }
 
 private extension ComputerUseGetAppStateResult {
-    init(_ state: AppStateBundle) {
+    init(_ state: AppStateBundle, screenshotStore: any ScreenshotFileWriting) throws {
         self.init(
             pid: Int(state.pid),
             stateId: state.stateId.raw,
             treeMarkdown: state.treeMarkdown,
             elementCount: state.elementCount,
-            screenshot: state.screenshot.map(ComputerUseScreenshot.init),
+            screenshot: try state.screenshot.map {
+                try ComputerUseScreenshot($0, stateId: state.stateId.raw, screenshotStore: screenshotStore)
+            },
             bundleId: state.bundleId,
             appName: state.appName
         )

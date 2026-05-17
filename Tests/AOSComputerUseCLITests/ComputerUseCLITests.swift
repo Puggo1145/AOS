@@ -167,8 +167,7 @@ struct ComputerUseCLITests {
             arguments: [
                 "get-app-state",
                 "--window-id", "456",
-                "--mode", "vision",
-                "--max-image-dimension", "1024"
+                "--mode", "vision"
             ],
             core: fake,
             permissions: FakePermissionClient()
@@ -177,7 +176,6 @@ struct ComputerUseCLITests {
         #expect(await fake.requestedStatePID == 123)
         #expect(await fake.requestedStateWindowID == 456)
         #expect(await fake.requestedCaptureMode == .vision)
-        #expect(await fake.requestedMaxImageDimension == 1024)
         #expect(result.stdout.contains("App State"))
         #expect(result.stdout.contains("state_123"))
         #expect(result.stdout.contains("AX elements: 1"))
@@ -2033,7 +2031,6 @@ private actor FakeComputerUseCore: ComputerUseCoreClient, ComputerUseDiagnostics
     private(set) var requestedStatePID: pid_t?
     private(set) var requestedStateWindowID: CGWindowID?
     private(set) var requestedCaptureMode: CaptureMode?
-    private(set) var requestedMaxImageDimension: Int?
     private(set) var requestedFocusPID: pid_t?
     private(set) var requestedFocusWindowID: CGWindowID?
     private(set) var requestedStartAppSessionPID: pid_t?
@@ -2108,14 +2105,12 @@ private actor FakeComputerUseCore: ComputerUseCoreClient, ComputerUseDiagnostics
 
     func getAppState(
         windowId: CGWindowID,
-        captureMode: CaptureMode,
-        maxImageDimension: Int
+        captureMode: CaptureMode
     ) async throws -> AppStateBundle {
         let pid = try await currentAppSession().pid
         requestedStatePID = pid
         requestedStateWindowID = windowId
         requestedCaptureMode = captureMode
-        requestedMaxImageDimension = maxImageDimension
         return try #require(state)
     }
 

@@ -11,8 +11,7 @@ public protocol ComputerUseCoreClient: Sendable {
     func listWindows(pid: pid_t) async throws -> [WindowInfo]
     func getAppState(
         windowId: CGWindowID,
-        captureMode: CaptureMode,
-        maxImageDimension: Int
+        captureMode: CaptureMode
     ) async throws -> AppStateBundle
     /// Starts an app session and keeps the target app visually active until stopped or switched.
     func startAppSession(pid: pid_t, windowId: CGWindowID) async throws -> AppSessionResult

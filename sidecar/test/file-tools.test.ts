@@ -52,7 +52,7 @@ test("read defaults to 500 lines from start and appends remaining-line marker", 
   expect(t.startsWith("1 | line-1\n2 | line-2")).toBe(true);
   expect(t).toContain("500 | line-500");
   expect(t).not.toContain("501 | line-501");
-  expect(t.endsWith("[还有 3 more lines]")).toBe(true);
+  expect(t.endsWith("[You still have 3 more lines to read]")).toBe(true);
   expect(r.details?.truncated).toBe(true);
   expect(r.details?.returnedLines).toBe(500);
 });
@@ -70,7 +70,7 @@ test("read returns an inclusive start/end range and reports lines after end", as
   await Bun.write(path, "a\nb\nc\nd\ne\nf");
   const r = await createReadTool().execute({ path, start: 3, end: 4 }, ctx());
   expect(r.isError).toBe(false);
-  expect(textOf(r)).toBe("3 | c\n4 | d\n[还有 2 more lines]");
+  expect(textOf(r)).toBe("3 | c\n4 | d\n[You still have 2 more lines to read]");
   expect(r.details?.returnedLines).toBe(2);
   expect(r.details?.truncated).toBe(true);
 });
@@ -86,7 +86,7 @@ test("read with start and no end returns 500 lines from start", async () => {
   expect(t.startsWith("501 | line-501\n502 | line-502")).toBe(true);
   expect(t).toContain("1000 | line-1000");
   expect(t).not.toContain("1001 | line-1001");
-  expect(t.endsWith("[还有 2 more lines]")).toBe(true);
+  expect(t.endsWith("[You still have 2 more lines to read]")).toBe(true);
   expect(r.details?.returnedLines).toBe(500);
 });
 
