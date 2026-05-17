@@ -107,9 +107,10 @@ File:
 7. Run the delayed active-state guard while allowing the target app to remain
    active.
 
-`stopAppSession()` runs the cleanup path: read the current frontmost window,
-enumerate current windows for the session pid, and deactivate only session
-windows that are not frontmost.
+`stopAppSession()` releases the app session and Computer Use overlays. It does
+not send target-side defocus cleanup, because that private event can leave the
+target window unable to recover normal user mouse interaction after the session
+ends.
 
 Keyboard dispatch does not validate coordinates because the event goes to the
 target process's focused element rather than a point inside the window.

@@ -58,6 +58,7 @@ Sources/AOSComputerUseKit/
 - `stopAppSession() -> AppSessionResult`
 - `currentAppSession() -> AppSessionResult`
 - `postMouseEvent(windowId:event:) -> WindowMouseEventResult`
+- `postMouseEvent(windowId:stateId:event:) -> WindowMouseEventResult`
 - `postKeyboardEvent(windowId:event:) -> WindowKeyboardEventResult`
 - `postEventToAXElement(windowId:stateId:elementIndex:event:) -> AXElementEventResult`
 
@@ -86,16 +87,22 @@ Scroll Down`，同时保留 `ID`、`Description`、`Placeholder`、`Help` 等定
 比缺省摘要更误导。菜单栏只输出 closed menu bar items，不展开 closed `AXMenu` child；
 多段静态文本组会合并成一条 text，低价值 `_NS:` id 和 implementation-only actions 会被过滤。
 
-`BackgroundMouseEvent` 是鼠标行为层，当前表达 click 和 drag。`BackgroundMouseEventDeliveryRoute`
+`BackgroundMouseEvent` 是鼠标行为层，当前表达 click 和 drag。`postMouseEvent(windowId:event:)`
+接收已解析的 global screen point，供 CLI 和 diagnostics 使用；agent-facing
+`postMouseEvent(windowId:stateId:event:)` 接收同一次 `getAppState` screenshot 的
+local pixel coordinate，并在 Shell/Core 内用当前 window bounds 解析成最终 screen
+point。这样窗口在截图和点击之间只移动、未 resize 时，点击会跟随当前窗口位置，而不是
+固化在截图时的旧 origin 上。`BackgroundMouseEventDeliveryRoute`
 是投放路径层，当前将 AppKit route 和 web-content SkyLight route 分开。`ComputerUseCore`
 只编排 validation、app session、focus、event post、window-order guard 和 cleanup，不保留
 left-click 兼容包装。`startAppSession` 是唯一能切换 current app session 的入口；
 app-state read、mouse / keyboard event post 和 AX element event post 不接收 pid，
 必须在 active app session 内按 windowId 投放。
 core 只在 session 中记录 pid；每次 event post 都用 current session pid 校验传入
-windowId 的 ownership，并在需要投放前重新 focus 该 window。`stopAppSession` 现场读取
-frontmost window，按 session pid 重新枚举当前所有 layer-0 windows，并只对非 frontmost
-的 session windows 执行 target deactivation cleanup。
+windowId 的 ownership，并在需要投放前重新 focus 该 window。`stopAppSession` 释放
+当前 active app session 和 Computer Use 视觉 overlay，不再向 target window 发送
+target-side defocus cleanup。该私有 defocus 事件会让部分窗口在 session 结束后停留在
+无法响应真实用户鼠标点击/拖拽的 inactive 状态。
 
 AppKit route 只支持 left/right click。Drag 仍是鼠标行为层的一种 event，但只由
 web-content route 承接。
@@ -121,7 +128,7 @@ Sidecar agent 只暴露以下业务工具名，并一一映射到 `ComputerUseCo
 - `get_app_state` -> `getAppState(windowId:captureMode:maxImageDimension:)`
 - `start_app_session` -> `startAppSession(pid:windowId:)`
 - `stop_app_session` -> `stopAppSession()`
-- `use_mouse` -> `postMouseEvent(windowId:event:)`
+- `use_mouse` -> `postMouseEvent(windowId:stateId:event:)`
 - `use_keyboard` -> `postKeyboardEvent(windowId:event:)`
 - `perform_AX_action` -> `postEventToAXElement(windowId:stateId:elementIndex:event:)`
 
@@ -206,8 +213,8 @@ target pair's click state increasing from 1 through `count`.
 `ComputerUseCore.stopAppSession`。`start-app-session` 需要 pid 和一个用于进入 session 的
 windowId；session 内只记录 pid。后续 mouse / keyboard / trace / measurement /
 post-cursor 命令每次都要求选择当前 windowId，并使用 current session pid 校验 window
-ownership。没有 active app session 时 event command 直接失败。`stop-app-session` 重新枚举
-session pid 下当前所有窗口，只对非 frontmost 的 session windows 执行 deactivate cleanup。
+ownership。没有 active app session 时 event command 直接失败。`stop-app-session` 释放
+当前 active app session 和相关视觉 overlay，不对 session windows 执行 deactivate cleanup。
 `get-app-state` 和 `post-ax-event` 使用 active app session；它们要求传入当前 session
 内的 windowId，并通过 session pid 校验 ownership。`post-ax-event` 还要求传入
 `stateId` 和 `elementIndex`，并投放 `--focus`、`--action`、`--set-value`、
@@ -224,7 +231,7 @@ session pid 下当前所有窗口，只对非 frontmost 的 session windows 执�
 prompt 输入，输入完成后会清理 prompt 行。命令结果统一输出在可替换的 `Output` / `Error`
 section，随后 command palette 在自己的可清理区域重绘。该模式用于本地诊断 app session lease：
 可以先 `start-app-session`，继续投放 mouse / keyboard event 或观察状态，最后显式
-`stop-app-session` 走 cleanup 路径。interactive host 正常退出时也会尝试 finally-style
+`stop-app-session` 释放 session。interactive host 正常退出时也会尝试 finally-style
 `stopAppSession`；可执行进程收到 `SIGINT` / `SIGTERM` 时会尽力先清理 active app session
 再退出。
 

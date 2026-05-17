@@ -25,9 +25,6 @@ struct KeyboardEventTests {
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.record(.focus(pid: pid, windowId: windowId))
             },
-            deactivateWindowWithoutRaising: { pid, windowId in
-                await recorder.record(.deactivate(pid: pid, windowId: windowId))
-            },
             activateApplication: { pid in
                 await recorder.record(.activate(pid: pid))
                 return true
@@ -67,9 +64,6 @@ struct KeyboardEventTests {
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.record(.focus(pid: pid, windowId: windowId))
             },
-            deactivateWindowWithoutRaising: { pid, windowId in
-                await recorder.record(.deactivate(pid: pid, windowId: windowId))
-            },
             activateApplication: { pid in
                 await recorder.record(.activate(pid: pid))
                 return true
@@ -94,7 +88,6 @@ struct KeyboardEventTests {
             .focus(pid: 123, windowId: 456),
             .focus(pid: 123, windowId: 456),
             .keyboard(event: event, target: BackgroundKeyboardEventTarget(pid: 123, windowId: 456)),
-            .deactivate(pid: 123, windowId: 456),
         ])
     }
 
@@ -107,10 +100,6 @@ struct KeyboardEventTests {
             },
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.record(.focus(pid: pid, windowId: windowId))
-            },
-            deactivateWindowWithoutRaising: { _, _ in },
-            postKeyboardEvent: { event, target in
-                await recorder.record(.keyboard(event: event, target: target))
             }
         )
 
@@ -134,9 +123,6 @@ struct KeyboardEventTests {
             },
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.record(.focus(pid: pid, windowId: windowId))
-            },
-            deactivateWindowWithoutRaising: { pid, windowId in
-                await recorder.record(.deactivate(pid: pid, windowId: windowId))
             },
             postKeyboardEvent: { event, target in
                 await recorder.record(.keyboard(event: event, target: target))
@@ -174,9 +160,6 @@ struct KeyboardEventTests {
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.record(.focus(pid: pid, windowId: windowId))
             },
-            deactivateWindowWithoutRaising: { pid, windowId in
-                await recorder.record(.deactivate(pid: pid, windowId: windowId))
-            },
             activateApplication: { pid in
                 await recorder.record(.activate(pid: pid))
                 return true
@@ -196,7 +179,6 @@ struct KeyboardEventTests {
         #expect(await recorder.events == [
             .focus(pid: 123, windowId: 456),
             .focus(pid: 123, windowId: 456),
-            .deactivate(pid: 123, windowId: 456),
         ])
     }
 
@@ -365,7 +347,6 @@ private actor KeyboardChainRecorder {
 
 private enum KeyboardChainEvent: Equatable {
     case focus(pid: pid_t, windowId: CGWindowID)
-    case deactivate(pid: pid_t, windowId: CGWindowID)
     case activate(pid: pid_t)
     case keyboard(event: BackgroundKeyboardEvent, target: BackgroundKeyboardEventTarget)
 }

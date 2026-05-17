@@ -355,6 +355,7 @@ export type ComputerUseMouseEvent =
 
 export interface ComputerUsePostMouseEventParams {
   windowId: number;
+  stateId: string;
   event: ComputerUseMouseEvent;
 }
 

@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+@testable import AOSComputerUseKit
 @testable import AOSShell
 @testable import AOSRPCSchema
 
@@ -96,6 +97,78 @@ struct TurnDisplayPlanTests {
 
         #expect(plan.prompt == "Initial prompt")
         #expect(plan.latestAgentMessage == nil)
+    }
+
+    @Test("virtual mouse activity shows only open thinking")
+    func virtualMouseActivityShowsOnlyOpenThinking() {
+        let openThinking = turn(
+            id: "current",
+            status: .working,
+            segments: [.thinking(ThinkingSegment(text: "checking", startedAt: Date()))]
+        )
+        let closedThinking = turn(
+            id: "current",
+            status: .working,
+            segments: [.thinking(ThinkingSegment(
+                text: "checking",
+                startedAt: Date(),
+                endedAt: Date(),
+                isOpenForAppend: false
+            ))]
+        )
+
+        #expect(VirtualMouseActivityPlanner.activity(for: openThinking) == .thinking)
+        #expect(VirtualMouseActivityPlanner.activity(for: closedThinking) == nil)
+    }
+
+    @Test("virtual mouse activity uses active and past tool labels")
+    func virtualMouseActivityUsesToolLabels() {
+        let callingRecord = tool(id: "A", name: "bash", status: .calling)
+        let completedRecord = tool(id: "A", name: "bash", status: .completed)
+        let callingTurn = turn(
+            id: "calling",
+            status: .working,
+            segments: [.toolCall(id: "A")],
+            toolCalls: [callingRecord]
+        )
+        let completedTurn = turn(
+            id: "completed",
+            status: .working,
+            segments: [.toolCall(id: "A")],
+            toolCalls: [completedRecord]
+        )
+
+        #expect(VirtualMouseActivityPlanner.activity(for: callingTurn) == .toolCall(label: "using bash"))
+        #expect(VirtualMouseActivityPlanner.activity(for: completedTurn) == .toolCall(label: "used bash"))
+    }
+
+    @Test("virtual mouse activity hides after a later reply")
+    func virtualMouseActivityHidesAfterReply() {
+        let completedRecord = tool(id: "A", name: "bash", status: .completed)
+        let current = turn(
+            id: "current",
+            status: .working,
+            segments: [
+                .toolCall(id: "A"),
+                .reply(ReplySegment(text: "Done."))
+            ],
+            toolCalls: [completedRecord]
+        )
+
+        #expect(VirtualMouseActivityPlanner.activity(for: current) == nil)
+    }
+
+    @Test("virtual mouse activity hides for settled turns")
+    func virtualMouseActivityHidesForSettledTurns() {
+        let completedRecord = tool(id: "A", name: "bash", status: .completed)
+        let current = turn(
+            id: "current",
+            status: .done,
+            segments: [.toolCall(id: "A")],
+            toolCalls: [completedRecord]
+        )
+
+        #expect(VirtualMouseActivityPlanner.activity(for: current) == nil)
     }
 
     @Test("completed tool run before next reply collapses into one display segment")
@@ -334,7 +407,9 @@ struct TurnDisplayPlanTests {
     private func turn(
         id: String,
         prompt: String? = nil,
-        segments: [TurnSegment] = []
+        status: AgentStatus = .done,
+        segments: [TurnSegment] = [],
+        toolCalls: [ToolCallRecord] = []
     ) -> ConversationTurn {
         ConversationTurn(
             id: id,
@@ -345,8 +420,9 @@ struct TurnDisplayPlanTests {
                 behaviorSummaries: []
             ),
             reply: "",
-            status: .done,
+            status: status,
             errorMessage: nil,
+            toolCalls: toolCalls,
             segments: segments
         )
     }

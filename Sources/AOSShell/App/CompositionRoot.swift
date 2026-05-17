@@ -127,8 +127,24 @@ public final class CompositionRoot {
         self.sessionService = session
         let store = SessionStore(rpc: client, sessionService: session)
         session.sessionStore = store
-        let agent = AgentService(rpc: client, sessionStore: store)
+        let agent = AgentService(
+            rpc: client,
+            sessionStore: store,
+            stopComputerUseAppSessionAfterManualAbort: { [computerUseCore] in
+                do {
+                    _ = try await computerUseCore.currentAppSession()
+                } catch ComputerUseError.appSessionUnavailable {
+                    return
+                }
+                _ = try await computerUseCore.stopAppSession()
+            }
+        )
         self.agentService = agent
+        ComputerUseWindowHighlightControls.setStopHandler { [weak agent] in
+            Task { @MainActor in
+                await agent?.cancel()
+            }
+        }
 
         // Dev Mode is purely observational: the service subscribes to
         // `dev.context.changed` and the controller owns its own NSWindow.
@@ -314,6 +330,7 @@ public final class CompositionRoot {
         providerService = nil
         configService = nil
         computerUseRPCService = nil
+        ComputerUseWindowHighlightControls.setStopHandler(nil)
         agentService = nil
         sessionService = nil
         sidecarSupervisor.expectTermination()

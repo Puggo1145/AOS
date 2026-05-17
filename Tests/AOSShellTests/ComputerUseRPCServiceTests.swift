@@ -38,6 +38,7 @@ struct ComputerUseRPCServiceTests {
         _ = try await service.handlePostMouseEvent(
             ComputerUsePostMouseEventParams(
                 windowId: 77,
+                stateId: "state-1",
                 event: .click(
                     ComputerUseMouseClickEvent(
                         button: .left,
@@ -48,7 +49,7 @@ struct ComputerUseRPCServiceTests {
             )
         )
 
-        #expect(await core.calls == ["postMouseEvent:77:left click at 12,34 x2"])
+        #expect(await core.calls == ["postMouseEvent:77:state-1:left click at 12,34 x2"])
     }
 
     @Test("handlePerformAXAction maps semantic AX action payload")
@@ -190,9 +191,10 @@ private actor FakeShellComputerUseClient: ShellComputerUseClient {
 
     func postMouseEvent(
         windowId: CGWindowID,
+        stateId: StateID,
         event: BackgroundMouseEvent
     ) async throws -> WindowMouseEventResult {
-        calls.append("postMouseEvent:\(windowId):\(event)")
+        calls.append("postMouseEvent:\(windowId):\(stateId.raw):\(event)")
         return WindowMouseEventResult(pid: 123, windowId: windowId, event: event)
     }
 

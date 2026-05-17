@@ -44,8 +44,8 @@ Production flow:
    without raise.
 6. It posts the web-content mouse event sequence.
 7. It runs the active-state guard after observable mouse-post stages.
-8. It keeps the target app session open; target-side deactivation is deferred
-   until `stopAppSession` or an automatic switch to a different target.
+8. It keeps the target app session open until `stopAppSession` or an automatic
+   switch to a different target releases the session lease and overlays.
 9. It runs the delayed active-state guard for 300ms at 5ms cadence while
    allowing the target app to remain active.
 
@@ -95,14 +95,9 @@ Important invariants:
 - Never raise or order the target window as part of focus.
 - Let private-symbol or OSStatus failures bubble up.
 
-When the app session stops, cleanup uses a target-side defocus only:
-
-```text
-SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: 0x02))
-```
-
-That clears the target's background active/key state without deactivating the
-user's original front window.
+When the app session stops, cleanup no longer uses target-side defocus. Live
+validation showed that private event can leave the target window stuck inactive
+for real user clicks and drags after AOS releases control.
 
 ## Web Content Mouse Sequence
 
@@ -200,9 +195,8 @@ The active-state guard runs at three points:
 - during the delayed guard: 0ms, then every 5ms until 300ms.
 
 While an app session is open, the active-state guard treats target-active state
-as allowed and only reacts to order/focus violations. When `stopAppSession`
-runs cleanup, the guard again treats lingering target-active state as a
-violation and reactivates the original front app if needed.
+as allowed and only reacts to order/focus violations. `stopAppSession` releases
+the session without running a defocus cleanup pass.
 
 ## Verified Behavior
 
@@ -261,7 +255,7 @@ run, not total duration.
 
 - `Sources/AOSComputerUseKit/ComputerUseCore.swift`
   - Orchestrates validation, app session, target focus, mouse dispatch,
-    cleanup, and the active-state guard.
+    session release, and the active-state guard.
 - `Sources/AOSComputerUseKit/Input/BackgroundMouseEvent.swift`
   - Defines coordinate mouse event intent, independent from delivery path.
 - `Sources/AOSComputerUseKit/Input/BackgroundMouseEventDelivery.swift`
@@ -270,7 +264,8 @@ run, not total duration.
   - Implements event stamping, AppKit event posting, and the SkyLight
     web-content mouse-event sequence.
 - `Sources/AOSComputerUseKit/Windows/SkyLightWindowFocuser.swift`
-  - Posts target-side focus/defocus event records without raising.
+  - Posts target-side focus records without raising; defocus remains a
+    low-level diagnostic primitive.
 - `Sources/AOSComputerUseKit/Windows/WindowOrderGuardian.swift`
   - Defines protected windows and protected-covered diagnostics.
 - `Sources/AOSComputerUseCLI/ComputerUseCLI.swift`

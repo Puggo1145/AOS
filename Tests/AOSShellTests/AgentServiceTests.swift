@@ -21,7 +21,9 @@ struct AgentServiceTests {
     /// Build a real RPCClient over a closed pipe pair so init() succeeds —
     /// no RPC traffic actually flows in these tests; we exercise handlers
     /// and the test seams directly.
-    private func makeService() -> AgentService {
+    private func makeService(
+        stopComputerUseAppSessionAfterManualAbort: @escaping () async throws -> Void = {}
+    ) -> AgentService {
         let inbound = Pipe()
         let outbound = Pipe()
         let rpc = RPCClient(
@@ -40,7 +42,11 @@ struct AgentServiceTests {
             lastActivityAt: 0
         ))
         session.sessionStore = store
-        return AgentService(rpc: rpc, sessionStore: store)
+        return AgentService(
+            rpc: rpc,
+            sessionStore: store,
+            stopComputerUseAppSessionAfterManualAbort: stopComputerUseAppSessionAfterManualAbort
+        )
     }
 
     @Test("tokens for unknown turn id are dropped")
@@ -321,6 +327,34 @@ struct AgentServiceTests {
         #expect(s.lastErrorMessage?.contains("Lost the agent connection") == true)
     }
 
+    @Test("manual cancel stops computer use app session even when agent cancel fails")
+    func cancelStopsComputerUseAppSessionOnAgentCancelFailure() async throws {
+        let recorder = ManualAbortAppSessionStopRecorder()
+        let s = try makeServiceWithClosedOutbound(
+            stopComputerUseAppSessionAfterManualAbort: { await recorder.stop() }
+        )
+        s._testTurnStarted(id: "T-cancel")
+
+        await s.cancel()
+
+        #expect(await recorder.callCount == 1)
+        #expect(s.lastErrorMessage?.contains("Lost the agent connection") == true)
+    }
+
+    @Test("manual cancel of queued prompt also stops computer use app session")
+    func queuedCancelStopsComputerUseAppSession() async throws {
+        let recorder = ManualAbortAppSessionStopRecorder()
+        let s = try makeServiceWithClosedOutbound(
+            stopComputerUseAppSessionAfterManualAbort: { await recorder.stop() }
+        )
+        s.sessionStore.activeMirror?.setQueuedPrompt(QueuedPrompt(turnId: "T-queued", prompt: "queued"))
+
+        await s.cancel()
+
+        #expect(await recorder.callCount == 1)
+        #expect(s.lastErrorMessage?.contains("Lost the agent connection") == true)
+    }
+
     // MARK: - s03 TodoWrite mirror
     //
     // The Shell side just routes `ui.todo` notifications to the right
@@ -375,7 +409,9 @@ struct AgentServiceTests {
         #expect(other.todos.count == 1)
     }
 
-    private func makeServiceWithClosedOutbound() throws -> AgentService {
+    private func makeServiceWithClosedOutbound(
+        stopComputerUseAppSessionAfterManualAbort: @escaping () async throws -> Void = {}
+    ) throws -> AgentService {
         let inbound = Pipe()
         let outbound = Pipe()
         let rpc = RPCClient(
@@ -392,7 +428,11 @@ struct AgentServiceTests {
             lastActivityAt: 0
         ))
         session.sessionStore = store
-        let service = AgentService(rpc: rpc, sessionStore: store)
+        let service = AgentService(
+            rpc: rpc,
+            sessionStore: store,
+            stopComputerUseAppSessionAfterManualAbort: stopComputerUseAppSessionAfterManualAbort
+        )
         try outbound.fileHandleForWriting.close()
         return service
     }
@@ -407,5 +447,13 @@ struct AgentServiceTests {
             try await Task.sleep(for: .milliseconds(20))
         }
         throw RPCClientError.timeout(method: "test:waitUntil")
+    }
+}
+
+private actor ManualAbortAppSessionStopRecorder {
+    private(set) var callCount = 0
+
+    func stop() {
+        callCount += 1
     }
 }

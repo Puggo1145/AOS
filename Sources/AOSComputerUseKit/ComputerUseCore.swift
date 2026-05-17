@@ -313,7 +313,6 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
     private let mouseEventDeliveryRoute: @Sendable (pid_t) -> BackgroundMouseEventDeliveryRoute
     private let requiresPreEventFocus: @Sendable (BackgroundMouseEventDeliveryRoute, BackgroundMouseEvent) -> Bool
     private let focusWindowWithoutRaising: @Sendable (pid_t, CGWindowID) async throws -> Void
-    private let deactivateWindowWithoutRaising: @Sendable (pid_t, CGWindowID) async throws -> Void
     private let activateApplication: @Sendable (pid_t) async -> Bool
     private let isApplicationActive: @Sendable (pid_t) async -> Bool
     private let windowOrderChangeObserver: WindowOrderChangeObserver?
@@ -334,6 +333,7 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
         AXElementEventTarget
     ) async throws -> Void
     private let virtualMouseReflector: VirtualMouseReflector?
+    private let windowHighlighter: WindowHighlighter?
     private var activeAppSession: ActiveAppSession?
     private var nextAppSessionId: UInt64 = 1
 
@@ -372,9 +372,6 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
             focusWindowWithoutRaising: { pid, windowId in
                 try windowFocuser.focusWindowWithoutRaising(pid: pid, windowId: windowId)
             },
-            deactivateWindowWithoutRaising: { pid, windowId in
-                try windowFocuser.deactivateWindowWithoutRaising(pid: pid, windowId: windowId)
-            },
             activateApplication: { pid in
                 await MainActor.run {
                     NSRunningApplication(processIdentifier: pid)?.activate(options: []) ?? false
@@ -404,7 +401,8 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
             postAXElementEvent: { event, target in
                 try await axElementEventPoster.post(event, to: target)
             },
-            virtualMouseReflector: .live
+            virtualMouseReflector: .live,
+            windowHighlighter: .live
         )
     }
 
@@ -427,7 +425,6 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
             BackgroundMouseEvent
         ) -> Bool = { route, _ in route.requiresPreEventFocus },
         focusWindowWithoutRaising: @escaping @Sendable (pid_t, CGWindowID) async throws -> Void,
-        deactivateWindowWithoutRaising: @escaping @Sendable (pid_t, CGWindowID) async throws -> Void,
         activateApplication: @escaping @Sendable (pid_t) async -> Bool = { _ in false },
         isApplicationActive: @escaping @Sendable (pid_t) async -> Bool = { _ in false },
         windowOrderChangeObserver: WindowOrderChangeObserver? = nil,
@@ -453,7 +450,8 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
         ) async throws -> Void = { _, _ in
             throw ComputerUseError.axElementEventUnavailable("postAXElementEvent dependency was not configured")
         },
-        virtualMouseReflector: VirtualMouseReflector? = nil
+        virtualMouseReflector: VirtualMouseReflector? = nil,
+        windowHighlighter: WindowHighlighter? = nil
     ) {
         let snapshot = snapshot ?? AccessibilitySnapshot(webAccessibilityActivator: webAccessibilityActivator)
         self.webAccessibilityActivator = webAccessibilityActivator
@@ -469,7 +467,6 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
         self.mouseEventDeliveryRoute = mouseEventDeliveryRoute
         self.requiresPreEventFocus = requiresPreEventFocus
         self.focusWindowWithoutRaising = focusWindowWithoutRaising
-        self.deactivateWindowWithoutRaising = deactivateWindowWithoutRaising
         self.activateApplication = activateApplication
         self.isApplicationActive = isApplicationActive
         self.windowOrderChangeObserver = windowOrderChangeObserver
@@ -479,6 +476,7 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
         self.postKeyboardEventToPid = postKeyboardEvent
         self.postAXElementEventToTarget = postAXElementEvent
         self.virtualMouseReflector = virtualMouseReflector
+        self.windowHighlighter = windowHighlighter
     }
 
     public func listApps(mode: AppListMode) -> [AppInfo] {
@@ -517,12 +515,13 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
     ) async throws -> AppStateBundle {
         let session = try requireActiveAppSession()
         let pid = session.pid
-        try validateOwnership(pid: pid, windowId: windowId)
+        let window = try validateOwnership(pid: pid, windowId: windowId)
 
         let app = NSRunningApplication(processIdentifier: pid)
         let bundleId = app?.bundleIdentifier
         let appName = app?.localizedName
 
+        await windowHighlighter?.show(window: window)
         let result = try await snapshot.walk(pid: pid, windowId: windowId)
         let stateId = await cache.store(pid: pid, windowId: windowId, elements: result.elements)
 
@@ -538,6 +537,7 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
             await cache.recordScreenshot(
                 pid: pid,
                 windowId: windowId,
+                stateId: stateId,
                 coordinateSpace: shot.coordinateSpace
             )
         }
@@ -568,26 +568,26 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
         pid: pid_t,
         windowId: CGWindowID
     ) async throws -> AppSessionResult {
-        _ = try validateOwnership(pid: pid, windowId: windowId)
+        let targetWindow = try validateOwnership(pid: pid, windowId: windowId)
         let session = try await startAppSession(
             pid: pid,
-            windowId: windowId,
+            targetWindow: targetWindow,
             shouldFocusTarget: true,
             traceRecorder: nil
         )
         return session.result
     }
 
-    /// Stops the active app session and runs the target deactivation cleanup.
+    /// Stops the active app session and releases Computer Use visual state.
     public func stopAppSession() async throws -> AppSessionResult {
         guard let session = activeAppSession else {
             throw ComputerUseError.appSessionUnavailable("no active app session")
         }
-        try await stopAppSession(session)
         if activeAppSession?.isSameSession(as: session) == true {
             activeAppSession = nil
         }
         await virtualMouseReflector?.dismiss()
+        await windowHighlighter?.dismiss()
         return session.result
     }
 
@@ -603,6 +603,38 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
         event: BackgroundMouseEvent
     ) async throws -> WindowMouseEventResult {
         try await performPostMouseEvent(windowId: windowId, event: event, tracing: false).result
+    }
+
+    /// Posts a screenshot-local mouse event from a prior app-state read.
+    /// The final screen point is resolved against the current window bounds
+    /// so a moved-but-same-size window does not inherit stale screenshot
+    /// origin coordinates.
+    public func postMouseEvent(
+        windowId: CGWindowID,
+        stateId: StateID,
+        event: BackgroundMouseEvent
+    ) async throws -> WindowMouseEventResult {
+        let session = try requireActiveAppSession()
+        let pid = session.pid
+        let window = try validateOwnership(pid: pid, windowId: windowId)
+        let coordinateSpace = try await cache.screenshotCoordinateSpace(
+            pid: pid,
+            windowId: windowId,
+            stateId: stateId
+        )
+        guard coordinateSpace.hasSameWindowSize(as: window.bounds) else {
+            throw StateCacheLookupError.stale(reason: .windowChanged, stateId: stateId.raw)
+        }
+        let screenEvent = try translateScreenshotMouseEvent(
+            event,
+            coordinateSpace: coordinateSpace,
+            currentWindowBounds: window.bounds
+        )
+        return try await performPostMouseEvent(
+            windowId: windowId,
+            event: screenEvent,
+            tracing: false
+        ).result
     }
 
     func postMouseEventTrace(
@@ -635,6 +667,7 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
         let session = try requireActiveAppSession()
         let pid = session.pid
         let window = try validateOwnership(pid: pid, windowId: windowId)
+        await windowHighlighter?.show(window: window)
         try validateAXElementEvent(event)
         let element = try await cache.lookup(
             pid: pid,
@@ -686,7 +719,7 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
         let traceRecorder = tracing ? WindowMouseEventTraceRecorder() : nil
         let orderGuardian = try makeWindowOrderGuardian(targetWindowId: windowId)
         try await prepareActiveAppSessionWindow(
-            windowId: windowId,
+            window: window,
             shouldFocusTarget: requiresPreEventFocus(deliveryRoute, event),
             orderGuardian: orderGuardian,
             traceRecorder: traceRecorder
@@ -764,12 +797,12 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
     ) async throws -> WindowKeyboardEventResult {
         let activeSession = try requireActiveAppSession()
         let pid = activeSession.pid
-        _ = try validateOwnership(pid: pid, windowId: windowId)
+        let window = try validateOwnership(pid: pid, windowId: windowId)
         try validateKeyboardEvent(event)
         let target = BackgroundKeyboardEventTarget(pid: pid, windowId: windowId)
         let orderGuardian = try makeWindowOrderGuardian(targetWindowId: windowId)
         try await prepareActiveAppSessionWindow(
-            windowId: windowId,
+            window: window,
             shouldFocusTarget: true,
             orderGuardian: orderGuardian,
             traceRecorder: nil
@@ -860,6 +893,63 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
         }
     }
 
+    private func screenshotPointToScreenPoint(
+        _ point: CGPoint,
+        coordinateSpace: ScreenshotCoordinateSpace,
+        currentWindowBounds: WindowBounds
+    ) throws -> CGPoint {
+        let pixelSize = coordinateSpace.pixelSize
+        guard pixelSize.width > 0, pixelSize.height > 0 else {
+            throw ComputerUseError.mouseEventUnavailable("screenshot pixelSize must be greater than 0")
+        }
+        guard point.x >= 0, point.x <= pixelSize.width,
+              point.y >= 0, point.y <= pixelSize.height
+        else {
+            throw ComputerUseError.mouseEventUnavailable(
+                "screenshot point \(Int(point.x)),\(Int(point.y)) is outside screenshot \(Int(pixelSize.width))x\(Int(pixelSize.height))"
+            )
+        }
+
+        let translatedFrame = coordinateSpace.frameTranslatedToCurrentWindowBounds(currentWindowBounds)
+        return CGPoint(
+            x: translatedFrame.x + (point.x / pixelSize.width) * translatedFrame.width,
+            y: translatedFrame.y + (point.y / pixelSize.height) * translatedFrame.height
+        )
+    }
+
+    private func translateScreenshotMouseEvent(
+        _ event: BackgroundMouseEvent,
+        coordinateSpace: ScreenshotCoordinateSpace,
+        currentWindowBounds: WindowBounds
+    ) throws -> BackgroundMouseEvent {
+        switch event {
+        case .click(let button, let point, let count):
+            return .click(
+                button: button,
+                point: try screenshotPointToScreenPoint(
+                    point,
+                    coordinateSpace: coordinateSpace,
+                    currentWindowBounds: currentWindowBounds
+                ),
+                count: count
+            )
+        case .drag(let button, let start, let end):
+            return .drag(
+                button: button,
+                from: try screenshotPointToScreenPoint(
+                    start,
+                    coordinateSpace: coordinateSpace,
+                    currentWindowBounds: currentWindowBounds
+                ),
+                to: try screenshotPointToScreenPoint(
+                    end,
+                    coordinateSpace: coordinateSpace,
+                    currentWindowBounds: currentWindowBounds
+                )
+            )
+        }
+    }
+
     @discardableResult
     private func validateOwnership(pid: pid_t, windowId: CGWindowID) throws -> WindowInfo {
         guard let info = windowLookup(windowId) else {
@@ -873,14 +963,15 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
 
     private func startAppSession(
         pid: pid_t,
-        windowId: CGWindowID,
+        targetWindow: WindowInfo,
         shouldFocusTarget: Bool,
         traceRecorder: WindowMouseEventTraceRecorder?
     ) async throws -> ActiveAppSession {
+        let windowId = targetWindow.id
         if let session = activeAppSession {
             if session.isSameApp(pid: pid) {
                 try await prepareActiveAppSessionWindow(
-                    windowId: windowId,
+                    window: targetWindow,
                     shouldFocusTarget: shouldFocusTarget,
                     orderGuardian: nil,
                     traceRecorder: traceRecorder
@@ -888,10 +979,11 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
                 return try requireActiveAppSession()
             }
 
-            try await stopAppSession(session)
             if activeAppSession?.isSameSession(as: session) == true {
                 activeAppSession = nil
             }
+            await virtualMouseReflector?.dismiss()
+            await windowHighlighter?.dismiss()
         }
 
         let session = ActiveAppSession(
@@ -909,6 +1001,7 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
         if shouldFocusTarget {
             try await focusWindowWithoutRaising(pid, windowId)
             activeAppSession = session
+            await windowHighlighter?.show(window: targetWindow)
             try await Task.sleep(nanoseconds: 5_000_000)
             await recordTraceStage(
                 .afterFocus,
@@ -919,18 +1012,20 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
             )
         } else {
             activeAppSession = session
+            await windowHighlighter?.show(window: targetWindow)
         }
         return session
     }
 
     private func prepareActiveAppSessionWindow(
-        windowId: CGWindowID,
+        window: WindowInfo,
         shouldFocusTarget: Bool,
         orderGuardian: WindowOrderGuardian?,
         traceRecorder: WindowMouseEventTraceRecorder?
     ) async throws {
         let session = try requireActiveAppSession()
         let pid = session.pid
+        let windowId = window.id
         await recordTraceStage(
             .before,
             recorder: traceRecorder,
@@ -940,6 +1035,7 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
         )
         if shouldFocusTarget {
             try await focusWindowWithoutRaising(pid, windowId)
+            await windowHighlighter?.show(window: window)
             try await Task.sleep(nanoseconds: 5_000_000)
             await recordTraceStage(
                 .afterFocus,
@@ -948,6 +1044,8 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
                 targetWindowId: windowId,
                 orderGuardian: orderGuardian
             )
+        } else {
+            await windowHighlighter?.show(window: window)
         }
     }
 
@@ -958,22 +1056,6 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
         return session
     }
 
-    private func stopAppSession(_ session: ActiveAppSession) async throws {
-        let windows = windowsForPIDLookup(session.pid)
-        let frontmostWindow = frontmostWindowLookup()
-        let protectedWindowId = frontmostWindow?.pid == session.pid ? frontmostWindow?.id : nil
-        let windowIds = windows
-            .map(\.id)
-            .filter { $0 != protectedWindowId }
-
-        for windowId in windowIds {
-            try await deactivateTargetWindowIfNeeded(
-                pid: session.pid,
-                windowId: windowId
-            )
-        }
-    }
-
     private func restoreOriginalFrontWindow(
         _ originalFrontWindow: WindowInfo?,
         targetWindowId: CGWindowID
@@ -982,13 +1064,6 @@ public actor ComputerUseCore: ComputerUseDiagnosticsProviding {
             return
         }
         try await focusWindowWithoutRaising(originalFrontWindow.pid, originalFrontWindow.id)
-    }
-
-    private func deactivateTargetWindowIfNeeded(
-        pid: pid_t,
-        windowId: CGWindowID
-    ) async throws {
-        try await deactivateWindowWithoutRaising(pid, windowId)
     }
 
     private func reactivateOriginalFrontApplicationIfNeeded(

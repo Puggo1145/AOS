@@ -55,7 +55,7 @@ test("registerComputerUseTools exposes exactly the approved tool names", () => {
   ]);
 });
 
-test("use_mouse converts screenshot-local click coordinates to screen points before RPC dispatch", async () => {
+test("use_mouse forwards screenshot-local click coordinates and stateId for Shell-side conversion", async () => {
   const registry = new ToolRegistry();
   const { dispatcher, calls } = makeDispatcherSpy();
   registerComputerUseTools(registry, dispatcher);
@@ -99,10 +99,11 @@ test("use_mouse converts screenshot-local click coordinates to screen points bef
       method: RPCMethod.computerUsePostMouseEvent,
       params: {
         windowId: 77,
+        stateId: "state-1",
         event: {
           kind: "click",
           button: "left",
-          point: { x: 210, y: 170 },
+          point: { x: 400, y: 300 },
           count: 2,
         },
       },
@@ -201,6 +202,52 @@ test("use_mouse rejects expired screenshot coordinate state before RPC dispatch"
   }
 
   expect(String(caught)).toContain("stale screenshot coordinate space");
+  expect(calls).toEqual([]);
+});
+
+test("use_mouse rejects screenshot coordinates outside cached pixel bounds before RPC dispatch", async () => {
+  const registry = new ToolRegistry();
+  const { dispatcher, calls } = makeDispatcherSpy();
+  registerComputerUseTools(registry, dispatcher);
+
+  let caught: unknown;
+  try {
+    await registry.get("use_mouse")!.execute(
+      {
+        windowId: 77,
+        stateId: "state-1",
+        event: {
+          kind: "click",
+          button: "left",
+          point: { x: 801, y: 300 },
+        },
+      },
+      {
+        ...execContext(),
+        computerUseStateCache: {
+          lookup: () => ({
+            kind: "found",
+            record: {
+              stateId: "state-1",
+              windowId: 77,
+              recordedAt: 1_000,
+              coordinateSpace: {
+                windowFrame: { x: 10, y: 20, width: 400, height: 300 },
+                windowBounds: { x: 10, y: 20, width: 400, height: 300 },
+                pixelSize: { width: 800, height: 600 },
+              },
+            },
+          }),
+          record: () => {},
+          clear: () => {},
+        },
+      } as any,
+    );
+  } catch (err) {
+    caught = err;
+  }
+
+  expect(String(caught)).toContain("screenshot point 801,300 is outside screenshot 800x600");
   expect(calls).toEqual([]);
 });
 

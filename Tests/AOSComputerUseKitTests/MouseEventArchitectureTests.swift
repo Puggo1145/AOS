@@ -54,6 +54,9 @@ struct MouseEventArchitectureTests {
             "ComputerUseDiagnostics",
             "ComputerUseDiagnosticsProviding",
             "ComputerUseError",
+            "ComputerUseVirtualMouseActivityOverlay",
+            "ComputerUseVirtualMouseAgentActivity",
+            "ComputerUseWindowHighlightControls",
             "ImageFormat",
             "Screenshot",
             "ScreenshotCoordinateSpace",
@@ -84,6 +87,7 @@ struct MouseEventArchitectureTests {
             "`stopAppSession() -> AppSessionResult`",
             "`currentAppSession() -> AppSessionResult`",
             "`postMouseEvent(windowId:event:) -> WindowMouseEventResult`",
+            "`postMouseEvent(windowId:stateId:event:) -> WindowMouseEventResult`",
             "`postKeyboardEvent(windowId:event:) -> WindowKeyboardEventResult`",
             "`postEventToAXElement(windowId:stateId:elementIndex:event:) -> AXElementEventResult`",
         ]
@@ -110,6 +114,18 @@ struct MouseEventArchitectureTests {
 
         #expect(!core.contains("inspectAppState"))
         #expect(core.contains("public func getAppState("))
+    }
+
+    @Test("agent mouse RPC keeps screenshot coordinates in Shell")
+    func agentMouseRPCKeepsScreenshotCoordinatesInShell() throws {
+        let sidecarTool = try Self.source("sidecar/src/agent/tools/computer-use.ts")
+        let rpcService = try Self.source("Sources/AOSShell/Agent/ComputerUseRPCService.swift")
+        let core = try Self.source("Sources/AOSComputerUseKit/ComputerUseCore.swift")
+
+        #expect(!sidecarTool.contains("screenshotPointToScreenPoint"))
+        #expect(sidecarTool.contains("stateId,"))
+        #expect(rpcService.contains("stateId: StateID(params.stateId)"))
+        #expect(core.contains("frameTranslatedToCurrentWindowBounds"))
     }
 
     private static func publicTypeDeclarations(file: String = #filePath) throws -> Set<String> {

@@ -17,11 +17,7 @@ struct AXElementEventTests {
             windowLookup: { windowId in
                 windowId == 456 ? Self.window(id: 456, pid: 123) : nil
             },
-            focusWindowWithoutRaising: { _, _ in },
-            deactivateWindowWithoutRaising: { _, _ in },
-            postAXElementEvent: { _, _ in
-                Issue.record("AX events must not post without an active app session")
-            }
+            focusWindowWithoutRaising: { _, _ in }
         )
 
         await #expect(throws: ComputerUseError.self) {
@@ -49,10 +45,6 @@ struct AXElementEventTests {
             },
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.record(.coordinateFocus(pid: pid, windowId: windowId))
-            },
-            deactivateWindowWithoutRaising: { _, _ in },
-            postAXElementEvent: { event, target in
-                await recorder.record(.ax(event: event, target: target))
             }
         )
 
@@ -100,7 +92,6 @@ struct AXElementEventTests {
                 windowId == window.id ? window : nil
             },
             focusWindowWithoutRaising: { _, _ in },
-            deactivateWindowWithoutRaising: { _, _ in },
             postAXElementEvent: { _, _ in },
             virtualMouseReflector: VirtualMouseReflector(
                 axElementFrame: { target in
@@ -156,10 +147,6 @@ struct AXElementEventTests {
                 windowId == window.id ? window : nil
             },
             focusWindowWithoutRaising: { _, _ in },
-            deactivateWindowWithoutRaising: { _, _ in },
-            postAXElementEvent: { event, target in
-                await axRecorder.record(.ax(event: event, target: target))
-            },
             virtualMouseReflector: VirtualMouseReflector(
                 axElementFrame: { _ in nil },
                 emit: { event in
@@ -222,11 +209,7 @@ struct AXElementEventTests {
             windowLookup: { windowId in
                 windowId == 456 ? Self.window(id: 456, pid: 123) : nil
             },
-            focusWindowWithoutRaising: { _, _ in },
-            deactivateWindowWithoutRaising: { _, _ in },
-            postAXElementEvent: { event, target in
-                await recorder.record(.ax(event: event, target: target))
-            }
+            focusWindowWithoutRaising: { _, _ in }
         )
 
         _ = try await core.startAppSession(pid: 123, windowId: 456)
@@ -281,11 +264,6 @@ struct AXElementEventTests {
             },
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.record(.coordinateFocus(pid: pid, windowId: windowId))
-            },
-            deactivateWindowWithoutRaising: { _, _ in },
-            activateApplication: { pid in
-                await recorder.record(.activate(pid: pid))
-                return true
             },
             isApplicationActive: { _ in
                 activeStates.next()

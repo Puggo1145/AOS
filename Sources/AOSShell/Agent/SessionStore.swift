@@ -48,6 +48,7 @@ public final class SessionStore {
     /// only by restart) the agent loop has no usable session and the
     /// composer must stay disabled with a precise message.
     public var bootError: String?
+    public var activeSessionChanged: (() -> Void)?
 
     private let rpc: RPCClient
     private let sessionService: SessionService
@@ -91,6 +92,7 @@ public final class SessionStore {
     public func applyActivate(sessionId: String, snapshot: [ConversationTurnWire]) {
         mirror(for: sessionId).mergeActivateSnapshot(snapshot)
         activeId = sessionId
+        activeSessionChanged?()
         lastActionError = nil
     }
 
@@ -109,6 +111,7 @@ public final class SessionStore {
             list.append(session)
         }
         activeId = session.id
+        activeSessionChanged?()
         lastActionError = nil
     }
 

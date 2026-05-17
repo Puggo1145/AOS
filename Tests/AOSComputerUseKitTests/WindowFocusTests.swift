@@ -17,8 +17,7 @@ struct WindowFocusTests {
                 Issue.record("visible window lookup should not run for invalid diagnostics sampling values")
                 return []
             },
-            focusWindowWithoutRaising: { _, _ in },
-            deactivateWindowWithoutRaising: { _, _ in }
+            focusWindowWithoutRaising: { _, _ in }
         )
 
         let invalidValues = [
@@ -69,8 +68,6 @@ struct WindowFocusTests {
             },
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.record(pid: pid, windowId: windowId)
-            },
-            deactivateWindowWithoutRaising: { _, _ in
             }
         )
 
@@ -99,8 +96,6 @@ struct WindowFocusTests {
             },
             focusWindowWithoutRaising: { pid, windowId in
                 await recorder.record(pid: pid, windowId: windowId)
-            },
-            deactivateWindowWithoutRaising: { _, _ in
             }
         )
 

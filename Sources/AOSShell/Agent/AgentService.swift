@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import AOSComputerUseKit
 import AOSRPCSchema
 
 // MARK: - AgentStatus
@@ -367,7 +368,7 @@ private func clipboardLabel(for clip: CitedClipboard) -> String {
 // derive LLM-relevant state. It only:
 //
 //   - `submit(prompt:citedContext:)` → fires `agent.submit` over RPC.
-//   - `cancel()` → fires `agent.cancel`.
+//   - `cancel()` → fires `agent.cancel` and stops any active Computer Use app session.
 //   - `resetSession()` → fires `agent.reset` (sidecar will broadcast
 //     `conversation.reset` on success, which clears the mirror).
 //   - subscribes to `conversation.turnStarted`, `ui.token`, `ui.status`,
@@ -445,11 +446,20 @@ public final class AgentService {
     }
 
     private let rpc: RPCClient
+    private let stopComputerUseAppSessionAfterManualAbort: () async throws -> Void
     private var cancelledQueuedTurnIds: Set<String> = []
 
-    public init(rpc: RPCClient, sessionStore: SessionStore) {
+    public init(
+        rpc: RPCClient,
+        sessionStore: SessionStore,
+        stopComputerUseAppSessionAfterManualAbort: @escaping () async throws -> Void = {}
+    ) {
         self.rpc = rpc
         self.sessionStore = sessionStore
+        self.stopComputerUseAppSessionAfterManualAbort = stopComputerUseAppSessionAfterManualAbort
+        self.sessionStore.activeSessionChanged = { [weak self] in
+            self?.syncVirtualMouseActivity()
+        }
         registerHandlers()
     }
 
@@ -620,9 +630,13 @@ public final class AgentService {
                 cancelledQueuedTurnIds.remove(queued.turnId)
                 mirror.setSubmitError(Self.formatSubmitFailureMessage(error: error))
             }
+            await stopComputerUseAppSessionAfterManualAbort(mirror: mirror)
             return
         }
-        guard let turnId = currentTurn else { return }
+        guard let turnId = currentTurn else {
+            await stopComputerUseAppSessionAfterManualAbort(mirror: mirror)
+            return
+        }
         do {
             _ = try await rpc.request(
                 method: RPCMethod.agentCancel,
@@ -631,6 +645,15 @@ public final class AgentService {
             )
         } catch {
             mirror.setSubmitError(Self.formatSubmitFailureMessage(error: error))
+        }
+        await stopComputerUseAppSessionAfterManualAbort(mirror: mirror)
+    }
+
+    private func stopComputerUseAppSessionAfterManualAbort(mirror: ConversationMirror) async {
+        do {
+            try await stopComputerUseAppSessionAfterManualAbort()
+        } catch {
+            mirror.setSubmitError("Stop app session failed: \(error.localizedDescription)")
         }
     }
 
@@ -666,30 +689,37 @@ public final class AgentService {
     /// drive the state machine without a real RPCClient.
     internal func handleTurnStarted(_ p: ConversationTurnStartedParams) {
         sessionStore.mirror(for: p.sessionId).applyTurnStarted(p)
+        syncVirtualMouseActivityIfActive(sessionId: p.sessionId)
     }
 
     internal func handleConversationReset(_ p: ConversationResetParams) {
         sessionStore.mirrors[p.sessionId]?.applyConversationReset()
+        syncVirtualMouseActivityIfActive(sessionId: p.sessionId)
     }
 
     internal func handleToken(_ p: UITokenParams) {
         sessionStore.mirror(for: p.sessionId).applyToken(p)
+        syncVirtualMouseActivityIfActive(sessionId: p.sessionId)
     }
 
     internal func handleThinking(_ p: UIThinkingParams) {
         sessionStore.mirror(for: p.sessionId).applyThinking(p)
+        syncVirtualMouseActivityIfActive(sessionId: p.sessionId)
     }
 
     internal func handleToolCall(_ p: UIToolCallParams) {
         sessionStore.mirror(for: p.sessionId).applyToolCall(p)
+        syncVirtualMouseActivityIfActive(sessionId: p.sessionId)
     }
 
     internal func handleStatus(_ p: UIStatusParams) {
         sessionStore.mirror(for: p.sessionId).applyStatus(p)
+        syncVirtualMouseActivityIfActive(sessionId: p.sessionId)
     }
 
     internal func handleError(_ p: UIErrorParams) {
         sessionStore.mirror(for: p.sessionId).applyError(p)
+        syncVirtualMouseActivityIfActive(sessionId: p.sessionId)
     }
 
     internal func handleUsage(_ p: UIUsageParams) {
@@ -702,6 +732,28 @@ public final class AgentService {
 
     internal func handleCompact(_ p: UICompactParams) {
         sessionStore.mirror(for: p.sessionId).applyCompact(p)
+    }
+
+    private func syncVirtualMouseActivityIfActive(sessionId: String) {
+        guard sessionId == currentSessionId else {
+            return
+        }
+        syncVirtualMouseActivity()
+    }
+
+    private func syncVirtualMouseActivity() {
+        guard
+            let mirror = sessionStore.activeMirror,
+            let turnId = mirror.currentTurn,
+            let turn = mirror.turns.last(where: { $0.id == turnId })
+        else {
+            ComputerUseVirtualMouseActivityOverlay.updateAgentActivity(nil)
+            return
+        }
+
+        ComputerUseVirtualMouseActivityOverlay.updateAgentActivity(
+            VirtualMouseActivityPlanner.activity(for: turn)
+        )
     }
 
     // MARK: - Test seams

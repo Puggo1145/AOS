@@ -170,22 +170,16 @@ stopAppSession()
 `postMouseEvent` / `postKeyboardEvent` 都必须在 active app session 内按 windowId 投放；
 事件投放使用 current session pid 校验 window ownership。
 
-只有 `stopAppSession` 或显式切换到不同 pid session 时才执行 target-side deactive：
-
-```text
-SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: defocus))
-```
+`stopAppSession` 或显式切换到不同 pid session 只释放 session lease 和视觉 overlay，
+不再执行 target-side deactive。后续验证发现 target-side defocus 可能让目标窗口在
+session 结束后停留在无法响应真实用户鼠标点击/拖拽的 inactive 状态。
 
 关键点：
 
 - session 只记录 pid，不记录 target window id。
-- `stopAppSession` 现场读取 frontmost window，重新枚举 session pid 下当前所有窗口。
-- 只对 session pid 下非 frontmost 的窗口发 `.defocus`；如果用户当前 frontmost 正是
-  session pid 的某个窗口，则跳过该窗口。
+- `stopAppSession` 不枚举 session pid 窗口，也不发送 `.defocus`。
 - 单次 event 投放期间，active-state guard 仍保护投放前 front window 的 order/focus，
   但不会因为 target app 仍 active 就 deactive 或 reactivate original app。
-- deactive 不负责 z-order preservation，只在 session 结束时撤掉目标窗口残留的 active/key
-  状态，避免下一次后台投放触发 raise 闪动。
 
 ## Why This Works
 
@@ -195,8 +189,8 @@ SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: defocus))
    让目标 AppKit 窗口相信自己可接收输入。
 2. **Event delivery**：pid-scoped `CGEvent.postToPid` 把鼠标事件送进目标进程，不碰全局 HID cursor。
 3. **Order drift detection**：`WindowOrderGuardian` 只观察 target 是否越过原 overlapping cover，不直接重排任何窗口。
-4. **App session cleanup**：target-side defocus 在 `stopAppSession` 时撤掉 session app
-   的非 frontmost 窗口 active/key 状态，避免下一次投放被系统补偿 raise。
+4. **App session cleanup**：`stopAppSession` 只释放 AOS 的 session ownership 和 overlay；
+   不再用 private defocus 修改目标窗口的真实交互状态。
 
 因此用户看到的效果是：
 
@@ -235,8 +229,8 @@ down/up click sequence，并把第 N 次目标 down/up 的 `.mouseEventClickStat
 `start-app-session` / `stop-app-session` 是 core app session API 的 CLI surface。
 鼠标事件投放不再接收 pid，也不会自动切换 target session；调用方必须先在同一个
 `ComputerUseCore` lifetime 内显式 `start-app-session`。事件投放使用 current session
-pid 校验 window ownership，`stop-app-session` 重新枚举 session pid 下当前所有窗口并执行
-core deactivate cleanup，跳过 session pid 下当前 frontmost window。成对 start/stop 需要调用方复用同一个
+pid 校验 window ownership，`stop-app-session` 释放当前 session 和 overlay，不向
+target window 发送 defocus。成对 start/stop 需要调用方复用同一个
 `ComputerUseCore` lifetime；当前 CLI 只保留 interactive host 来持有这个有状态 core。
 
 在 CLI 中执行 `.build/debug/AOSComputerUseCLI interactive` 后，通过 Command 菜单选择
@@ -279,7 +273,7 @@ core deactivate cleanup，跳过 session pid 下当前 frontmost window。成对
 
 - `SkyLightWindowFocuser`
   - standard target-side focus record for mouse routing and explicit focus.
-  - target-side defocus record for `stopAppSession` background active cleanup.
+  - target-side defocus record remains a diagnostic primitive, not app-session cleanup.
 
 - `BackgroundMouseEvent`
   - describes coordinate mouse behavior separately from the delivery path.
@@ -300,7 +294,7 @@ core deactivate cleanup，跳过 session pid 下当前 frontmost window。成对
 - `ComputerUseCore`
   - exposes `startAppSession` / `stopAppSession`.
   - orchestrates validation, app session, focus, event post, immediate guard,
-    delayed guard, and target deactive cleanup for background mouse events.
+    and delayed guard for background mouse events.
 
 - `AOSComputerUseCLI`
   - exposes the current diagnostic commands, including `start-app-session`,

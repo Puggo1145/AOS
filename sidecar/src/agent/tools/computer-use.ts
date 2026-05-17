@@ -3,7 +3,6 @@ import type { ToolResultContent } from "../../llm/types";
 import {
   RPCMethod,
   type ComputerUseBounds,
-  type ComputerUseCoordinateSpace,
   type ComputerUseGetAppStateResult,
   type ComputerUseMouseEvent,
   type ComputerUsePoint,
@@ -304,54 +303,46 @@ function mouseEventParams(args: ComputerUseArgs, ctx: ToolExecContext): Computer
   if (record.windowId !== windowId) {
     throw new ToolUserError(`stateId ${stateId} belongs to window ${record.windowId}, not window ${windowId}.`);
   }
+  const event = requireEvent(args);
+  validateMouseEventWithinScreenshot(event, record.coordinateSpace.pixelSize);
   return {
     windowId,
-    event: mouseEventInScreenPoints(requireEvent(args), record.coordinateSpace),
+    stateId,
+    event: event as ComputerUseMouseEvent,
   };
 }
 
-function mouseEventInScreenPoints(event: Record<string, unknown>, coordinateSpace: ComputerUseCoordinateSpace): ComputerUseMouseEvent {
+function validateMouseEventWithinScreenshot(
+  event: Record<string, unknown>,
+  pixelSize: { width: number; height: number },
+): void {
+  if (pixelSize.width <= 0 || pixelSize.height <= 0) {
+    throw new ToolUserError(`screenshot pixelSize must be greater than 0.`);
+  }
   const kind = requireString(event, "event.kind");
   switch (kind) {
-    case "click": {
-      const out: ComputerUseMouseEvent = {
-        kind: "click",
-        button: requireMouseButton(event),
-        point: screenshotPointToScreenPoint(requirePoint(event, "point", "event.point"), coordinateSpace),
-      };
-      if ("count" in event) out.count = requirePositiveInteger(event, "event.count");
-      return out;
-    }
+    case "click":
+      validateScreenshotPoint(requirePoint(event, "point", "event.point"), pixelSize);
+      return;
     case "drag":
-      return {
-        kind: "drag",
-        button: requireMouseButton(event),
-        from: screenshotPointToScreenPoint(requirePoint(event, "from", "event.from"), coordinateSpace),
-        to: screenshotPointToScreenPoint(requirePoint(event, "to", "event.to"), coordinateSpace),
-      };
+      validateScreenshotPoint(requirePoint(event, "from", "event.from"), pixelSize);
+      validateScreenshotPoint(requirePoint(event, "to", "event.to"), pixelSize);
+      return;
     default:
       throw new ToolUserError(`event.kind must be one of click, drag.`);
   }
 }
 
-function requireMouseButton(event: Record<string, unknown>): "left" | "right" {
-  return requireEnum(event, "event.button", ["left", "right"]) as "left" | "right";
-}
-
-function screenshotPointToScreenPoint(point: ComputerUsePoint, coordinateSpace: ComputerUseCoordinateSpace): ComputerUsePoint {
-  const { windowFrame, pixelSize } = coordinateSpace;
-  if (pixelSize.width <= 0 || pixelSize.height <= 0) {
-    throw new ToolUserError(`screenshot pixelSize must be greater than 0.`);
-  }
+function validateScreenshotPoint(point: ComputerUsePoint, pixelSize: { width: number; height: number }): void {
   if (point.x < 0 || point.x > pixelSize.width || point.y < 0 || point.y > pixelSize.height) {
     throw new ToolUserError(
       `screenshot point ${point.x},${point.y} is outside screenshot ${pixelSize.width}x${pixelSize.height}.`,
     );
   }
-  return {
-    x: windowFrame.x + (point.x / pixelSize.width) * windowFrame.width,
-    y: windowFrame.y + (point.y / pixelSize.height) * windowFrame.height,
-  };
+}
+
+function requireMouseButton(event: Record<string, unknown>): "left" | "right" {
+  return requireEnum(event, "event.button", ["left", "right"]) as "left" | "right";
 }
 
 function recordAppStateCoordinateSpace(result: unknown, args: ComputerUseArgs, ctx: ToolExecContext): void {

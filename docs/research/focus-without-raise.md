@@ -54,8 +54,9 @@ WindowServer 允许跨 app 的多个窗口短时间同时处于 active/key-like 
 
 ## Event Record Layout
 
-focus event record 固定为 `0xf8` bytes。当前实现只使用 marker `0x01` 做 focus。
-marker `0x02` 只用于点击完成后的 target-side cleanup，绝不发给 previous PSN。
+focus event record 固定为 `0xf8` bytes。业务路径只使用 marker `0x01` 做 focus。
+marker `0x02` 保留为低层诊断 primitive，绝不发给 previous PSN，也不再用于
+app-session cleanup。
 
 | Offset | Value | Meaning |
 |---:|---:|---|
@@ -63,7 +64,7 @@ marker `0x02` 只用于点击完成后的 target-side cleanup，绝不发给 pre
 | `0x08` | `0x0d` | focus event opcode |
 | `0x3c...0x3f` | little-endian `CGWindowID` | target window id |
 | `0x8a` | `0x01` | focus target |
-| `0x8a` | `0x02` | defocus target cleanup only |
+| `0x8a` | `0x02` | defocus target diagnostic primitive |
 
 Pseudo-code:
 
@@ -95,17 +96,10 @@ focuser. A pid/window mismatch fails before any private event is posted.
 
 `ComputerUseCore.postMouseEvent` uses this same target-side focus step before
 event delivery. The outer mouse-event chain is responsible for dispatch,
-active-state guarding, front-window restore, and target cleanup.
-
-After dispatch, if the target was not originally the front window, cleanup posts
-a target-side defocus event:
-
-```text
-SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: 0x02))
-```
-
-That cleanup is target-only. It clears the target's transient background
-active/key state without changing the user's original front PSN.
+active-state guarding, and front-window restore. App-session cleanup no longer
+posts target-side defocus; live validation showed that private event can leave
+the target window stuck inactive for real user clicks and drags after control
+returns to the user.
 
 Chromium / Electron mouse delivery builds on this same focus primitive. Its
 browser-specific event sequence is documented in `docs/research/bgclick-chromium.md`.
@@ -118,5 +112,6 @@ Relevant coverage:
 - `does not focus a window owned by another pid`
 - `builds the SLPS focus event record layout`
 - `focuses only the target PSN with one target-side focus event`
-- `deactivates only target PSN with one target-side defocus event`
+- `deactivates only target PSN with one target-side defocus event` (low-level
+  diagnostic primitive only)
 - `focuser bubbles private SPI failures`

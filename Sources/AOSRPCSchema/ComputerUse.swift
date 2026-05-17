@@ -354,10 +354,12 @@ extension ComputerUseMouseEvent: Codable {
 
 public struct ComputerUsePostMouseEventParams: Codable, Sendable, Equatable {
     public let windowId: Int
+    public let stateId: String
     public let event: ComputerUseMouseEvent
 
-    public init(windowId: Int, event: ComputerUseMouseEvent) {
+    public init(windowId: Int, stateId: String, event: ComputerUseMouseEvent) {
         self.windowId = windowId
+        self.stateId = stateId
         self.event = event
     }
 }

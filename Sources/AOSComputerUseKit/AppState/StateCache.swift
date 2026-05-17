@@ -51,6 +51,7 @@ actor StateCache {
     /// that produced the image. CGWindowList bounds are not a safe
     /// substitute on mixed-display Retina setups.
     private struct ScreenshotRecord {
+        let stateId: StateID?
         let coordinateSpace: ScreenshotCoordinateSpace
         let recordedAt: Date
     }
@@ -178,6 +179,7 @@ actor StateCache {
     public func recordScreenshot(
         pid: pid_t,
         windowId: CGWindowID,
+        stateId: StateID? = nil,
         coordinateSpace: ScreenshotCoordinateSpace
     ) {
         let pixelSize = coordinateSpace.pixelSize
@@ -186,6 +188,7 @@ actor StateCache {
               frame.width > 0, frame.height > 0
         else { return }
         screenshotBucket[Key(pid: pid, windowId: windowId)] = ScreenshotRecord(
+            stateId: stateId,
             coordinateSpace: coordinateSpace,
             recordedAt: Date()
         )
@@ -223,6 +226,25 @@ actor StateCache {
         if Date().timeIntervalSince(record.recordedAt) > ttl {
             screenshotBucket.removeValue(forKey: key)
             return nil
+        }
+        return record.coordinateSpace
+    }
+
+    public func screenshotCoordinateSpace(
+        pid: pid_t,
+        windowId: CGWindowID,
+        stateId: StateID
+    ) throws -> ScreenshotCoordinateSpace {
+        let key = Key(pid: pid, windowId: windowId)
+        guard let record = screenshotBucket[key] else {
+            throw StateCacheLookupError.stale(reason: .expired, stateId: stateId.raw)
+        }
+        if Date().timeIntervalSince(record.recordedAt) > ttl {
+            screenshotBucket.removeValue(forKey: key)
+            throw StateCacheLookupError.stale(reason: .expired, stateId: stateId.raw)
+        }
+        guard record.stateId == stateId else {
+            throw StateCacheLookupError.stale(reason: .windowChanged, stateId: stateId.raw)
         }
         return record.coordinateSpace
     }

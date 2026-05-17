@@ -1,4 +1,5 @@
 import Foundation
+import AOSComputerUseKit
 
 /// Render-time projection for a turn's ordered segments.
 ///
@@ -156,5 +157,40 @@ public enum ToolCallRunSummary {
         }
 
         return buckets.map { $0.label($0.count) }.joined(separator: ", ")
+    }
+}
+
+@MainActor
+public enum VirtualMouseActivityPlanner {
+    public static func activity(for turn: ConversationTurn) -> ComputerUseVirtualMouseAgentActivity? {
+        guard turn.status == .working || turn.status == .waiting else {
+            return nil
+        }
+        let toolCallsById = Dictionary(uniqueKeysWithValues: turn.toolCalls.map { ($0.id, $0) })
+        guard let latest = TurnDisplayPlanner.latestMessage(
+            segments: turn.segments,
+            toolCallsById: toolCallsById
+        ) else {
+            return nil
+        }
+
+        switch latest {
+        case .segment(.thinking(let segment)):
+            return segment.isOpenForAppend ? .thinking : nil
+        case .segment(.toolCall(let id)):
+            return toolCallsById[id].map(activity(for:))
+        case .toolRun(let run):
+            guard let id = run.toolCallIds.last, let record = toolCallsById[id] else {
+                return nil
+            }
+            return activity(for: record)
+        case .segment(.reply):
+            return nil
+        }
+    }
+
+    private static func activity(for record: ToolCallRecord) -> ComputerUseVirtualMouseAgentActivity {
+        let presenter = ToolUIRegistry.presenter(for: record.name)
+        return .toolCall(label: presenter.label(record.args, record.status == .calling))
     }
 }

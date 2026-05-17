@@ -9,7 +9,7 @@ final class ComputerUseVirtualMouseOverlay {
 
     private let windowSize = VirtualMouseGlyphMetrics.windowSize
     private let tipAnchor = VirtualMouseGlyphMetrics.tipAnchor
-    private let visibilityNanoseconds: UInt64 = 10_000_000_000
+    private let visibilityNanoseconds: UInt64 = 30_000_000_000
     private var panel: ComputerUseVirtualMousePanel?
     private var cursorView: ComputerUseVirtualMouseView?
     private var hideTask: Task<Void, Never>?
@@ -23,39 +23,47 @@ final class ComputerUseVirtualMouseOverlay {
     private var motionGeneration: UInt64 = 0
     private var idlePhase: CGFloat = 0
     private var isMoving = false
+    private var agentActivity: ComputerUseVirtualMouseAgentActivity?
+    private var targetWindowId: CGWindowID?
 
     private init() {}
+
+    func setAgentActivity(_ activity: ComputerUseVirtualMouseAgentActivity?) {
+        agentActivity = activity
+        cursorView?.agentActivity = activity
+    }
 
     func handle(_ event: VirtualMouseEvent) async {
         switch event {
         case .move(let target):
-            await show(at: target.point, clickProgress: 0)
+            await show(at: target.point, windowId: target.windowId, clickProgress: 0)
         case .click(let target, _, let count):
-            await showClick(at: target.point, count: count)
-        case .drag(_, let point, _):
-            await show(at: point, clickProgress: 0.2)
+            await showClick(at: target.point, windowId: target.windowId, count: count)
+        case .drag(let target, let point, _):
+            await show(at: point, windowId: target.windowId, clickProgress: 0.2)
         case .settle(let target):
-            await show(at: target.point, clickProgress: 0)
+            await show(at: target.point, windowId: target.windowId, clickProgress: 0)
         case .dismiss:
             dismissImmediately()
         }
     }
 
-    private func show(at screenStatePoint: CGPoint, clickProgress: CGFloat) async {
+    private func show(at screenStatePoint: CGPoint, windowId: CGWindowID?, clickProgress: CGFloat) async {
         pulseTask?.cancel()
+        targetWindowId = windowId
         let point = Self.appKitPoint(fromScreenStatePoint: screenStatePoint)
         let panel = ensurePanel()
         let wasVisible = panel.isVisible
-        panel.orderFrontRegardless()
+        orderPanel(panel, relativeTo: windowId)
         startIdleLoop()
         await move(panel: panel, to: point, animateFromCurrent: wasVisible)
         cursorView?.clickProgress = clickProgress
         scheduleHide()
     }
 
-    private func showClick(at screenStatePoint: CGPoint, count: Int) async {
+    private func showClick(at screenStatePoint: CGPoint, windowId: CGWindowID?, count: Int) async {
         let pulseCount = max(count, 1)
-        await show(at: screenStatePoint, clickProgress: 0)
+        await show(at: screenStatePoint, windowId: windowId, clickProgress: 0)
         pulseTask?.cancel()
         pulseTask = Task { @MainActor [weak self] in
             for index in 0..<pulseCount {
@@ -108,11 +116,12 @@ final class ComputerUseVirtualMouseOverlay {
         panel.hasShadow = false
         panel.ignoresMouseEvents = true
         panel.isOpaque = false
-        panel.level = .statusBar
+        panel.level = .normal
         panel.title = "AOS Virtual Mouse"
         panel.setAccessibilityElement(false)
 
         let cursorView = ComputerUseVirtualMouseView(frame: frame)
+        cursorView.agentActivity = agentActivity
         cursorView.setAccessibilityElement(false)
         panel.contentView = cursorView
 
@@ -126,6 +135,7 @@ final class ComputerUseVirtualMouseOverlay {
             x: renderState.tipPosition.x - tipAnchor.x,
             y: renderState.tipPosition.y - tipAnchor.y
         ))
+        orderPanel(panel, relativeTo: targetWindowId)
         cursorView?.rotation = renderState.rotation
         cursorView?.cursorBodyOffset = renderState.cursorBodyOffset
         cursorView?.fogOffset = renderState.fogOffset
@@ -238,6 +248,7 @@ final class ComputerUseVirtualMouseOverlay {
             self.currentTipPoint = nil
             self.restingTipPoint = nil
             self.visualDynamicsState = nil
+            self.targetWindowId = nil
         }
     }
 
@@ -255,10 +266,19 @@ final class ComputerUseVirtualMouseOverlay {
         currentTipPoint = nil
         restingTipPoint = nil
         visualDynamicsState = nil
+        targetWindowId = nil
         cursorView?.rotation = 0
         cursorView?.cursorBodyOffset = CGVector(dx: 0, dy: 0)
         cursorView?.fogOffset = CGVector(dx: 0, dy: 0)
         panel?.orderOut(nil)
+    }
+
+    private func orderPanel(_ panel: NSPanel, relativeTo windowId: CGWindowID?) {
+        if let windowId {
+            panel.order(.above, relativeTo: Int(windowId))
+        } else {
+            panel.orderFront(nil)
+        }
     }
 
     private func bestMotionPath(from start: CGPoint, to end: CGPoint) -> CursorMotionPath {
@@ -338,7 +358,25 @@ private final class ComputerUseVirtualMousePanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+public enum ComputerUseVirtualMouseAgentActivity: Sendable, Equatable {
+    case thinking
+    case toolCall(label: String)
+}
+
+public enum ComputerUseVirtualMouseActivityOverlay {
+    @MainActor
+    public static func updateAgentActivity(_ activity: ComputerUseVirtualMouseAgentActivity?) {
+        ComputerUseVirtualMouseOverlay.shared.setAgentActivity(activity)
+    }
+}
+
 private final class ComputerUseVirtualMouseView: NSView {
+    var agentActivity: ComputerUseVirtualMouseAgentActivity? {
+        didSet {
+            needsDisplay = true
+        }
+    }
+
     var rotation: CGFloat = 0 {
         didSet {
             needsDisplay = true
@@ -390,7 +428,7 @@ private final class ComputerUseVirtualMouseView: NSView {
         }
 
         VirtualMouseGlyphRenderer.draw(
-            in: bounds,
+            in: VirtualMouseGlyphMetrics.glyphRect,
             context: context,
             state: VirtualMouseGlyphRenderState(
                 rotation: rotation,
@@ -401,5 +439,123 @@ private final class ComputerUseVirtualMouseView: NSView {
                 clickProgress: clickProgress
             )
         )
+
+        if let agentActivity {
+            VirtualMouseStatusCapsuleRenderer.draw(
+                activity: agentActivity,
+                in: bounds,
+                context: context,
+                time: CACurrentMediaTime()
+            )
+        }
+    }
+}
+
+private enum VirtualMouseStatusCapsuleRenderer {
+    private static let backgroundColor = NSColor(
+        deviceRed: 11.0 / 255.0,
+        green: 153.0 / 255.0,
+        blue: 255.0 / 255.0,
+        alpha: 1
+    )
+    private static let borderColor = NSColor.white
+    private static let textColor = NSColor.white
+    private static let height: CGFloat = 28
+    private static let minWidth: CGFloat = 48
+    private static let maxWidth: CGFloat = 190
+    private static let horizontalPadding: CGFloat = 12
+    private static let borderWidth: CGFloat = 1.5
+
+    static func draw(
+        activity: ComputerUseVirtualMouseAgentActivity,
+        in bounds: CGRect,
+        context: CGContext,
+        time: CFTimeInterval
+    ) {
+        let frame = capsuleFrame(for: activity, in: bounds)
+        let path = NSBezierPath(roundedRect: frame, xRadius: height / 2, yRadius: height / 2)
+        backgroundColor.setFill()
+        path.fill()
+        borderColor.setStroke()
+        path.lineWidth = borderWidth
+        path.stroke()
+
+        switch activity {
+        case .thinking:
+            drawThinkingDots(in: frame, time: time)
+        case .toolCall(let label):
+            drawToolLabel(label, in: frame)
+        }
+    }
+
+    private static func capsuleFrame(
+        for activity: ComputerUseVirtualMouseAgentActivity,
+        in bounds: CGRect
+    ) -> CGRect {
+        let width: CGFloat
+        switch activity {
+        case .thinking:
+            width = minWidth
+        case .toolCall(let label):
+            width = min(
+                max(labelWidth(label) + (horizontalPadding * 2), minWidth),
+                maxWidth
+            )
+        }
+        return CGRect(
+            x: min(VirtualMouseGlyphMetrics.glyphRect.maxX - 34, bounds.maxX - width - 2),
+            y: 28,
+            width: width,
+            height: height
+        )
+    }
+
+    private static func drawThinkingDots(in frame: CGRect, time: CFTimeInterval) {
+        let radius: CGFloat = 3.3
+        let spacing: CGFloat = 10
+        let centerX = frame.midX - spacing
+        let baseY = frame.midY
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let phase = CGFloat(time).truncatingRemainder(dividingBy: 0.9) / 0.9
+
+        for index in 0..<3 {
+            let local = (phase - (CGFloat(index) * 0.18) + 1).truncatingRemainder(dividingBy: 1)
+            let scale = reduceMotion ? 1 : 0.72 + (max(0, sin(local * .pi * 2)) * 0.42)
+            let scaledRadius = radius * scale
+            let dotRect = CGRect(
+                x: centerX + CGFloat(index) * spacing - scaledRadius,
+                y: baseY - scaledRadius,
+                width: scaledRadius * 2,
+                height: scaledRadius * 2
+            )
+            NSColor.white.setFill()
+            NSBezierPath(ovalIn: dotRect).fill()
+        }
+    }
+
+    private static func drawToolLabel(_ label: String, in frame: CGRect) {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingTail
+        paragraph.alignment = .center
+        let attributed = NSAttributedString(
+            string: label,
+            attributes: [
+                .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .semibold),
+                .foregroundColor: textColor,
+                .paragraphStyle: paragraph
+            ]
+        )
+        attributed.draw(
+            with: frame.insetBy(dx: horizontalPadding, dy: 6),
+            options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine]
+        )
+    }
+
+    private static func labelWidth(_ label: String) -> CGFloat {
+        let attributed = NSAttributedString(
+            string: label,
+            attributes: [.font: NSFont.monospacedSystemFont(ofSize: 12, weight: .semibold)]
+        )
+        return ceil(attributed.size().width)
     }
 }

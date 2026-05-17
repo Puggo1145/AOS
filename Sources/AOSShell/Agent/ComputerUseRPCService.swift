@@ -21,7 +21,11 @@ protocol ShellComputerUseClient: Sendable {
     func startAppSession(pid: pid_t, windowId: CGWindowID) async throws -> AppSessionResult
     func stopAppSession() async throws -> AppSessionResult
     func currentAppSession() async throws -> AppSessionResult
-    func postMouseEvent(windowId: CGWindowID, event: BackgroundMouseEvent) async throws -> WindowMouseEventResult
+    func postMouseEvent(
+        windowId: CGWindowID,
+        stateId: StateID,
+        event: BackgroundMouseEvent
+    ) async throws -> WindowMouseEventResult
     func postKeyboardEvent(windowId: CGWindowID, event: BackgroundKeyboardEvent) async throws -> WindowKeyboardEventResult
     func postEventToAXElement(
         windowId: CGWindowID,
@@ -66,8 +70,12 @@ struct LiveShellComputerUseClient: ShellComputerUseClient {
         try await core.currentAppSession()
     }
 
-    func postMouseEvent(windowId: CGWindowID, event: BackgroundMouseEvent) async throws -> WindowMouseEventResult {
-        try await core.postMouseEvent(windowId: windowId, event: event)
+    func postMouseEvent(
+        windowId: CGWindowID,
+        stateId: StateID,
+        event: BackgroundMouseEvent
+    ) async throws -> WindowMouseEventResult {
+        try await core.postMouseEvent(windowId: windowId, stateId: stateId, event: event)
     }
 
     func postKeyboardEvent(windowId: CGWindowID, event: BackgroundKeyboardEvent) async throws -> WindowKeyboardEventResult {
@@ -212,6 +220,7 @@ final class ComputerUseRPCService: Sendable {
     func handlePostMouseEvent(_ params: ComputerUsePostMouseEventParams) async throws -> ComputerUsePostMouseEventResult {
         let result = try await core.postMouseEvent(
             windowId: try windowId(params.windowId),
+            stateId: StateID(params.stateId),
             event: try BackgroundMouseEvent(params.event)
         )
         return ComputerUsePostMouseEventResult(result)
