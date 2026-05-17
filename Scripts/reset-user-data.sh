@@ -23,8 +23,53 @@ BUNDLE_ID="com.aos.shell"
 AOS_HOME="${HOME}/.aos"
 APIKEY_SERVICE="com.aos.apikey"
 
+delete_keychain_items() {
+    local output status removed
+    removed=0
+
+    while output=$(security delete-generic-password -s "${APIKEY_SERVICE}" 2>&1); do
+        removed=$((removed + 1))
+        echo "    removed one"
+    done
+    status=$?
+
+    if [ "${status}" -eq 44 ] && [[ "${output}" == *"could not be found"* ]]; then
+        if [ "${removed}" -eq 0 ]; then
+            echo "    (already empty)"
+        fi
+        echo "    done"
+        return
+    fi
+
+    echo "    failed to clear Keychain service ${APIKEY_SERVICE}" >&2
+    echo "    ${output}" >&2
+    return "${status}"
+}
+
+reset_tcc_service() {
+    local service bundle output status
+    service="$1"
+    bundle="$2"
+
+    if output=$(tccutil reset "${service}" "${bundle}" 2>&1); then
+        echo "    ${service}: cleared for ${bundle}"
+        return
+    fi
+    status=$?
+
+    if [ "${status}" -eq 64 ] && [[ "${output}" == *"No such bundle identifier"* ]]; then
+        echo "    ${service}: no registered bundle ${bundle}; nothing to clear"
+        return
+    fi
+
+    echo "    failed to reset ${service} for ${bundle}" >&2
+    echo "    ${output}" >&2
+    return "${status}"
+}
+
 echo "==> Quitting AOS if running"
 pkill -x AOS 2>/dev/null || true
+pkill -x AOSShell 2>/dev/null || true
 # Give AppKit a beat to flush its state to disk before we nuke it.
 sleep 0.4
 
@@ -42,25 +87,20 @@ defaults delete AOSShell       >/dev/null 2>&1 || true
 echo "    cleared"
 
 echo "==> Clearing Keychain API keys (service=${APIKEY_SERVICE})"
-# `security delete-generic-password` removes one entry per call and exits
-# non-zero when nothing matches — loop until empty so every provider id
-# stored under the same service is removed.
-while security delete-generic-password -s "${APIKEY_SERVICE}" >/dev/null 2>&1; do
-    echo "    removed one"
-done
-echo "    done"
+# `security delete-generic-password` removes one entry per call. Keep
+# looping until the Keychain reports "not found", but fail loudly for real
+# Keychain errors instead of treating them as a successful reset.
+delete_keychain_items
 
 echo "==> Resetting AOS's TCC grants"
-# tccutil exits non-zero if no record exists; that's fine for a reset.
 # Targets ONLY AOS — never call `tccutil reset SERVICE` without a
 # bundle id, that wipes every app's grant for the service. We list
 # both the canonical id and the ad-hoc identifier ("AOSShell") that
 # unsigned dev builds used to register under, in case stale records
 # linger from earlier sessions.
 for service in ScreenCapture Accessibility AppleEvents; do
-    sudo tccutil reset "${service}" "${BUNDLE_ID}" >/dev/null 2>&1 || true
-    sudo tccutil reset "${service}" AOSShell      >/dev/null 2>&1 || true
-    echo "    ${service}: cleared for AOS"
+    reset_tcc_service "${service}" "${BUNDLE_ID}"
+    reset_tcc_service "${service}" AOSShell
 done
 
 echo
