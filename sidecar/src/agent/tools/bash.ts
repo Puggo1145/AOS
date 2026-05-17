@@ -1,10 +1,10 @@
 // Bash tool — execute shell commands via `Bun.spawn`.
 //
 // Design choices:
-//   - cwd is intentionally NOT pinned. AOS is an OS-level helper, not a
-//     sandbox; the model uses `cd` inside its command if it needs a
-//     specific directory. The system prompt nudges it toward
-//     `~/.aos/workspace/` for scratch work.
+//   - cwd starts in the AOS workspace so model-created scratch artifacts land
+//     in AOS-owned storage by default. If spawning from that directory fails
+//     (for example, the user deleted it while AOS is running), retry without a
+//     pinned cwd and leave workspace recovery to the next sidecar boot.
 //   - `bash -lc <cmd>` so the model can chain commands, use pipes, and
 //     pick up the user's shell rc (PATH, conda, asdf, etc.).
 //   - Output is captured in full, then tail-truncated for the LLM
@@ -15,9 +15,11 @@
 //     fires first kills the subprocess.
 
 import type { ToolHandler, ToolExecContext, ToolExecResult } from "./types";
+import { workspaceDir } from "../workspace";
+import { accessSync, constants, statSync } from "node:fs";
 
 const MAX_OUTPUT_BYTES = 50_000;
-const MAX_OUTPUT_LINES = 200;
+const MAX_OUTPUT_LINES = 500;
 
 /// Default hard timeout when the model omits `timeout`. AOS runs as a
 /// background OS-level helper; an unbounded `tail -f` / `sleep 999` would
@@ -44,23 +46,32 @@ interface BashDetails {
   truncated: boolean;
   truncatedLines?: number;
   truncatedBytes?: number;
+  cwdFallback?: {
+    requestedCwd: string;
+    actualCwd: string;
+    reason: string;
+  };
 }
 
-export function createBashTool(): ToolHandler<BashArgs, BashDetails> {
+interface BashToolOptions {
+  workspace?: string;
+}
+
+export function createBashTool(options: BashToolOptions = {}): ToolHandler<BashArgs, BashDetails> {
+  const workspace = options.workspace ?? workspaceDir();
   return {
     spec: {
       name: "bash",
       description:
         `Execute a bash command via \`bash -lc\`. Returns combined stdout+stderr. ` +
-        `Output is tail-truncated to the last ${MAX_OUTPUT_LINES} lines or ${MAX_OUTPUT_BYTES / 1000}KB ` +
-        `(whichever hits first). The current working directory is NOT pinned to the AOS workspace — ` +
-        `use \`cd\` inside the command when you need a specific directory.`,
+        `Output is tail-truncated to the last ${MAX_OUTPUT_LINES} lines or ${MAX_OUTPUT_BYTES / 1000}KB (whichever hits first).` +
+        `Commands start in the workspace when available. `,
       parameters: {
         type: "object",
         properties: {
           command: {
             type: "string",
-            description: "Bash command to execute. Use `cd` to switch directories.",
+            description: "Bash command to execute.",
           },
           timeout: {
             type: "number",
@@ -70,11 +81,15 @@ export function createBashTool(): ToolHandler<BashArgs, BashDetails> {
         required: ["command"],
       },
     },
-    execute: (args, ctx) => runBash(args, ctx),
+    execute: (args, ctx) => runBash(args, ctx, workspace),
   };
 }
 
-async function runBash(args: BashArgs, ctx: ToolExecContext): Promise<ToolExecResult<BashDetails>> {
+async function runBash(
+  args: BashArgs,
+  ctx: ToolExecContext,
+  workspace: string,
+): Promise<ToolExecResult<BashDetails>> {
   const startedAt = Date.now();
 
   // Resolve effective timeout. The JSON-schema validator does not enforce
@@ -113,11 +128,8 @@ async function runBash(args: BashArgs, ctx: ToolExecContext): Promise<ToolExecRe
 
   let proc: ReturnType<typeof Bun.spawn> | undefined;
   try {
-    proc = Bun.spawn(["bash", "-lc", args.command], {
-      stdout: "pipe",
-      stderr: "pipe",
-      signal: combined.signal,
-    });
+    const spawn = spawnBash(args.command, combined.signal, workspace);
+    proc = spawn.proc;
 
     // Read both streams concurrently. Bun's spawn pipes are ReadableStream<Uint8Array>;
     // `Response` is the simplest way to drain them to text without manual
@@ -140,6 +152,12 @@ async function runBash(args: BashArgs, ctx: ToolExecContext): Promise<ToolExecRe
       const note = `[truncated: ${truncated.truncatedLines ?? 0} earlier lines / ${truncated.truncatedBytes ?? 0} bytes omitted]`;
       displayText = `${note}\n${displayText}`;
     }
+    if (spawn.cwdFallback) {
+      const note =
+        `[cwd fallback: AOS workspace ${spawn.cwdFallback.requestedCwd} was unavailable; ` +
+        `command ran from ${spawn.cwdFallback.actualCwd}. Spawn error: ${spawn.cwdFallback.reason}]`;
+      displayText = `${note}\n${displayText}`;
+    }
 
     const details: BashDetails = {
       exitCode,
@@ -149,6 +167,7 @@ async function runBash(args: BashArgs, ctx: ToolExecContext): Promise<ToolExecRe
       truncated: truncated.truncated,
       truncatedLines: truncated.truncatedLines,
       truncatedBytes: truncated.truncatedBytes,
+      cwdFallback: spawn.cwdFallback,
     };
 
     if (timedOut) {
@@ -174,6 +193,52 @@ async function runBash(args: BashArgs, ctx: ToolExecContext): Promise<ToolExecRe
   } finally {
     clearTimeout(timeoutHandle);
     ctx.signal.removeEventListener("abort", onParentAbort);
+  }
+}
+
+interface SpawnBashResult {
+  proc: ReturnType<typeof Bun.spawn>;
+  cwdFallback?: {
+    requestedCwd: string;
+    actualCwd: string;
+    reason: string;
+  };
+}
+
+function spawnBash(command: string, signal: AbortSignal, requestedCwd: string): SpawnBashResult {
+  const options = {
+    stdout: "pipe" as const,
+    stderr: "pipe" as const,
+    signal,
+  };
+  try {
+    return {
+      proc: Bun.spawn(["bash", "-lc", command], {
+        ...options,
+        cwd: requestedCwd,
+      }),
+    };
+  } catch (err) {
+    if (!isWorkspaceUnavailable(requestedCwd)) throw err;
+    return {
+      proc: Bun.spawn(["bash", "-lc", command], options),
+      cwdFallback: {
+        requestedCwd,
+        actualCwd: process.cwd(),
+        reason: String(err),
+      },
+    };
+  }
+}
+
+function isWorkspaceUnavailable(path: string): boolean {
+  try {
+    const stat = statSync(path);
+    if (!stat.isDirectory()) return true;
+    accessSync(path, constants.X_OK);
+    return false;
+  } catch {
+    return true;
   }
 }
 
