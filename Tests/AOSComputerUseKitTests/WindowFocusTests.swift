@@ -123,6 +123,21 @@ struct WindowFocusTests {
         #expect(bytes[0x20] == 0x00)
     }
 
+    @Test("builds the SLPS key-window event record layout")
+    func buildsSLPSKeyWindowEventRecordLayout() {
+        let beginBytes = SkyLightWindowFocuser.makeKeyWindowEventBytes(
+            windowId: 0x0102_0304,
+            phase: .begin
+        )
+        assertKeyWindowEventRecordLayout(beginBytes, opcode: 0x01)
+
+        let endBytes = SkyLightWindowFocuser.makeKeyWindowEventBytes(
+            windowId: 0x0102_0304,
+            phase: .end
+        )
+        assertKeyWindowEventRecordLayout(endBytes, opcode: 0x02)
+    }
+
     @Test("deactivates only the target PSN with one target-side defocus event")
     func deactivatesOnlyTargetPSNWithOneTargetSideDefocusEvent() throws {
         let targetPid: pid_t = pid_t.random(in: 1_000..<50_000)
@@ -156,8 +171,8 @@ struct WindowFocusTests {
     /// Regression: the focuser must never touch the previously-focused
     /// process. Posting a defocus event (or any event) to a non-target PSN
     /// is what used to flip the user's prior window into a deactive state.
-    @Test("focuses only the target PSN with one target-side focus event")
-    func focusesOnlyTargetPSNWithOneTargetSideFocusEvent() throws {
+    @Test("focuses only the target PSN with target-side key window events")
+    func focusesOnlyTargetPSNWithTargetSideKeyWindowEvents() throws {
         let targetPid: pid_t = pid_t.random(in: 1_000..<50_000)
         let targetWindowId = CGWindowID.random(in: 1..<UInt32.max)
         let targetPSN: SkyLightWindowFocuser.ProcessSerialNumber = [
@@ -180,9 +195,7 @@ struct WindowFocusTests {
 
         let posts = recorder.posts
 
-        // Exactly one target-side focus event. No key-window activation and no
-        // events should ever be addressed to a previous front PSN.
-        #expect(posts.count == 1)
+        try #require(posts.count == 3)
         for post in posts {
             #expect(post.psn == targetPSN)
         }
@@ -196,16 +209,20 @@ struct WindowFocusTests {
         #expect(focusEvents.contains(where: { $0.bytes[0x8a] == 0x02 }) == false)
         #expect(posts[0].bytes[0x08] == 0x0d)
         #expect(posts[0].bytes[0x8a] == 0x01)
+        #expect(posts[1].bytes[0x08] == 0x01)
+        #expect(posts[2].bytes[0x08] == 0x02)
         for post in posts {
             #expect(post.bytes[0x3c] == UInt8(UInt32(targetWindowId) & 0xff))
+        }
+        for post in posts.dropFirst() {
+            #expect(post.bytes[0x3a] == 0x10)
+            #expect(post.bytes[0x20..<0x30].allSatisfy { $0 == 0xff })
+            #expect(post.bytes[0x8a] == 0x00)
         }
     }
 
     @Test("focuser bubbles private SPI failures")
     func bubblesPrivateSPIFailures() {
-        enum ProbeFailure: Error {
-            case postFailed
-        }
         let focuser = SkyLightWindowFocuser(
             resolveProcessPSN: { _ in [1, 2] },
             postEventRecord: { _, _ in
@@ -217,6 +234,62 @@ struct WindowFocusTests {
             try focuser.focusWindowWithoutRaising(pid: 123, windowId: 456)
         }
     }
+
+    @Test("focuser bubbles key-window post failures with exact posted prefix")
+    func bubblesKeyWindowPostFailuresWithExactPostedPrefix() throws {
+        let scenarios: [(failingCallIndex: Int, expectedPostedOpcodes: [UInt8])] = [
+            (2, [0x0d]),
+            (3, [0x0d, 0x01]),
+        ]
+
+        for scenario in scenarios {
+            let recorder = FailingPostedEventRecorder(failingCallIndex: scenario.failingCallIndex)
+            let targetPSN: SkyLightWindowFocuser.ProcessSerialNumber = [1, 2]
+            let focuser = SkyLightWindowFocuser(
+                resolveProcessPSN: { _ in targetPSN },
+                postEventRecord: { psn, bytes in
+                    try recorder.record(psn: psn, bytes: bytes)
+                }
+            )
+
+            #expect(throws: ProbeFailure.postFailed) {
+                try focuser.focusWindowWithoutRaising(pid: 123, windowId: 0x0102_0304)
+            }
+
+            let posts = recorder.posts
+            #expect(posts.map(\.psn) == Array(
+                repeating: targetPSN,
+                count: scenario.expectedPostedOpcodes.count
+            ))
+            #expect(posts.map { $0.bytes[0x08] } == scenario.expectedPostedOpcodes)
+        }
+    }
+
+    private func assertKeyWindowEventRecordLayout(_ bytes: [UInt8], opcode: UInt8) {
+        #expect(bytes.count == 0xf8)
+        #expect(bytes[0x04] == 0xf8)
+        #expect(bytes[0x08] == opcode)
+        #expect(bytes[0x20..<0x30].allSatisfy { $0 == 0xff })
+        #expect(bytes[0x3a] == 0x10)
+        #expect(bytes[0x3c] == 0x04)
+        #expect(bytes[0x3d] == 0x03)
+        #expect(bytes[0x3e] == 0x02)
+        #expect(bytes[0x3f] == 0x01)
+        #expect(bytes[0x8a] == 0x00)
+
+        let documentedOffsets = Set([0x04, 0x08, 0x3a, 0x3c, 0x3d, 0x3e, 0x3f, 0x8a])
+        let payloadRange = 0x20..<0x30
+        for offset in bytes.indices {
+            guard documentedOffsets.contains(offset) == false, payloadRange.contains(offset) == false else {
+                continue
+            }
+            #expect(bytes[offset] == 0x00)
+        }
+    }
+}
+
+private enum ProbeFailure: Error {
+    case postFailed
 }
 
 private actor FocusRecorder {
@@ -258,5 +331,33 @@ private final class PostedEventRecorder: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         storage.append(Post(psn: psn, bytes: bytes))
+    }
+}
+
+private final class FailingPostedEventRecorder: @unchecked Sendable {
+    private let failingCallIndex: Int
+    private let lock = NSLock()
+    private var callCount = 0
+    private var storage: [PostedEventRecorder.Post] = []
+
+    init(failingCallIndex: Int) {
+        self.failingCallIndex = failingCallIndex
+    }
+
+    var posts: [PostedEventRecorder.Post] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+
+    func record(psn: SkyLightWindowFocuser.ProcessSerialNumber, bytes: [UInt8]) throws {
+        lock.lock()
+        defer { lock.unlock() }
+
+        callCount += 1
+        guard callCount != failingCallIndex else {
+            throw ProbeFailure.postFailed
+        }
+        storage.append(PostedEventRecorder.Post(psn: psn, bytes: bytes))
     }
 }

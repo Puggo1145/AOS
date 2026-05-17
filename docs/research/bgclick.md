@@ -33,10 +33,12 @@ AOS 目前在短生命周期 CLI 里实现了同一模型的同步版本：投�
 - `Sources/AOSComputerUseKit/Windows/SkyLightWindowFocuser.swift`
 
 点击前和显式 `focus-window` 使用同一个 `focusWindowWithoutRaising` 路径，只对目标
-进程的 PSN 发送一个 target-side focus event record：
+进程的 PSN 发送 target-side focus/key-window event records：
 
 ```text
 SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: focus))
+SLPSPostEventRecordTo(targetPSN, keyWindow(windowId, phase: begin))
+SLPSPostEventRecordTo(targetPSN, keyWindow(windowId, phase: end))
 ```
 
 关键点：
@@ -47,8 +49,9 @@ SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: focus))
   出现 deactive / refocus 闪动。
 - 当前 mouse event 链路不再有单独的 mouse-specific focuser。`left-click`
   先走这条标准 focus-without-raise 路径。
-- 当前 standard target-side focus 已在多个 App 上验证：目标能进入输入路由状态，
-  同时用户 frontmost app 保持不变。
+- target-side focus 已在多个 App 上验证：目标能进入输入路由状态，同时用户
+  frontmost app 保持不变。新增 key-window begin/end 还需要补充 AppKit 与
+  Chromium/webContent live validation 记录。
 
 这一步解决的是 AppKit routing，不负责投放鼠标，也不负责 z-order preservation。
 
@@ -185,7 +188,7 @@ session 结束后停留在无法响应真实用户鼠标点击/拖拽的 inactiv
 
 这条链路把四个问题拆开处理：
 
-1. **Input routing**：standard target-side `SLPSPostEventRecordTo` focus record
+1. **Input routing**：standard target-side `SLPSPostEventRecordTo` focus/key-window records
    让目标 AppKit 窗口相信自己可接收输入。
 2. **Event delivery**：pid-scoped `CGEvent.postToPid` 把鼠标事件送进目标进程，不碰全局 HID cursor。
 3. **Order drift detection**：`WindowOrderGuardian` 只观察 target 是否越过原 overlapping cover，不直接重排任何窗口。
@@ -272,7 +275,7 @@ target window 发送 defocus。成对 start/stop 需要调用方复用同一个
 ## Implementation Map
 
 - `SkyLightWindowFocuser`
-  - standard target-side focus record for mouse routing and explicit focus.
+  - standard target-side focus/key-window records for mouse routing and explicit focus.
   - target-side defocus record remains a diagnostic primitive, not app-session cleanup.
 
 - `BackgroundMouseEvent`

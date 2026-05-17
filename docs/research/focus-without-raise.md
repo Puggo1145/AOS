@@ -12,11 +12,13 @@ focus-without-raise primitive。目标是给定 `pid + CGWindowID`，让目标�
 
 ## Current Primitive
 
-当前 focus primitive 只向目标进程的 PSN 投递一个 target-side focus event record：
+当前 focus primitive 只向目标进程的 PSN 投递 target-side records：
 
 ```text
 GetProcessForPID(targetPid, &targetPSN)
 SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: 0x01))
+SLPSPostEventRecordTo(targetPSN, keyWindow(windowId, phase: begin))
+SLPSPostEventRecordTo(targetPSN, keyWindow(windowId, phase: end))
 ```
 
 它刻意不做这些事：
@@ -54,9 +56,12 @@ WindowServer 允许跨 app 的多个窗口短时间同时处于 active/key-like 
 
 ## Event Record Layout
 
-focus event record 固定为 `0xf8` bytes。业务路径只使用 marker `0x01` 做 focus。
+event record 固定为 `0xf8` bytes。业务路径的 focus record 只使用 marker `0x01`。
 marker `0x02` 保留为低层诊断 primitive，绝不发给 previous PSN，也不再用于
-app-session cleanup。
+app-session cleanup。focus record 之后还会发送 target-side key-window begin/end
+records，用于让 AppKit 窗口的 key/main visual state 立即跟上。
+
+Focus/defocus record:
 
 | Offset | Value | Meaning |
 |---:|---:|---|
@@ -65,6 +70,17 @@ app-session cleanup。
 | `0x3c...0x3f` | little-endian `CGWindowID` | target window id |
 | `0x8a` | `0x01` | focus target |
 | `0x8a` | `0x02` | defocus target diagnostic primitive |
+
+Key-window record:
+
+| Offset | Value | Meaning |
+|---:|---:|---|
+| `0x04` | `0xf8` | event record size/opcode high |
+| `0x08` | `0x01` / `0x02` | key-window begin / end opcode |
+| `0x20...0x2f` | `0xff` | key-window event payload |
+| `0x3a` | `0x10` | key-window event marker |
+| `0x3c...0x3f` | little-endian `CGWindowID` | target window id |
+| `0x8a` | `0x00` | no focus/defocus marker on key-window records |
 
 Pseudo-code:
 
@@ -76,6 +92,19 @@ bytes[0x8a] = 0x01
 writeLittleEndianWindowId(windowId, into: &bytes, at: 0x3c)
 
 SLPSPostEventRecordTo(targetPSN, bytes)
+
+var keyBytes = [UInt8](repeating: 0, count: 0xf8)
+keyBytes[0x04] = 0xf8
+keyBytes[0x3a] = 0x10
+for offset in 0x20..<0x30 {
+    keyBytes[offset] = 0xff
+}
+writeLittleEndianWindowId(windowId, into: &keyBytes, at: 0x3c)
+
+keyBytes[0x08] = 0x01
+SLPSPostEventRecordTo(targetPSN, keyBytes)
+keyBytes[0x08] = 0x02
+SLPSPostEventRecordTo(targetPSN, keyBytes)
 ```
 
 ## Public API
@@ -111,7 +140,9 @@ Relevant coverage:
 - `validates pid ownership before focusing the window`
 - `does not focus a window owned by another pid`
 - `builds the SLPS focus event record layout`
-- `focuses only the target PSN with one target-side focus event`
+- `builds the SLPS key-window event record layout`
+- `focuses only the target PSN with target-side key window events`
+- `focuser bubbles key-window post failures with exact posted prefix`
 - `deactivates only target PSN with one target-side defocus event` (low-level
   diagnostic primitive only)
 - `focuser bubbles private SPI failures`

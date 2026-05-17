@@ -29,8 +29,10 @@ import Darwin
 /// Therefore this focuser:
 ///   - Never resolves the previous front process and never posts any event
 ///     against it. The previous window keeps its key/active state.
-///   - Posts only the target-side `focus` event-record that the background
-///     click path has proven sufficient for pid-routed mouse dispatch.
+///   - Posts only target-side records:
+///       1. `focus` event-record (marker `0x01`)
+///       2. `key-window begin` event-record
+///       3. `key-window end` event-record
 ///   - Keeps the target-side `defocus` event as a low-level diagnostic
 ///     primitive. `ComputerUseCore` does not use it for app-session cleanup:
 ///     live validation showed it can leave the user-facing target window
@@ -70,6 +72,14 @@ struct SkyLightWindowFocuser: Sendable {
     func focusWindowWithoutRaising(pid: pid_t, windowId: CGWindowID) throws {
         let targetPSN = try resolveProcessPSN(pid)
         try postEventRecord(targetPSN, Self.makeFocusEventBytes(windowId: windowId))
+        try postEventRecord(
+            targetPSN,
+            Self.makeKeyWindowEventBytes(windowId: windowId, phase: .begin)
+        )
+        try postEventRecord(
+            targetPSN,
+            Self.makeKeyWindowEventBytes(windowId: windowId, phase: .end)
+        )
     }
 
     func deactivateWindowWithoutRaising(pid: pid_t, windowId: CGWindowID) throws {
@@ -100,6 +110,29 @@ struct SkyLightWindowFocuser: Sendable {
     enum FocusEventMarker: UInt8, Sendable {
         case focus = 0x01
         case defocus = 0x02
+    }
+
+    enum KeyWindowEventPhase: UInt8, Sendable {
+        case begin = 0x01
+        case end = 0x02
+    }
+
+    /// SLPS key-window event-record, target-side only. This complements the
+    /// focus marker for AppKit windows whose active chrome does not update
+    /// from the focus record alone.
+    static func makeKeyWindowEventBytes(
+        windowId: CGWindowID,
+        phase: KeyWindowEventPhase
+    ) -> [UInt8] {
+        var eventBytes = [UInt8](repeating: 0, count: eventRecordSize)
+        eventBytes[0x04] = 0xf8
+        eventBytes[0x08] = phase.rawValue
+        eventBytes[0x3a] = 0x10
+        for offset in 0x20..<0x30 {
+            eventBytes[offset] = 0xff
+        }
+        writeWindowId(windowId, into: &eventBytes)
+        return eventBytes
     }
 
     private static func writeWindowId(_ windowId: CGWindowID, into eventBytes: inout [UInt8]) {

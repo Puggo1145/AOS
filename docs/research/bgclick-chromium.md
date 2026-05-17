@@ -82,10 +82,12 @@ Chromium needs a pre-click target focus state for the pid-routed mouse events
 to reach web content. AOS uses `SkyLightWindowFocuser.focusWindowWithoutRaising`
 for this.
 
-The focus call posts one target-side SkyLight/HIServices event record:
+The focus call posts target-side SkyLight/HIServices event records:
 
 ```text
 SLPSPostEventRecordTo(targetPSN, focus(windowId, marker: 0x01))
+SLPSPostEventRecordTo(targetPSN, keyWindow(windowId, phase: begin))
+SLPSPostEventRecordTo(targetPSN, keyWindow(windowId, phase: end))
 ```
 
 Important invariants:
