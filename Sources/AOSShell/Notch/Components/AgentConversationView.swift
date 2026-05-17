@@ -30,6 +30,7 @@ struct AgentConversationView: View {
     @State private var prevBottomSentinelMaxY: CGFloat = 0
     @State private var followEvalPending: Bool = false
     @State private var lastObservedTurnCount: Int = 0
+    @AppStorage("aos.conversationDisplayMode") private var displayModeRaw: String = ConversationDisplayMode.history.rawValue
 
     /// Symmetric ±4pt band around the viewport bottom: re-attach when
     /// the sentinel sits within this slack of the bottom; detach when a
@@ -39,6 +40,14 @@ struct AgentConversationView: View {
 
     private var hasSession: Bool {
         viewModel.isAgentLoopActive
+    }
+
+    private var displayMode: ConversationDisplayMode {
+        ConversationDisplayMode(rawValue: displayModeRaw)!
+    }
+
+    private var contentScale: ConversationContentScale {
+        displayMode == .compact ? .focused : .normal
     }
 
     /// One renderable row in the history feed. Turns and compact-event
@@ -66,9 +75,9 @@ struct AgentConversationView: View {
     /// `agent.reset`) is treated the same as nil — it lands at the top
     /// so it isn't silently lost.
     private var historyItems: [HistoryItem] {
-        let turns = agentService.turns
+        let turns = ConversationDisplayProjection.turns(agentService.turns, mode: displayMode)
         let events = agentService.compactEvents
-        guard !events.isEmpty else { return turns.map { .turn($0) } }
+        guard displayMode == .history, !events.isEmpty else { return turns.map { .turn($0) } }
 
         var afterByTurn: [String: [CompactEvent]] = [:]
         var topEvents: [CompactEvent] = []
@@ -198,12 +207,18 @@ struct AgentConversationView: View {
                         ForEach(historyItems) { item in
                             switch item {
                             case .turn(let turn):
-                                turnRow(turn)
-                                    .id(item.id)
-                                    .transition(.asymmetric(
-                                        insertion: .opacity,
-                                        removal: .identity
-                                    ))
+                                Group {
+                                    if displayMode == .compact {
+                                        compactTurnRow(turn)
+                                    } else {
+                                        turnRow(turn)
+                                    }
+                                }
+                                .id(item.id)
+                                .transition(.asymmetric(
+                                    insertion: .opacity,
+                                    removal: .identity
+                                ))
                             case .compact(let event):
                                 CompactBlockView(event: event)
                                     .id(item.id)
@@ -245,7 +260,7 @@ struct AgentConversationView: View {
             )
             .onAppear {
                 lastObservedTurnCount = historyItems.count
-                guard let lastID = agentService.turns.last?.id else { return }
+                guard let lastID = historyItems.last?.id else { return }
                 followBottom = true
                 Task { @MainActor in
                     await Task.yield()
@@ -255,6 +270,11 @@ struct AgentConversationView: View {
                         proxy.scrollTo(lastID, anchor: .bottom)
                     }
                 }
+            }
+            .onChange(of: displayMode) { _, _ in
+                resetScrollState()
+                lastObservedTurnCount = historyItems.count
+                snapToBottom(proxy: proxy)
             }
             .onPreferenceChange(HistoryViewportHeightKey.self) { h in
                 viewportHeight = h.rounded()
@@ -442,6 +462,56 @@ struct AgentConversationView: View {
         }
     }
 
+    /// Compact mode keeps the current user prompt anchored while projecting
+    /// only the newest emitted agent item underneath it.
+    private func compactTurnRow(_ turn: ConversationTurn) -> some View {
+        let toolCallById: [String: ToolCallRecord] = Dictionary(
+            uniqueKeysWithValues: turn.toolCalls.map { ($0.id, $0) }
+        )
+        let compactPlan = TurnDisplayPlanner.compactPlan(for: turn)
+
+        return VStack(alignment: .leading, spacing: 8) {
+            PromptWithChipsView(
+                prompt: compactPlan.prompt,
+                clipboardLabels: compactPlan.clipboardLabels
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let latestAgentMessage = compactPlan.latestAgentMessage {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    turnEmojiView(turn)
+                        .font(.system(size: contentScale.agentEmojiFontSize, weight: .regular, design: .monospaced))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                    CompactAgentMessageSwitcher(
+                        message: latestAgentMessage,
+                        toolCallById: toolCallById,
+                        contentScale: contentScale
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+
+            if turn.status == .error, let msg = turn.errorMessage, !msg.isEmpty {
+                Text(msg)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.red.opacity(0.9))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.red.opacity(0.12))
+                    )
+            }
+        }
+        .fontWeight(contentScale.fontWeight)
+        .padding(.vertical, 12)
+        .padding(.trailing, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     @ViewBuilder
     private func displaySegmentView(
         _ segment: TurnDisplaySegment,
@@ -451,7 +521,11 @@ struct AgentConversationView: View {
         case .segment(let segment):
             segmentView(segment, toolCallById: toolCallById)
         case .toolRun(let run):
-            ToolCallRunSummaryView(run: run, toolCallById: toolCallById)
+            ToolCallRunSummaryView(
+                run: run,
+                toolCallById: toolCallById,
+                contentScale: contentScale
+            )
         }
     }
 
@@ -466,15 +540,16 @@ struct AgentConversationView: View {
                 thinking: s.text,
                 startedAt: s.startedAt,
                 endedAt: s.endedAt,
-                isCurrent: s.isOpenForAppend
+                isCurrent: s.isOpenForAppend,
+                contentScale: contentScale
             )
         case .toolCall(let id):
             if let record = toolCallById[id] {
-                ToolCallView(record: record)
+                ToolCallView(record: record, contentScale: contentScale)
             }
         case .reply(let s):
             if !s.text.isEmpty {
-                ReplyMarkdownView(text: s.text)
+                ReplyMarkdownView(text: s.text, theme: contentScale.replyTheme)
             }
         }
     }
@@ -508,9 +583,99 @@ struct AgentConversationView: View {
 private let historyBottomAnchor = "history.bottom"
 private let historyViewportSpace = "history.viewport"
 
+private struct CompactAgentMessageSwitcher: View {
+    let message: TurnDisplaySegment
+    let toolCallById: [String: ToolCallRecord]
+    let contentScale: ConversationContentScale
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var displayedMessage: TurnDisplaySegment?
+    @State private var blurRadius: CGFloat = 0
+    @State private var switchTask: Task<Void, Never>?
+
+    var body: some View {
+        compactMessageView(displayedMessage ?? message)
+            .blur(radius: blurRadius)
+            .opacity(blurRadius > 0 ? 0.72 : 1)
+            .onAppear {
+                if displayedMessage == nil {
+                    displayedMessage = message
+                }
+            }
+            .onChange(of: message) { _, newMessage in
+                guard displayedMessage?.id != newMessage.id else {
+                    displayedMessage = newMessage
+                    return
+                }
+                switchTo(newMessage)
+            }
+            .onDisappear {
+                switchTask?.cancel()
+            }
+    }
+
+    private func switchTo(_ next: TurnDisplaySegment) {
+        switchTask?.cancel()
+        if reduceMotion {
+            displayedMessage = next
+            blurRadius = 0
+            return
+        }
+
+        switchTask = Task { @MainActor in
+            withAnimation(.easeOut(duration: 0.10)) {
+                blurRadius = 14
+            }
+            try? await Task.sleep(for: .milliseconds(105))
+            guard !Task.isCancelled else { return }
+            displayedMessage = next
+            withAnimation(.easeOut(duration: 0.18)) {
+                blurRadius = 0
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func compactMessageView(_ segment: TurnDisplaySegment) -> some View {
+        switch segment {
+        case .segment(let segment):
+            compactTurnSegmentView(segment)
+        case .toolRun(let run):
+            ToolCallRunSummaryView(
+                run: run,
+                toolCallById: toolCallById,
+                contentScale: contentScale
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func compactTurnSegmentView(_ segment: TurnSegment) -> some View {
+        switch segment {
+        case .thinking(let s):
+            ThinkingView(
+                thinking: s.text,
+                startedAt: s.startedAt,
+                endedAt: s.endedAt,
+                isCurrent: s.isOpenForAppend,
+                contentScale: contentScale
+            )
+        case .toolCall(let id):
+            if let record = toolCallById[id] {
+                ToolCallView(record: record, contentScale: contentScale)
+            }
+        case .reply(let s):
+            if !s.text.isEmpty {
+                ReplyMarkdownView(text: s.text, theme: contentScale.replyTheme)
+            }
+        }
+    }
+}
+
 private struct ToolCallRunSummaryView: View {
     let run: ToolCallRunSegment
     let toolCallById: [String: ToolCallRecord]
+    let contentScale: ConversationContentScale
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
@@ -536,13 +701,13 @@ private struct ToolCallRunSummaryView: View {
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "wrench.and.screwdriver")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: contentScale.toolIconSize, weight: contentScale.fontWeight))
                         .notchForeground(.secondary)
                     Text(summary)
-                        .font(.system(size: 12, weight: .regular, design: .monospaced))
+                        .font(.system(size: contentScale.toolFontSize, weight: contentScale.fontWeight, design: .monospaced))
                         .notchForeground(.secondary)
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.system(size: contentScale.toolChevronSize, weight: .semibold))
                         .notchForeground(.secondary)
                         .rotationEffect(.degrees(expanded ? 90 : 0))
                         .animation(reduceMotion ? nil : .notchHeight, value: expanded)
@@ -561,11 +726,12 @@ private struct ToolCallRunSummaryView: View {
                                 thinking: thinking.text,
                                 startedAt: thinking.startedAt,
                                 endedAt: thinking.endedAt,
-                                isCurrent: thinking.isOpenForAppend
+                                isCurrent: thinking.isOpenForAppend,
+                                contentScale: contentScale
                             )
                         case .toolCall(let id):
                             if let record = toolCallById[id] {
-                                ToolCallView(record: record)
+                                ToolCallView(record: record, contentScale: contentScale)
                             }
                         case .reply:
                             EmptyView()

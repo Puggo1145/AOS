@@ -38,6 +38,7 @@ struct ThinkingView: View {
     /// same single-row layout as streaming but without the shimmer, since
     /// the model has visibly moved on.
     let isCurrent: Bool
+    var contentScale: ConversationContentScale = .normal
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded: Bool = false
@@ -47,11 +48,10 @@ struct ThinkingView: View {
     /// their content instead of always reserving `expandedMaxHeight`.
     @State private var expandedContentHeight: CGFloat = 0
 
-    private static let fontSize: CGFloat = 12
-    /// Tightly matches the rendered line height of the chosen monospaced
-    /// font at `fontSize`. Used both as the clip window height and as the
-    /// "one row" baseline when computing the upward scroll offset.
-    private static let lineHeight: CGFloat = 16
+    /// `contentScale.thinkingLineHeight` tightly matches the rendered line
+    /// height of the chosen monospaced font. Used both as the clip window
+    /// height and as the "one row" baseline when computing the upward scroll
+    /// offset.
     /// Cap on the expanded trace container. Past this the inner ScrollView
     /// takes over and the user scrolls inside the fixed-height slot.
     private static let expandedMaxHeight: CGFloat = 160
@@ -90,11 +90,13 @@ struct ThinkingView: View {
     /// `.animation(_:value:)` keyed on the measured height (suppressed
     /// under Reduce Motion).
     private var streamingTail: some View {
-        let offsetY = -max(0, measuredHeight - Self.lineHeight)
+        let lineHeight = contentScale.thinkingLineHeight
+        let offsetY = -max(0, measuredHeight - lineHeight)
         let tail = Self.tail(of: thinking, limit: Self.streamingTailLimit)
         return ShimmerText(
             text: tail.isEmpty ? " " : tail,
-            fontSize: Self.fontSize,
+            fontSize: contentScale.thinkingFontSize,
+            fontWeight: contentScale.fontWeight,
             // Paused segments (`!isCurrent`) share Reduce Motion's static
             // render path — visible but no animated band.
             reduceMotion: reduceMotion || !isCurrent
@@ -111,7 +113,7 @@ struct ThinkingView: View {
             // instead of animating.
             .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: measuredHeight)
             .frame(maxWidth: .infinity, alignment: .topLeading)
-            .frame(height: Self.lineHeight, alignment: .topLeading)
+            .frame(height: lineHeight, alignment: .topLeading)
             .clipped()
             .onPreferenceChange(ThinkingHeightKey.self) { h in
                 measuredHeight = h
@@ -155,10 +157,10 @@ struct ThinkingView: View {
             } label: {
                 HStack(spacing: 4) {
                     Text(elapsedLabel)
-                        .font(.system(size: Self.fontSize, weight: .regular, design: .monospaced))
+                        .font(.system(size: contentScale.thinkingFontSize, weight: contentScale.fontWeight, design: .monospaced))
                         .notchForeground(.secondary)
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.system(size: contentScale.toolChevronSize, weight: .semibold))
                         .notchForeground(.secondary)
                         .rotationEffect(.degrees(expanded ? 90 : 0))
                         .animation(reduceMotion ? nil : .notchHeight, value: expanded)
@@ -174,7 +176,7 @@ struct ThinkingView: View {
             if expanded {
                 ScrollView {
                     Text(thinking)
-                        .font(.system(size: Self.fontSize, weight: .regular, design: .monospaced))
+                        .font(.system(size: contentScale.thinkingFontSize, weight: contentScale.fontWeight, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.65))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
@@ -213,6 +215,7 @@ struct ThinkingView: View {
 private struct ShimmerText: View {
     let text: String
     let fontSize: CGFloat
+    let fontWeight: Font.Weight
     let reduceMotion: Bool
 
     var body: some View {
@@ -222,7 +225,7 @@ private struct ShimmerText: View {
         // TimelineView also avoids the per-frame body re-evaluation.
         if reduceMotion {
             Text(text)
-                .font(.system(size: fontSize, weight: .regular, design: .monospaced))
+                .font(.system(size: fontSize, weight: fontWeight, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.75))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
@@ -239,7 +242,7 @@ private struct ShimmerText: View {
         ZStack(alignment: .topLeading) {
             // Base: dim text always visible, full-width wrapping.
             Text(text)
-                .font(.system(size: fontSize, weight: .regular, design: .monospaced))
+                .font(.system(size: fontSize, weight: fontWeight, design: .monospaced))
                 .notchForeground(.quaternary)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -248,8 +251,8 @@ private struct ShimmerText: View {
             // bounding box; vertically the band extends across every
             // wrapped row, which is exactly what we want — the visible
             // row inherits the sweep at the right horizontal phase.
-            Text(text)
-                .font(.system(size: fontSize, weight: .regular, design: .monospaced))
+                Text(text)
+                    .font(.system(size: fontSize, weight: fontWeight, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.95))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .mask(

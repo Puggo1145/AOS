@@ -6,6 +6,98 @@ import Testing
 @Suite("Turn display planning")
 @MainActor
 struct TurnDisplayPlanTests {
+    @Test("compact display projects only the latest turn")
+    func compactDisplayProjectsLatestTurn() {
+        let first = turn(id: "first")
+        let current = turn(id: "current")
+
+        let projected = ConversationDisplayProjection.turns(
+            [first, current],
+            mode: .compact
+        )
+
+        #expect(projected.map(\.id) == ["current"])
+    }
+
+    @Test("history display preserves all turns in order")
+    func historyDisplayPreservesAllTurns() {
+        let first = turn(id: "first")
+        let current = turn(id: "current")
+
+        let projected = ConversationDisplayProjection.turns(
+            [first, current],
+            mode: .history
+        )
+
+        #expect(projected.map(\.id) == ["first", "current"])
+    }
+
+    @Test("latest message returns only the final reply after prior activity")
+    func latestMessageReturnsFinalReply() {
+        let t1 = tool(id: "A", name: "bash", status: .completed)
+        let reply = ReplySegment(text: "Done.")
+        let segments: [TurnSegment] = [
+            .thinking(ThinkingSegment(text: "checking", startedAt: Date())),
+            .toolCall(id: "A"),
+            .reply(reply)
+        ]
+
+        let latest = TurnDisplayPlanner.latestMessage(
+            segments: segments,
+            toolCallsById: ["A": t1]
+        )
+
+        #expect(latest == .segment(.reply(reply)))
+    }
+
+    @Test("latest message returns the final tool call when no later reply exists")
+    func latestMessageReturnsFinalToolCall() {
+        let t1 = tool(id: "A", name: "bash", status: .completed)
+        let t2 = tool(id: "B", name: "read", status: .calling)
+        let segments: [TurnSegment] = [
+            .thinking(ThinkingSegment(text: "checking", startedAt: Date())),
+            .toolCall(id: "A"),
+            .toolCall(id: "B")
+        ]
+
+        let latest = TurnDisplayPlanner.latestMessage(
+            segments: segments,
+            toolCallsById: ["A": t1, "B": t2]
+        )
+
+        #expect(latest == .segment(.toolCall(id: "B")))
+    }
+
+    @Test("compact plan preserves current prompt alongside latest agent message")
+    func compactPlanPreservesPromptAlongsideLatestAgentMessage() {
+        let reply = ReplySegment(text: "Done.")
+        let current = turn(
+            id: "current",
+            prompt: "Keep this visible",
+            segments: [.reply(reply)]
+        )
+
+        let plan = TurnDisplayPlanner.compactPlan(for: current)
+
+        #expect(plan.turnId == "current")
+        #expect(plan.prompt == "Keep this visible")
+        #expect(plan.latestAgentMessage == .segment(.reply(reply)))
+    }
+
+    @Test("compact plan has no agent message before sidecar output")
+    func compactPlanHasNoAgentMessageBeforeSidecarOutput() {
+        let current = turn(
+            id: "current",
+            prompt: "Initial prompt",
+            segments: []
+        )
+
+        let plan = TurnDisplayPlanner.compactPlan(for: current)
+
+        #expect(plan.prompt == "Initial prompt")
+        #expect(plan.latestAgentMessage == nil)
+    }
+
     @Test("completed tool run before next reply collapses into one display segment")
     func completedToolRunBeforeReplyCollapses() {
         let t1 = tool(id: "A", name: "bash", status: .completed)
@@ -218,6 +310,26 @@ struct TurnDisplayPlanTests {
             status: status,
             isError: status == .completed ? false : nil,
             outputText: status == .completed ? "" : nil
+        )
+    }
+
+    private func turn(
+        id: String,
+        prompt: String? = nil,
+        segments: [TurnSegment] = []
+    ) -> ConversationTurn {
+        ConversationTurn(
+            id: id,
+            prompt: prompt ?? "prompt \(id)",
+            context: ContextSnapshot(
+                appName: nil,
+                appIcon: nil,
+                behaviorSummaries: []
+            ),
+            reply: "",
+            status: .done,
+            errorMessage: nil,
+            segments: segments
         )
     }
 }

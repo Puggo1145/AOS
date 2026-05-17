@@ -33,6 +33,25 @@ public struct ToolCallRunSegment: Identifiable, Equatable {
     }
 }
 
+public struct CompactTurnDisplayPlan: Equatable {
+    public let turnId: String
+    public let prompt: String
+    public let clipboardLabels: [String]
+    public let latestAgentMessage: TurnDisplaySegment?
+
+    public init(
+        turnId: String,
+        prompt: String,
+        clipboardLabels: [String],
+        latestAgentMessage: TurnDisplaySegment?
+    ) {
+        self.turnId = turnId
+        self.prompt = prompt
+        self.clipboardLabels = clipboardLabels
+        self.latestAgentMessage = latestAgentMessage
+    }
+}
+
 public enum TurnDisplayPlanner {
     public static func plan(
         segments: [TurnSegment],
@@ -88,6 +107,27 @@ public enum TurnDisplayPlanner {
         }
 
         return out
+    }
+
+    public static func latestMessage(
+        segments: [TurnSegment],
+        toolCallsById: [String: ToolCallRecord]
+    ) -> TurnDisplaySegment? {
+        plan(segments: segments, toolCallsById: toolCallsById).last
+    }
+
+    @MainActor
+    public static func compactPlan(for turn: ConversationTurn) -> CompactTurnDisplayPlan {
+        let toolCallsById = Dictionary(uniqueKeysWithValues: turn.toolCalls.map { ($0.id, $0) })
+        return CompactTurnDisplayPlan(
+            turnId: turn.id,
+            prompt: turn.prompt,
+            clipboardLabels: turn.context.clipboardLabels,
+            latestAgentMessage: latestMessage(
+                segments: turn.segments,
+                toolCallsById: toolCallsById
+            )
+        )
     }
 
     private static func shouldCollapse(

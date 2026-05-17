@@ -35,12 +35,14 @@ struct SettingsPanelView: View {
     @State private var apiKeyDraft: String = ""
     @State private var apiKeySaveError: String? = nil
     @State private var apiKeySaving: Bool = false
+    @AppStorage("aos.conversationDisplayMode") private var displayModeRaw: String = ConversationDisplayMode.history.rawValue
 
     private enum Page: Equatable {
         case main
         case provider
         case model
         case effort
+        case displayMode
         case permissions
         case apiKey
     }
@@ -68,6 +70,12 @@ struct SettingsPanelView: View {
                     ))
             case .effort:
                 effortPickerPage
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .trailing).combined(with: .opacity),
+                        removal: .move(edge: .trailing).combined(with: .opacity)
+                    ))
+            case .displayMode:
+                displayModePickerPage
                     .transition(.asymmetric(
                         insertion: .move(edge: .trailing).combined(with: .opacity),
                         removal: .move(edge: .trailing).combined(with: .opacity)
@@ -166,6 +174,8 @@ struct SettingsPanelView: View {
             }
 
             permissionsRow
+
+            displayModeRow
 
             devModeRow
 
@@ -526,6 +536,44 @@ struct SettingsPanelView: View {
         Self.permissionStatus(for: permission, denied: permissionsService.state.denied)
     }
 
+    // MARK: - Conversation display mode
+
+    private var displayMode: ConversationDisplayMode {
+        ConversationDisplayMode(rawValue: displayModeRaw)!
+    }
+
+    private var displayModeRow: some View {
+        Button {
+            page = .displayMode
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "rectangle.stack")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .frame(width: 16)
+                Text("Display Mode")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.92))
+                Spacer(minLength: 8)
+                Text(displayMode.label)
+                    .font(.system(size: 11))
+                    .notchForeground(.secondary)
+                    .lineLimit(1)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .notchForeground(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.white.opacity(0.05))
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
     // MARK: - Dev Mode
     //
     // Posts `.aosOpenDevMode`; the CompositionRoot's DevModeWindowController
@@ -654,6 +702,21 @@ struct SettingsPanelView: View {
                         await configService.selectEffort(value)
                         page = .main
                     }
+                }
+            )
+        }
+    }
+
+    private var displayModePickerPage: some View {
+        pickerPage(title: "Display Mode") {
+            BentoOptionsList(
+                options: ConversationDisplayMode.allCases.map {
+                    BentoOption(id: $0.rawValue, title: $0.label)
+                },
+                selectedId: displayMode.rawValue,
+                onSelect: { rawValue in
+                    displayModeRaw = rawValue
+                    page = .main
                 }
             )
         }

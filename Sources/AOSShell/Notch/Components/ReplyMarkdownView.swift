@@ -8,14 +8,24 @@ import MarkdownUI
 // turn (O(visible × tokens)).
 struct ReplyMarkdownView: View, Equatable {
     let text: String
+    var theme: ReplyMarkdownTheme = .normal
 
     var body: some View {
         Markdown(text)
-            .markdownTheme(.aosNotchPanel)
+            .markdownTheme(theme.markdownTheme)
             .markdownImageProvider(BlockedImageProvider())
             .markdownInlineImageProvider(BlockedInlineImageProvider())
             .frame(maxWidth: .infinity, alignment: .leading)
             .textSelection(.enabled)
+    }
+}
+
+private extension ReplyMarkdownTheme {
+    var markdownTheme: Theme {
+        switch self {
+        case .normal: return .aosNotchPanel
+        case .focused: return .aosNotchPanelFocused
+        }
     }
 }
 
@@ -74,6 +84,82 @@ extension Theme {
                     .markdownTextStyle {
                         FontFamilyVariant(.monospaced)
                         FontSize(.em(0.95))
+                    }
+                    .padding(10)
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.white.opacity(0.08))
+            )
+            .markdownMargin(top: .em(0.4), bottom: .em(0.5))
+        }
+        .blockquote { configuration in
+            configuration.label
+                .padding(.leading, 10)
+                .overlay(alignment: .leading) {
+                    Rectangle()
+                        .fill(Color.white.opacity(0.25))
+                        .frame(width: 2)
+                }
+                .markdownMargin(top: .em(0.3), bottom: .em(0.5))
+        }
+
+    static let aosNotchPanelFocused: Theme = Theme()
+        .text {
+            FontFamily(.system(.monospaced))
+            FontSize(15)
+            FontWeight(.semibold)
+            ForegroundColor(.white.opacity(0.94))
+        }
+        .code {
+            FontFamilyVariant(.monospaced)
+            FontSize(.em(0.95))
+            FontWeight(.semibold)
+            BackgroundColor(.white.opacity(0.10))
+        }
+        .strong {
+            FontWeight(.semibold)
+        }
+        .link {
+            ForegroundColor(Color(red: 0.55, green: 0.78, blue: 1.0))
+        }
+        .heading1 { configuration in
+            configuration.label
+                .markdownTextStyle {
+                    FontWeight(.semibold)
+                    FontSize(.em(1.35))
+                }
+                .markdownMargin(top: .em(0.6), bottom: .em(0.3))
+        }
+        .heading2 { configuration in
+            configuration.label
+                .markdownTextStyle {
+                    FontWeight(.semibold)
+                    FontSize(.em(1.2))
+                }
+                .markdownMargin(top: .em(0.5), bottom: .em(0.25))
+        }
+        .heading3 { configuration in
+            configuration.label
+                .markdownTextStyle {
+                    FontWeight(.semibold)
+                    FontSize(.em(1.08))
+                }
+                .markdownMargin(top: .em(0.4), bottom: .em(0.2))
+        }
+        .paragraph { configuration in
+            configuration.label
+                .relativeLineSpacing(.em(0.18))
+                .markdownMargin(top: .em(0), bottom: .em(0.5))
+        }
+        .codeBlock { configuration in
+            ScrollView(.horizontal, showsIndicators: false) {
+                configuration.label
+                    .relativeLineSpacing(.em(0.2))
+                    .markdownTextStyle {
+                        FontFamilyVariant(.monospaced)
+                        FontSize(.em(0.95))
+                        FontWeight(.semibold)
                     }
                     .padding(10)
             }

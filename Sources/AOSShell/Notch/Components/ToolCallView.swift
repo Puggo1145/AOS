@@ -17,6 +17,7 @@ import AOSRPCSchema
 
 struct ToolCallView: View {
     let record: ToolCallRecord
+    var contentScale: ConversationContentScale = .normal
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded: Bool = false
@@ -25,7 +26,6 @@ struct ToolCallView: View {
     /// max-height cap.
     @State private var contentHeight: CGFloat = 0
 
-    private static let fontSize: CGFloat = 12
     /// Cap on the expanded body. Past this an inner ScrollView takes over
     /// and the user scrolls inside the fixed-height slot. Bash output can
     /// run to ~50KB; a hard cap keeps one tool from dominating the panel.
@@ -87,13 +87,13 @@ struct ToolCallView: View {
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: presenter.icon)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: contentScale.toolIconSize, weight: contentScale.fontWeight))
                         .notchForeground(.secondary)
                     Text(headerLabel)
-                        .font(.system(size: Self.fontSize, weight: .regular, design: .monospaced))
+                        .font(.system(size: contentScale.toolFontSize, weight: contentScale.fontWeight, design: .monospaced))
                         .notchForeground(.secondary)
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.system(size: contentScale.toolChevronSize, weight: .semibold))
                         .notchForeground(.secondary)
                         .rotationEffect(.degrees(expanded ? 90 : 0))
                         .animation(reduceMotion ? nil : .notchHeight, value: expanded)
@@ -106,7 +106,7 @@ struct ToolCallView: View {
             if expanded {
                 ScrollView {
                     Text(bodyText)
-                        .font(.system(size: Self.fontSize, weight: .regular, design: .monospaced))
+                        .font(.system(size: contentScale.toolFontSize, weight: contentScale.fontWeight, design: .monospaced))
                         .foregroundStyle(bodyForeground)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
