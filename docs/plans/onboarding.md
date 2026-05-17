@@ -249,7 +249,7 @@ Sources/AOSRPCSchema/
 Sources/AOSShell/
   Provider/
     ProviderService.swift              # @Observable，registerHandlers + queryStatus + startLogin
-  Notch/Components/
+  Notch/Onboarding/
     OnboardPanelView.swift             # opened 态 onboard UI
   Notch/NotchView.swift                # 改：opened 分支根据 providerService.hasReadyProvider 分流
   Notch/NotchViewModel.swift           # 改：注入 providerService 引用

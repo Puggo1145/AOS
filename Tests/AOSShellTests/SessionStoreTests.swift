@@ -86,7 +86,7 @@ struct SessionStoreTests {
         // B's turn has the semantic state immediately.
         #expect(store.mirrors["B"]?.turns.first?.status == .waiting)
         // Wait past the debounce window so the display projection lands too.
-        try await Task.sleep(for: .milliseconds(400))
+        try await waitUntil(timeout: 2) { store.mirrors["B"]?.status == .waiting }
         #expect(agent.status == .working)
         #expect(store.mirrors["B"]?.status == .waiting)
     }
@@ -102,6 +102,18 @@ struct SessionStoreTests {
         agent.handleError(UIErrorParams(sessionId: "B", turnId: "Tb", code: -32000, message: "B-failed"))
         #expect(agent.lastErrorMessage == nil)
         #expect(store.mirrors["B"]?.turns.first?.errorMessage == "B-failed")
+    }
+
+    private func waitUntil(
+        timeout: TimeInterval,
+        condition: @MainActor @escaping () -> Bool
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        throw RPCClientError.timeout(method: "test:waitUntil")
     }
 
     @Test("activate snapshot preserves per-mirror thinking fields")

@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 // MARK: - SidecarProcess
 //
@@ -11,8 +12,8 @@ import Foundation
 //       2. `swift run`: `<repo-root>/sidecar` (resolved relative to the
 //          executable URL by walking up out of `.build/...`)
 //   - stderr: line-buffered → forwarded to Shell stderr with a `[sidecar]` tag
-//   - exit: exponential backoff respawn (1s → 30s cap); after 3 consecutive
-//     handshake failures, emit a `Fatal` callback so the UI can show a banner
+//   - unexpected exit: emit a callback so the Shell can enter a fatal boot/
+//     runtime state instead of leaving the Notch UI connected to a dead pipe
 //   - terminate(): SIGTERM, then force kill 1s later if still alive
 
 public struct SidecarPipes {
@@ -35,8 +36,19 @@ public final class SidecarProcess: @unchecked Sendable {
     private var process: Process?
     private var stderrReadTask: Task<Void, Never>?
     private(set) public var pipes: SidecarPipes?
+    private struct TerminationState {
+        var expectedTermination: Bool = false
+        var unexpectedExitHandler: (@Sendable (Int32) -> Void)?
+    }
+    private let terminationState = OSAllocatedUnfairLock<TerminationState>(
+        initialState: TerminationState()
+    )
 
     public init() {}
+
+    public func setUnexpectedExitHandler(_ handler: @escaping @Sendable (Int32) -> Void) {
+        terminationState.withLock { $0.unexpectedExitHandler = handler }
+    }
 
     /// Spawn the Bun sidecar. Returns the stdio pipes so callers (RPCClient)
     /// can immediately attach.
@@ -59,6 +71,10 @@ public final class SidecarProcess: @unchecked Sendable {
             try proc.run()
         } catch {
             throw SidecarLaunchError.launchFailed(underlying: error)
+        }
+        terminationState.withLock { $0.expectedTermination = false }
+        proc.terminationHandler = { [weak self] process in
+            self?.handleTermination(status: process.terminationStatus)
         }
         process = proc
 
@@ -94,6 +110,7 @@ public final class SidecarProcess: @unchecked Sendable {
     /// Graceful shutdown: SIGTERM, escalate to forceful terminate after 1s.
     public func terminate() {
         guard let proc = process, proc.isRunning else { return }
+        terminationState.withLock { $0.expectedTermination = true }
         // Capture the pid up-front. Without this, between the
         // `proc.isRunning` check and `kill(...)` the OS could reuse this
         // pid for another process (rare but possible on macOS), and we'd
@@ -116,6 +133,13 @@ public final class SidecarProcess: @unchecked Sendable {
     }
 
     public var isRunning: Bool { process?.isRunning ?? false }
+
+    private func handleTermination(status: Int32) {
+        let handler = terminationState.withLock { state -> (@Sendable (Int32) -> Void)? in
+            state.expectedTermination ? nil : state.unexpectedExitHandler
+        }
+        handler?(status)
+    }
 
     // MARK: - Resolution
 

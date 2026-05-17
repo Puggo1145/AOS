@@ -198,6 +198,24 @@ struct TurnDisplayPlanTests {
         #expect(ToolCallRunSummary.text(for: records) == "polished 2 times")
     }
 
+    @Test("built-in presenter surfaces malformed args instead of generic running placeholder")
+    func builtinPresenterSurfacesMalformedArgs() {
+        let bash = ToolUIRegistry.presenter(for: "bash")
+        #expect(bash.callingBody(.object(["timeout": .int(1)])) == "Malformed bash args: missing command")
+
+        let read = ToolUIRegistry.presenter(for: "read")
+        #expect(read.callingBody(.object(["limit": .int(10)])) == "Malformed read args: missing path")
+
+        let update = ToolUIRegistry.presenter(for: "update")
+        #expect(update.callingBody(.object(["path": .string("Package.swift")])) == "Malformed update args: missing old_text/new_text")
+
+        let todo = ToolUIRegistry.presenter(for: "todo_write")
+        #expect(todo.callingBody(.object(["items": .string("bad")])) == "Malformed todo_write args: missing items")
+
+        let mouse = ToolUIRegistry.presenter(for: "use_mouse")
+        #expect(mouse.callingBody(.object(["event": .string("bad")])) == "Malformed use_mouse args: missing event")
+    }
+
     @Test("computer use presenters expose concrete action labels")
     func computerUsePresentersExposeConcreteActionLabels() {
         let windows = ToolUIRegistry.presenter(for: "list_windows")

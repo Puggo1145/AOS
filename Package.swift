@@ -150,7 +150,7 @@ let package = Package(
             ],
             path: "Sources/AOSShell",
             swiftSettings: [
-                .enableExperimentalFeature("StrictConcurrency=minimal")
+                .enableExperimentalFeature("StrictConcurrency=complete")
             ]
         ),
         .testTarget(

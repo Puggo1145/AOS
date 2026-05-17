@@ -6,15 +6,12 @@
 
 - 提供 closed / popping / opened 三态视觉，绑定到屏幕物理刘海
 - 闭合态显示前台 app icon 与 agent 状态颜文字，作为「agent 在线感」的最小持续表达
-- 展开态作为 prompt 输入面板，承载 context chip 选取、流式 assistant 文本与状态指示
+- 展开态作为 prompt 输入面板，承载 context chip 选取、流式 assistant 文本、工具调用、设置与会话历史入口
 - 与 `AOSOSSenseKit.SenseStore.context` 单向绑定（live mirror），与 `AgentService` 双向绑定（事件 + submit）
 
 ## 非目标
 
 - 不做拖拽接收 (drop)
-- 不做 settings / preferences UI
-- 不做对话历史（current turn 之外的内容不持久化、不渲染）
-- 不做 Spotlight 风格命令调色板
 - 不做键盘快捷键唤起（本轮仅 hover / click 入口）
 - 不做多面板同时显示（同一时刻最多一个 NotchWindow）
 
@@ -50,24 +47,27 @@ closed ──hover into hot rect──▶ popping ──click in hot rect──�
 
 ## 几何
 
-唯一真值来源：`NSScreen` 的 `safeAreaInsets` + `auxiliaryTopLeftArea` / `auxiliaryTopRightArea`（参见 `docs/guide/notch-dev-guide.md` §2.1）。`NotchViewModel` 持有以下 published 属性：
+唯一真值来源：`NSScreen` 的 `safeAreaInsets` + `auxiliaryTopLeftArea` / `auxiliaryTopRightArea`（参见 `docs/guide/notch-dev-guide.md` §2.1）。`NotchViewModel` 持有当前 screen/notch 状态，纯几何推导集中在 `NotchGeometryModel`：
 
 ```swift
-@Published var screenRect: CGRect          // 当前 NSScreen.frame
-@Published var deviceNotchRect: CGRect     // 物理刘海 origin/size
-let panelSize = CGSize(width: 720, height: 240)
+var screenRect: CGRect                     // 当前 NSScreen.frame
+var deviceNotchRect: CGRect                // 物理刘海 origin/size
+let notchOpenedWidth: CGFloat = 500
+let notchOpenedCompactMinHeight: CGFloat = 100
+let notchOpenedMaxHeight: CGFloat = 480
+let notchTrayMaxHeight: CGFloat = 240
 let inset: CGFloat                         // 有刘海 -4，无刘海 0
 ```
 
-派生 rect 全部计算性质，不缓存：
+展开态高度由当前内容测量驱动并 clamp 到 `[compactMin, maxHeight]`；Settings、History、Onboarding、Composer/Conversation 各自通过 PreferenceKey 向 `NotchViewModel` 回写自然高度。派生 rect 全部计算性质，不缓存，并委托 `NotchGeometryModel`：
 
 ```swift
 var notchOpenedRect: CGRect {
     .init(
-        x: screenRect.midX - panelSize.width / 2,
-        y: screenRect.maxY - panelSize.height,
-        width: panelSize.width,
-        height: panelSize.height
+        x: screenRect.midX - notchOpenedSize.width / 2,
+        y: screenRect.maxY - notchOpenedSize.height,
+        width: notchOpenedSize.width,
+        height: notchOpenedSize.height
     )
 }
 
@@ -76,7 +76,7 @@ var headlineOpenedRect: CGRect {
     .init(
         x: notchOpenedRect.minX,
         y: screenRect.maxY - deviceNotchRect.height,
-        width: panelSize.width,
+        width: notchOpenedSize.width,
         height: deviceNotchRect.height
     )
 }
@@ -92,7 +92,7 @@ var closedBarRect: CGRect {
 }
 ```
 
-NotchWindow 自身覆盖屏幕顶部一整条（高度 = `panelSize.height`），SwiftUI 内部按上述派生 rect 摆放。窗口 frame 不随状态变化——状态切换只动 SwiftUI 内层。
+NotchWindow 自身覆盖屏幕顶部一整条（高度 = `notchOpenedMaxHeight + notchTrayMaxHeight`），SwiftUI 内部按上述派生 rect 摆放。窗口 frame 不随状态变化——状态切换只动 SwiftUI 内层。
 
 ## 三态布局详细规格
 
@@ -134,7 +134,7 @@ NotchWindow 自身覆盖屏幕顶部一整条（高度 = `panelSize.height`）�
 
 ### opened
 
-panel 尺寸固定 720 × 240，cornerRadius 32。布局：
+panel 宽度固定 500，cornerRadius 32；高度随内容增长并在 480 内滚动/裁剪。布局：
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -153,18 +153,18 @@ HStack（spacing 0）：
 
 | 区 | 宽度 | padding | 内容 |
 |---|---|---|---|
-| 左 statusEmoji | 160 | leading 24 / vertical 24 | `Text(emoji).font(.system(size: 64, weight: .regular, design: .monospaced))`，垂直居中 |
+| 左 statusEmoji | 160 | leading 24 / vertical 24 | `StatusEmojiView`，垂直居中 |
 | 右 VStack | 剩余 (≈559) | leading 16 / trailing 24 / vertical 16 | 见下 |
 
 右 VStack（spacing 12）：
 
-1. **context chips row**：`ContextChipsView`，高度 32（chip 自身 24 + 上下 padding 4），horizontal scroll，左对齐
-2. **assistantText**：`Text(assistantText)`；`.font(.system(size: 14))`；`.frame(maxWidth: .infinity, alignment: .leading)`；`.frame(maxHeight: .infinity, alignment: .top)`；超长 wrap，无 scroll（本轮不做对话历史，单 turn 文本可控）
-3. **AgentInputField**：`TextField`，下文详述
+1. **conversation/history region**：`AgentConversationView` 渲染多 turn、tool call、compact marker、submit/session error banner；长内容在内部滚动。
+2. **composer region**：`LiveComposerSection` 固定在底部，包含 context chips、rich prompt input、model/effort controls、send/stop/cancel affordance。
+3. **header strips**：Settings / history / reset 等顶部操作以 overlay 形式挂在物理刘海两侧。
 
 panel 背景：`Color.black`，cornerRadius 32，叠加 `NotchShape` 的顶部反向圆弧过渡到 `headlineOpenedRect`。
 
-`opened` 进入 / 离开过渡参考 `docs/guide/notch-dev-guide.md` §7.2：scale + opacity + offset(y: -panelSize.height/2)，统一 `vm.animation`。
+`opened` 进入 / 离开过渡参考 `docs/guide/notch-dev-guide.md` §7.2；所有装饰性动画必须受 Reduce Motion gate 约束。
 
 ## Edge highlight 交互
 
@@ -281,7 +281,8 @@ let displayStatus: AgentStatus = (vm.status == .opened && inputFocused)
 │        │ NotchViewModel         │                           │
 │        │  - observes both       │                           │
 │        │  - state machine       │                           │
-│        │  - geometry            │                           │
+│        │  - delegates geometry  │                           │
+│        │  - tray composition    │                           │
 │        └──────────┬─────────────┘                           │
 │                   │                                          │
 │                   ▼                                          │
@@ -299,14 +300,16 @@ let displayStatus: AgentStatus = (vm.status == .opened && inputFocused)
 绑定方向严格单向：
 
 - `SenseStore` → ViewModel → View（read-only）
-- `AgentService.submit` ← View（user gesture）
+- `NotchViewModel.submitComposer` ← View（user gesture）
+- `AgentService.submit` ← NotchViewModel（turn reservation + cited context projection）
 - `AgentService.status / assistantText` → ViewModel → View（read-only）
 
-ViewModel 不写 `SenseStore`、不写 RPCClient；`AgentService` 是写侧的唯一接口。
+ViewModel 不写 `SenseStore`、不写 RPCClient；`AgentService` / `ConfigService` / `ProviderService` 是各自业务写侧的接口。View 只转发 intent，不组装 RPC payload。
 
 ## 包边界
 
-所有 Notch UI 代码在 `Sources/AOSShell/Notch/` 与 `Sources/AOSShell/Notch/Components/`。依赖方向：
+所有 Notch UI 代码在 `Sources/AOSShell/Notch/` 下按 feature 分组：
+`Composer/`、`Conversation/`、`Settings/`、`Onboarding/`、`Chrome/`、`Commands/`、`Theme/`。依赖方向：
 
 ```
 AOSShell/Notch/  ──depends on──▶  AOSOSSenseKit (SenseStore, SenseContext, BehaviorEnvelope)
@@ -326,19 +329,13 @@ AOSRPCSchema    ──must NOT import──▶ AOSShell/Notch/*  (also no SwiftU
 | 多屏切换 / 外接显示器插拔 | NotchWindow frame 错位 | 订阅 `NSApplication.didChangeScreenParametersNotification` 重建 NotchWindowController；选 `NSScreen.buildin` |
 | 外接屏无物理刘海 | `notchSize` 为 zero，几何不成立 | 仅在 `NSScreen.buildin` 上挂 NotchWindow；外接屏不显示 |
 | Accessibility 权限缺失 | `WindowIdentity.windowId` 为 nil，但 title 可由 `NSRunningApplication.localizedName` 兜底 | window chip 仍渲染（用 app name + 空 title），引用时 `CitedContext.window.windowId` 字段 omit |
-| 长 prompt / 长 assistantText | panel 高度固定 240，溢出不可见 | 本轮 assistantText 单纯 wrap；超出区域被裁剪。后续 stage 引入 scroll |
+| 长 prompt / 长 assistantText | 内容超过 panel 高度 | `AgentConversationView` 内部滚动；panel 高度 clamp 到 `notchOpenedMaxHeight` |
 | TextField focus 与 NotchWindow key window 协作 | window 失焦自动 close 可能与 IME 候选窗冲突 | `resignKey` close 在 IME 输入会话期间应推迟（本轮不实现，记录为已知问题） |
 | Edge highlight 高频重绘 | 60fps mouseMoved 影响 CPU | mouseLocation `throttle 16ms`；highlight 仅在 closed/popping 启用 |
 
 ## 不做的事
 
 - 不接收文件 / URL drop（`onDrop` 完全不挂）
-- 不做 settings / preferences UI（任何配置 UI）
-- 不做 history / 多 turn 渲染
-- 不做 Spotlight 风格命令调色板 / 模糊匹配
 - 不做键盘快捷键唤起（如 Cmd+Space 风格 hot key）
-- 不做 chip 富渲染（favicon / 文件图标），仅 `displaySummary` 文本
 - 不做多 NotchWindow 同时显示
-- 不做 panel 大小 / 位置自适应（720 × 240 固定）
-- 不做对话气泡 / Markdown 渲染（assistantText 是纯文本）
 - 不做语音输入 / TTS

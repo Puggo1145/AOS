@@ -25,7 +25,7 @@ struct VirtualMouseGlyphRenderState {
 enum VirtualMouseGlyphMetrics {
     static let windowSize = CGSize(width: 126, height: 126)
     static let tipAnchor = CGPoint(x: 60.35, y: 70.3)
-    static let resourceName = "official-software-cursor-window-252"
+    static let resourceName = "agent-cursor"
     static let targetNeutralHeading = -(3 * CGFloat.pi / 4)
 }
 

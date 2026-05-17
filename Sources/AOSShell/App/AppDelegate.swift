@@ -33,7 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let onDisk = (try? String(contentsOf: pidFileURL, encoding: .utf8))?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if myPid.trimmingCharacters(in: .whitespacesAndNewlines) != onDisk {
-                NSApp.terminate(nil)
+                Task { @MainActor in NSApp.terminate(nil) }
             }
         }
     }

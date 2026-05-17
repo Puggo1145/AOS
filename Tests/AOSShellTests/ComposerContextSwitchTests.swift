@@ -6,7 +6,7 @@ struct ComposerContextSwitchTests {
     @Test("app context switches do not clear live composer input")
     func appContextSwitchesDoNotClearLiveComposerInput() throws {
         let source = try String(
-            contentsOf: Self.sourceURL("Sources/AOSShell/Notch/Components/AgentInputField.swift"),
+            contentsOf: Self.sourceURL("Sources/AOSShell/Notch/Composer/AgentInputField.swift"),
             encoding: .utf8
         )
 

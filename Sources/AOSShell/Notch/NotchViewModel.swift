@@ -12,7 +12,7 @@ import AOSOSSenseKit
 // remainder of the run; the underlying condition still drives onboarding /
 // inline-disabled-input behaviour.
 
-// `TrayItem` and `TraySource` live in `Notch/Components/TrayItem.swift`.
+// `TrayItem` and `TraySource` live in `Notch/Chrome/TrayItem.swift`.
 // The viewmodel composes registered sources into a single `trayItems`
 // array consumed by `SystemTrayView`. Built-in system notices and the
 // agent's live `todoProgress` row are themselves sources installed in
@@ -219,7 +219,7 @@ public final class NotchViewModel {
     /// Composes the localised permission-missing message used by the tray.
     /// Mirrors the previous in-OpenedPanelView helper so the notice text is
     /// identical to what the inline banner used to render.
-    private var missingPermissionMessage: String {
+    var missingPermissionMessage: String {
         let denied = permissionsService.state.denied
         if denied.contains(.screenRecording) && denied.contains(.accessibility) {
             return "Screen Recording & Accessibility disabled"
@@ -368,174 +368,17 @@ public final class NotchViewModel {
         installBuiltinTraySources()
     }
 
-    /// Wire the built-in tray sources. Each closure captures `self` weakly
-    /// so the viewmodel can be torn down without the closures keeping it
-    /// alive through the registered array. Order here is also display
-    /// order in the drawer: action-bearing system notices first, then the
-    /// agent's live status row last (it disappears the moment no item is
-    /// in_progress, so it shouldn't push more important rows down when
-    /// it's present).
-    private func installBuiltinTraySources() {
-        registerTraySource { [weak self] in
-            guard let self else { return [] }
-            return self.systemNoticeItems()
-        }
-        registerTraySource { [weak self] in
-            guard let self else { return [] }
-            return self.todoProgressItems()
-        }
-    }
-
-    /// Action-required system rows (permissions / provider / corrupted
-    /// config). Each is dismissable; `dismissTrayItem(id:)` records the
-    /// id so subsequent renders skip it. The strings/ids match
-    /// `BuiltinTrayItemID.*` so external callers (and tests) can target
-    /// the exact row without cracking through internal lookup.
-    private func systemNoticeItems() -> [TrayItem] {
-        var out: [TrayItem] = []
-        if !permissionsService.allGranted {
-            out.append(TrayItem(
-                id: BuiltinTrayItemID.missingPermission,
-                icon: "exclamationmark.shield.fill",
-                tint: .orange,
-                message: missingPermissionMessage,
-                trailing: .action("Open Settings"),
-                onTap: { [weak self] in self?.showSettings = true }
-            ))
-        }
-        if !providerService.hasReadyProvider {
-            out.append(TrayItem(
-                id: BuiltinTrayItemID.missingProvider,
-                icon: "questionmark.circle.fill",
-                tint: .yellow,
-                message: "No model configured",
-                trailing: .action("Open Settings"),
-                onTap: { [weak self] in self?.showSettings = true }
-            ))
-        }
-        if configService.recoveredFromCorruption {
-            out.append(TrayItem(
-                id: BuiltinTrayItemID.configCorruption,
-                icon: "exclamationmark.triangle.fill",
-                tint: .yellow,
-                message: "Settings file was corrupt and has been reset.",
-                trailing: nil,
-                onTap: nil
-            ))
-        }
-        return out
-    }
-
-    /// Slash-command palette rows. Built directly here (not via a
-    /// registered tray source) because (a) the tray short-circuits to
-    /// these whenever the palette is active, so a registered source
-    /// would never be reached on the suppressed path, and (b) we can
-    /// read `commandPalette` synchronously without weak-self
-    /// indirection.
-    ///
-    /// Cap at the visible row budget (5) so the drawer never grows past
-    /// what `notchTrayMaxHeight` (240pt) can fit comfortably; the
-    /// palette already prefix-matches against the registry, so dropping
-    /// the tail rarely hides anything actionable. The selected row is
-    /// flagged `highlighted` so SystemTrayView can paint it as the
-    /// keyboard cursor target.
-    private func commandPaletteItems() -> [TrayItem] {
-        let matches = commandPalette.matches.prefix(5)
-        if matches.isEmpty {
-            // Empty match still produces a single inert row so the
-            // drawer doesn't blink in/out as the user refines the
-            // prefix toward a non-match.
-            return [TrayItem(
-                id: BuiltinTrayItemID.commandPrefix + "_empty",
-                icon: "questionmark.circle",
-                tint: .white.opacity(0.5),
-                message: "No matching commands",
-                trailing: nil,
-                dismissable: false,
-                onTap: nil,
-                highlighted: false
-            )]
-        }
-        let selectedId = commandPalette.selectedCommand?.id
-        return matches.map { cmd in
-            TrayItem(
-                id: BuiltinTrayItemID.commandPrefix + cmd.id,
-                icon: "slash.circle",
-                tint: .white.opacity(0.85),
-                message: "/\(cmd.name) — \(cmd.description)",
-                trailing: nil,
-                dismissable: false,
-                onTap: { [weak self] in
-                    // Click executes the command and clears the input
-                    // so the composer is ready for the next prompt.
-                    guard let self else { return }
-                    self.composerInputModel.clear()
-                    self.commandPalette.deactivate()
-                    Task { await cmd.execute() }
-                },
-                highlighted: cmd.id == selectedId
-            )
-        }
-    }
-
-    /// Recompute the slash-command palette state from the current chip
-    /// input contents. Called by the composer on every relevant input
-    /// change. Lives on the viewmodel (not the composer) so the palette
-    /// state — which the tray also reads — stays single-source.
-    public func refreshCommandPalette() {
-        commandPalette.update(
-            text: composerInputModel.displayText,
-            attachmentCount: composerInputModel.attachmentCount,
-            commands: SlashCommandRegistry.commands(agentService: agentService)
-        )
-    }
-
-    /// Execute the currently-highlighted command (the row Up/Down arrows
-    /// have parked on). Returns `true` when a command actually ran so the
-    /// caller can short-circuit the regular submit path. Returns `false`
-    /// when there is no match — the caller falls back to the usual
-    /// "Enter submits prompt" gate.
-    public func executeHighlightedCommand() -> Bool {
-        guard let cmd = commandPalette.selectedCommand else { return false }
-        composerInputModel.clear()
-        commandPalette.deactivate()
-        Task { await cmd.execute() }
-        return true
-    }
-
-    /// s03 TodoWrite live row. Surfaces only when the plan has an active
-    /// in_progress step — empty / all-pending / all-completed plans don't
-    /// produce a current step and would render an ambiguous row. Marked
-    /// `dismissable: false` so the user can't accidentally hide live
-    /// agent state via the dismiss path.
-    private func todoProgressItems() -> [TrayItem] {
-        let todos = agentService.todos
-        guard let inProgress = todos.first(where: { $0.status == .inProgress }) else {
-            return []
-        }
-        let done = todos.filter({ $0.status == .completed }).count
-        return [TrayItem(
-            id: BuiltinTrayItemID.todoProgress,
-            icon: "checklist",
-            tint: .white.opacity(0.85),
-            message: inProgress.text,
-            trailing: .badge("\(done)/\(todos.count)"),
-            dismissable: false,
-            onTap: nil
-        )]
-    }
-
     // MARK: - Derived geometry (pure functions)
     //
     // `Notch geometry helpers` are pure and tested independently; see
     // NotchGeometryTests.
 
     public var notchOpenedRect: CGRect {
-        Self.makeNotchOpenedRect(screenRect: screenRect, panel: notchOpenedSize)
+        NotchGeometryModel.makeNotchOpenedRect(screenRect: screenRect, panel: notchOpenedSize)
     }
 
     public var headlineOpenedRect: CGRect {
-        Self.makeHeadlineOpenedRect(
+        NotchGeometryModel.makeHeadlineOpenedRect(
             screenRect: screenRect,
             panel: notchOpenedSize,
             deviceNotchHeight: deviceNotchRect.height
@@ -543,7 +386,7 @@ public final class NotchViewModel {
     }
 
     public var closedBarRect: CGRect {
-        Self.makeClosedBarRect(deviceNotchRect: deviceNotchRect)
+        NotchGeometryModel.makeClosedBarRect(deviceNotchRect: deviceNotchRect)
     }
 
     /// Mouse hot zone for closed/popping interactions. From the user's
@@ -572,19 +415,14 @@ public final class NotchViewModel {
         // Keep these in sync with `NotchShape.shoulderRadius`.
         switch status {
         case .opened:
-            return Self.makeOpenedVisibleRect(openedTotalRect: notchOpenedTotalRect)
+            return NotchGeometryModel.makeOpenedVisibleRect(openedTotalRect: notchOpenedTotalRect)
         case .closed, .popping:
-            return Self.makeClosedVisibleRect(closedBarRect: closedBarRect)
+            return NotchGeometryModel.makeClosedVisibleRect(closedBarRect: closedBarRect)
         }
     }
 
     public nonisolated static func makeNotchOpenedRect(screenRect: CGRect, panel: CGSize) -> CGRect {
-        CGRect(
-            x: screenRect.midX - panel.width / 2,
-            y: screenRect.maxY - panel.height,
-            width: panel.width,
-            height: panel.height
-        )
+        NotchGeometryModel.makeNotchOpenedRect(screenRect: screenRect, panel: panel)
     }
 
     public nonisolated static func makeHeadlineOpenedRect(
@@ -592,11 +430,10 @@ public final class NotchViewModel {
         panel: CGSize,
         deviceNotchHeight: CGFloat
     ) -> CGRect {
-        CGRect(
-            x: screenRect.midX - panel.width / 2,
-            y: screenRect.maxY - deviceNotchHeight,
-            width: panel.width,
-            height: deviceNotchHeight
+        NotchGeometryModel.makeHeadlineOpenedRect(
+            screenRect: screenRect,
+            panel: panel,
+            deviceNotchHeight: deviceNotchHeight
         )
     }
 
@@ -618,14 +455,14 @@ public final class NotchViewModel {
         collapsedHeight: CGFloat,
         maxHeight: CGFloat
     ) -> CGSize {
-        guard itemCount > 0 else {
-            return CGSize(width: width, height: 0)
-        }
-        if itemCount == 1 || expanded {
-            let h = min(max(measuredContentHeight, collapsedHeight), maxHeight)
-            return CGSize(width: width, height: h)
-        }
-        return CGSize(width: width, height: collapsedHeight)
+        NotchGeometryModel.makeTraySize(
+            width: width,
+            itemCount: itemCount,
+            expanded: expanded,
+            measuredContentHeight: measuredContentHeight,
+            collapsedHeight: collapsedHeight,
+            maxHeight: maxHeight
+        )
     }
 
     /// Combined main+tray rect, top-aligned to `screenRect.maxY` and centered
@@ -635,12 +472,7 @@ public final class NotchViewModel {
         screenRect: CGRect,
         totalSize: CGSize
     ) -> CGRect {
-        CGRect(
-            x: screenRect.midX - totalSize.width / 2,
-            y: screenRect.maxY - totalSize.height,
-            width: totalSize.width,
-            height: totalSize.height
-        )
+        NotchGeometryModel.makeOpenedTotalRect(screenRect: screenRect, totalSize: totalSize)
     }
 
     /// Shoulder radius the painted silhouette extends past the logical rect on
@@ -649,24 +481,19 @@ public final class NotchViewModel {
     /// non-mouse-transparent area and pass through to the app below. The
     /// values must stay in sync with `NotchShape.shoulderRadius` (opened) and
     /// the closed-bar shoulder used by the closed-state silhouette.
-    public nonisolated static let openedShoulderRadius: CGFloat = 18
-    public nonisolated static let closedShoulderRadius: CGFloat = 6
+    public nonisolated static let openedShoulderRadius = NotchGeometryModel.openedShoulderRadius
+    public nonisolated static let closedShoulderRadius = NotchGeometryModel.closedShoulderRadius
 
     public nonisolated static func makeOpenedVisibleRect(openedTotalRect: CGRect) -> CGRect {
-        openedTotalRect.insetBy(dx: -openedShoulderRadius, dy: 0)
+        NotchGeometryModel.makeOpenedVisibleRect(openedTotalRect: openedTotalRect)
     }
 
     public nonisolated static func makeClosedVisibleRect(closedBarRect: CGRect) -> CGRect {
-        closedBarRect.insetBy(dx: -closedShoulderRadius, dy: 0)
+        NotchGeometryModel.makeClosedVisibleRect(closedBarRect: closedBarRect)
     }
 
     public nonisolated static func makeClosedBarRect(deviceNotchRect: CGRect) -> CGRect {
-        CGRect(
-            x: deviceNotchRect.minX - deviceNotchRect.height,
-            y: deviceNotchRect.minY,
-            width: deviceNotchRect.width + deviceNotchRect.height * 2,
-            height: deviceNotchRect.height
-        )
+        NotchGeometryModel.makeClosedBarRect(deviceNotchRect: deviceNotchRect)
     }
 
     // MARK: - State mutators

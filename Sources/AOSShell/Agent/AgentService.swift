@@ -591,32 +591,47 @@ public final class AgentService {
     /// local clearing is intentionally avoided — keeping a single source of
     /// truth means the UI updates only when the sidecar confirms.
     public func resetSession() async {
-        guard let sessionId = currentSessionId else { return }
-        _ = try? await rpc.request(
-            method: RPCMethod.agentReset,
-            params: AgentResetParams(sessionId: sessionId),
-            as: AgentResetResult.self
-        )
+        guard let sessionId = currentSessionId,
+              let mirror = sessionStore.activeMirror else { return }
+        do {
+            _ = try await rpc.request(
+                method: RPCMethod.agentReset,
+                params: AgentResetParams(sessionId: sessionId),
+                as: AgentResetResult.self
+            )
+        } catch {
+            mirror.setSubmitError(Self.formatSubmitFailureMessage(error: error))
+        }
     }
 
     public func cancel() async {
-        guard let sessionId = currentSessionId else { return }
+        guard let sessionId = currentSessionId,
+              let mirror = sessionStore.activeMirror else { return }
         if let queued = queuedPrompt {
             cancelledQueuedTurnIds.insert(queued.turnId)
-            _ = try? await rpc.request(
-                method: RPCMethod.agentCancel,
-                params: AgentCancelParams(sessionId: sessionId, turnId: queued.turnId),
-                as: AgentCancelResult.self
-            )
-            sessionStore.activeMirror?.setQueuedPrompt(nil)
+            do {
+                _ = try await rpc.request(
+                    method: RPCMethod.agentCancel,
+                    params: AgentCancelParams(sessionId: sessionId, turnId: queued.turnId),
+                    as: AgentCancelResult.self
+                )
+                sessionStore.activeMirror?.setQueuedPrompt(nil)
+            } catch {
+                cancelledQueuedTurnIds.remove(queued.turnId)
+                mirror.setSubmitError(Self.formatSubmitFailureMessage(error: error))
+            }
             return
         }
         guard let turnId = currentTurn else { return }
-        _ = try? await rpc.request(
-            method: RPCMethod.agentCancel,
-            params: AgentCancelParams(sessionId: sessionId, turnId: turnId),
-            as: AgentCancelResult.self
-        )
+        do {
+            _ = try await rpc.request(
+                method: RPCMethod.agentCancel,
+                params: AgentCancelParams(sessionId: sessionId, turnId: turnId),
+                as: AgentCancelResult.self
+            )
+        } catch {
+            mirror.setSubmitError(Self.formatSubmitFailureMessage(error: error))
+        }
     }
 
     /// Manual `/compact` entry. Asks the sidecar to summarize prior

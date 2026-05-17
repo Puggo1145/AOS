@@ -92,7 +92,7 @@ struct AgentServiceTests {
         s.handleStatus(UIStatusParams(sessionId: "S", turnId: "T1", status: .waiting))
         #expect(s.turns.last?.status == .waiting)
         #expect(s.status == .working)
-        try await Task.sleep(for: .milliseconds(400))
+        try await waitUntil(timeout: 2) { s.status == .waiting }
         #expect(s.status == .waiting)
     }
 
@@ -306,6 +306,21 @@ struct AgentServiceTests {
         #expect(s.lastErrorMessage == nil)
     }
 
+    @Test("resetSession surfaces RPC failure instead of silently swallowing it")
+    func resetSessionSurfacesRPCFailure() async throws {
+        let s = try makeServiceWithClosedOutbound()
+        await s.resetSession()
+        #expect(s.lastErrorMessage?.contains("Lost the agent connection") == true)
+    }
+
+    @Test("cancel surfaces RPC failure instead of silently swallowing it")
+    func cancelSurfacesRPCFailure() async throws {
+        let s = try makeServiceWithClosedOutbound()
+        s._testTurnStarted(id: "T-cancel")
+        await s.cancel()
+        #expect(s.lastErrorMessage?.contains("Lost the agent connection") == true)
+    }
+
     // MARK: - s03 TodoWrite mirror
     //
     // The Shell side just routes `ui.todo` notifications to the right
@@ -358,5 +373,39 @@ struct AgentServiceTests {
         // activates it the panel hydrates correctly.
         let other = s.sessionStore.mirror(for: "OTHER")
         #expect(other.todos.count == 1)
+    }
+
+    private func makeServiceWithClosedOutbound() throws -> AgentService {
+        let inbound = Pipe()
+        let outbound = Pipe()
+        let rpc = RPCClient(
+            inbound: inbound.fileHandleForReading,
+            outbound: outbound.fileHandleForWriting
+        )
+        let session = SessionService(rpc: rpc)
+        let store = SessionStore(rpc: rpc, sessionService: session)
+        store.adoptCreated(SessionListItem(
+            id: "S",
+            title: "test",
+            createdAt: 0,
+            turnCount: 0,
+            lastActivityAt: 0
+        ))
+        session.sessionStore = store
+        let service = AgentService(rpc: rpc, sessionStore: store)
+        try outbound.fileHandleForWriting.close()
+        return service
+    }
+
+    private func waitUntil(
+        timeout: TimeInterval,
+        condition: @MainActor @escaping () -> Bool
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        throw RPCClientError.timeout(method: "test:waitUntil")
     }
 }

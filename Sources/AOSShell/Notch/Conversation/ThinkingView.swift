@@ -1,0 +1,300 @@
+import SwiftUI
+
+// MARK: - ThinkingView
+//
+// Per-turn reasoning-trace affordance. Two visual modes driven by the turn's
+// `thinkingStartedAt` / `thinkingEndedAt` pair carried on `ConversationTurn`:
+//
+//   1. Streaming (started, no end yet): a *single-line* live tail of the
+//      thinking text. To keep the per-frame work bounded as the trace grows
+//      into the multi-KB range, we render only the trailing
+//      `streamingTailLimit` characters as soft-wrapped multi-line text,
+//      measure its natural height, and offset it upward inside a fixed
+//      one-line clipped window so only the last visible row is on screen.
+//      This makes both hard newlines AND soft wrapping push older rows up,
+//      instead of truncating the first row with "…". The visible row
+//      carries a left-to-right shimmer (suppressed under Reduce Motion).
+//      The full trace is preserved on the model and shown verbatim in the
+//      settled view.
+//   2. Settled (end timestamp present): collapses to "Thought for X seconds"
+//      with a chevron toggle. Expanded reveals the full trace inside a
+//      content-hugging container capped at `expandedMaxHeight`.
+//
+// The thinking string itself is owned by `AgentService.ConversationTurn` and
+// updated from `ui.thinking` notifications. The lifecycle (`startedAt` /
+// `endedAt`) is driven exclusively by the explicit `kind: "delta" | "end"`
+// channel — this view never infers either transition. It is purely
+// presentational.
+
+struct ThinkingView: View {
+    let thinking: String
+    let startedAt: Date?
+    let endedAt: Date?
+    /// True while this segment is the active reasoning burst — the next
+    /// `ui.thinking.delta` would extend it. Goes false the moment a reply
+    /// token or tool call lands. The explicit `ui.thinking.end` lifecycle
+    /// frame (which sets `endedAt`) may arrive later. During the
+    /// `!isCurrent && endedAt == nil` window we render a "paused" tail —
+    /// same single-row layout as streaming but without the shimmer, since
+    /// the model has visibly moved on.
+    let isCurrent: Bool
+    var contentScale: ConversationContentScale = .normal
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var expanded: Bool = false
+    @State private var measuredHeight: CGFloat = 0
+    /// Natural height of the expanded trace text (including its padding).
+    /// Drives the expanded slot's `frame(height:)` so short traces hug
+    /// their content instead of always reserving `expandedMaxHeight`.
+    @State private var expandedContentHeight: CGFloat = 0
+
+    /// `contentScale.thinkingLineHeight` tightly matches the rendered line
+    /// height of the chosen monospaced font. Used both as the clip window
+    /// height and as the "one row" baseline when computing the upward scroll
+    /// offset.
+    /// Cap on the expanded trace container. Past this the inner ScrollView
+    /// takes over and the user scrolls inside the fixed-height slot.
+    private static let expandedMaxHeight: CGFloat = 160
+    /// Streaming view only renders the tail of the trace — only one row is
+    /// visible through the clip, and TimelineView re-evaluates the body on
+    /// every animation tick. Capping the rendered substring keeps the
+    /// shimmer cheap as the full trace grows into the multi-KB range. The
+    /// trailing slice keeps wrap-edge stability comfortable; the full trace
+    /// is still preserved on the model and shown verbatim when expanded.
+    private static let streamingTailLimit: Int = 800
+
+    private var isStreaming: Bool { startedAt != nil && endedAt == nil }
+    private var isSettled: Bool { startedAt != nil && endedAt != nil }
+
+    var body: some View {
+        if isSettled {
+            settled
+        } else if isStreaming {
+            // Same single-row tail layout in both sub-states. The shimmer is
+            // gated on `isCurrent` so a paused segment (reply/tool already
+            // landed, lifecycle `.end` not yet) reads as quiescent rather
+            // than still-thinking.
+            streamingTail
+        } else {
+            EmptyView()
+        }
+    }
+
+    // MARK: Streaming tail
+
+    /// Render the trailing `streamingTailLimit` characters of the thinking
+    /// string as soft-wrapped, unlimited-line shimmering text and offset it
+    /// upward by (measuredHeight - lineHeight) so only the last row is
+    /// visible inside a 1-line clip. As the trace grows past one row the
+    /// offset increases and older rows slide out the top — animated by
+    /// `.animation(_:value:)` keyed on the measured height (suppressed
+    /// under Reduce Motion).
+    private var streamingTail: some View {
+        let lineHeight = contentScale.thinkingLineHeight
+        let offsetY = -max(0, measuredHeight - lineHeight)
+        let tail = Self.tail(of: thinking, limit: Self.streamingTailLimit)
+        return ShimmerText(
+            text: tail.isEmpty ? " " : tail,
+            fontSize: contentScale.thinkingFontSize,
+            fontWeight: contentScale.fontWeight,
+            // Paused segments (`!isCurrent`) share Reduce Motion's static
+            // render path — visible but no animated band.
+            reduceMotion: reduceMotion || !isCurrent
+        )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                GeometryReader { geo in
+                    Color.clear.preference(key: ThinkingHeightKey.self, value: geo.size.height)
+                }
+            )
+            .offset(y: offsetY)
+            // Reduce Motion suppresses the upward-slide easing — the offset
+            // still applies (so only the last row is visible), but it snaps
+            // instead of animating.
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: measuredHeight)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .frame(height: lineHeight, alignment: .topLeading)
+            .clipped()
+            .onPreferenceChange(ThinkingHeightKey.self) { h in
+                measuredHeight = h
+            }
+    }
+
+    /// Trailing slice of the thinking trace for streaming render. Uses
+    /// `limitedBy:` to avoid an O(N) `count` walk per animation tick — when
+    /// the trace is shorter than `limit` the offset clamps to `startIndex`
+    /// and the whole string is returned.
+    private static func tail(of s: String, limit: Int) -> String {
+        guard limit > 0, !s.isEmpty else { return s }
+        let start = s.index(s.endIndex, offsetBy: -limit, limitedBy: s.startIndex) ?? s.startIndex
+        return String(s[start..<s.endIndex])
+    }
+
+    // MARK: Settled
+
+    private var elapsedSeconds: Int {
+        guard let s = startedAt, let e = endedAt else { return 0 }
+        return max(1, Int(e.timeIntervalSince(s).rounded()))
+    }
+
+    private var settled: some View {
+        let elapsedLabel = "Thought for \(elapsedSeconds) second\(elapsedSeconds == 1 ? "" : "s")"
+        return VStack(alignment: .leading, spacing: 6) {
+            Button {
+                if reduceMotion {
+                    expanded.toggle()
+                } else {
+                    // Match the notch silhouette's height animation
+                    // (`.smooth(0.32)` in NotchView) so the inner frame
+                    // reveal eases in lockstep with the outer container
+                    // growing/shrinking. Mismatched curves/durations cause
+                    // a visible discontinuity between the notch height and
+                    // the thinking content frame.
+                    withAnimation(.notchHeight) {
+                        expanded.toggle()
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(elapsedLabel)
+                        .notchFont(size: contentScale.thinkingFontSize, weight: contentScale.fontWeight, design: .monospaced)
+                        .notchForeground(.secondary)
+                    Image(systemName: "chevron.right")
+                        .notchFont(size: contentScale.toolChevronSize, weight: .semibold)
+                        .notchForeground(.secondary)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                        .animation(reduceMotion ? nil : .notchHeight, value: expanded)
+                }
+            }
+            .buttonStyle(.plain)
+            // Preserve the visible elapsed time as the accessible name; the
+            // expand/collapse affordance is the secondary action and goes in
+            // the hint so VoiceOver users still hear "Thought for X seconds".
+            .accessibilityLabel(Text(elapsedLabel))
+            .accessibilityHint(Text(expanded ? "Hides reasoning trace" : "Shows reasoning trace"))
+
+            if expanded {
+                ScrollView {
+                    Text(thinking)
+                        .notchFont(size: contentScale.thinkingFontSize, weight: contentScale.fontWeight, design: .monospaced)
+                        .foregroundStyle(.white.opacity(0.65))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 8)
+                        .background(
+                            GeometryReader { geo in
+                                Color.clear.preference(
+                                    key: ExpandedContentHeightKey.self,
+                                    value: geo.size.height
+                                )
+                            }
+                        )
+                }
+                .frame(height: min(expandedContentHeight, Self.expandedMaxHeight))
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.white.opacity(0.04))
+                )
+                .clipped()
+                .onPreferenceChange(ExpandedContentHeightKey.self) { h in
+                    expandedContentHeight = h
+                }
+            }
+        }
+    }
+}
+
+// MARK: - ShimmerText
+//
+// Wrapping multi-line text with a left-to-right white→bright→white sweep on
+// top of a dimmed base. The sweep band spans the full bounding box height,
+// so when the parent only shows the last visible row through a clip+offset
+// the shimmer still reads as a band travelling across that row.
+
+private struct ShimmerText: View {
+    let text: String
+    let fontSize: CGFloat
+    let fontWeight: Font.Weight
+    let reduceMotion: Bool
+
+    var body: some View {
+        // Reduce Motion gate: the moving band is purely decorative. Render a
+        // static, slightly brighter copy of the text so the affordance still
+        // reads as "live thinking" without a continuous animation. Skipping
+        // TimelineView also avoids the per-frame body re-evaluation.
+        if reduceMotion {
+            Text(text)
+                .notchFont(size: fontSize, weight: fontWeight, design: .monospaced)
+                .foregroundStyle(.white.opacity(0.75))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            animated
+        }
+    }
+
+    private var animated: some View {
+        // The Text views live OUTSIDE TimelineView so per-frame ticks don't
+        // re-lay-out monospaced text. Only the band gradient inside `.mask`
+        // re-renders on the animation clock; that's a single solid-colored
+        // rectangle, not a wrapped text run.
+        ZStack(alignment: .topLeading) {
+            // Base: dim text always visible, full-width wrapping.
+            Text(text)
+                .notchFont(size: fontSize, weight: fontWeight, design: .monospaced)
+                .notchForeground(.quaternary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            // Overlay: brighter copy of the same text masked by a moving
+            // narrow band. The mask's gradient is L→R across the full
+            // bounding box; vertically the band extends across every
+            // wrapped row, which is exactly what we want — the visible
+            // row inherits the sweep at the right horizontal phase.
+                Text(text)
+                    .notchFont(size: fontSize, weight: fontWeight, design: .monospaced)
+                .foregroundStyle(.white.opacity(0.95))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .mask(
+                    GeometryReader { geo in
+                        TimelineView(.animation) { ctx in
+                            let t = ctx.date.timeIntervalSinceReferenceDate
+                            let phase = (t.truncatingRemainder(dividingBy: 1.6)) / 1.6
+                            let width = max(geo.size.width, 1)
+                            let bandWidth = max(60, width * 0.35)
+                            let travel = width + bandWidth
+                            let x = -bandWidth + travel * phase
+                            LinearGradient(
+                                colors: [
+                                    .white.opacity(0.0),
+                                    .white,
+                                    .white.opacity(0.0),
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                            .frame(width: bandWidth, height: geo.size.height)
+                            .offset(x: x)
+                        }
+                    }
+                )
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+// MARK: - Height preference
+
+private struct ThinkingHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+private struct ExpandedContentHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}

@@ -74,6 +74,52 @@ public final class ProviderService {
         }
     }
 
+    public enum ActionError: Error, Equatable, LocalizedError {
+        case emptyApiKey
+        case unknownProvider(String)
+        case unsupportedAuthMethod(String)
+        case keychainLoadFailed(providerId: String, detail: String)
+        case keychainSaveFailed(String)
+        case keychainDeleteFailed(String)
+        case sidecarPushFailed(String)
+        case sidecarClearFailed(String)
+        case sidecarLogoutFailed(String)
+        case cancelLoginFailed(String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .emptyApiKey:
+                return "API key cannot be empty"
+            case .unknownProvider(let providerId):
+                return "Unknown provider: \(providerId)"
+            case .unsupportedAuthMethod(let providerId):
+                return "Provider \(providerId) does not use API key auth"
+            case .keychainLoadFailed(let providerId, let detail):
+                return "Keychain load failed for \(providerId): \(detail)"
+            case .keychainSaveFailed(let detail):
+                return "Keychain save failed: \(detail)"
+            case .keychainDeleteFailed(let detail):
+                return "Keychain delete failed: \(detail)"
+            case .sidecarPushFailed(let detail):
+                return "Sidecar push failed: \(detail)"
+            case .sidecarClearFailed(let detail):
+                return "Sidecar clear failed: \(detail)"
+            case .sidecarLogoutFailed(let detail):
+                return "Sidecar logout failed: \(detail)"
+            case .cancelLoginFailed(let detail):
+                return "Cancel failed: \(detail)"
+            }
+        }
+    }
+
+    public static func message(for error: Error) -> String {
+        if let localized = error as? LocalizedError,
+           let message = localized.errorDescription {
+            return message
+        }
+        return String(describing: error)
+    }
+
     /// Seed entry: id stays stable so the onboard list has *something* to
     /// render before the first status reply, but `state == .unknown` until
     /// `refreshStatus` confirms. The display name is intentionally the
@@ -207,16 +253,26 @@ public final class ProviderService {
     /// True iff the onboard UI should let the user click a provider card.
     public var canStartLogin: Bool { statusLoaded }
 
-    public func cancelLogin() async {
+    public func cancelLogin() async throws {
         guard let session = loginSession, !session.loginId.isEmpty else {
             loginSession = nil
             return
         }
-        _ = try? await rpc.request(
-            method: RPCMethod.providerCancelLogin,
-            params: ProviderCancelLoginParams(loginId: session.loginId),
-            as: ProviderCancelLoginResult.self
-        )
+        do {
+            _ = try await rpc.request(
+                method: RPCMethod.providerCancelLogin,
+                params: ProviderCancelLoginParams(loginId: session.loginId),
+                as: ProviderCancelLoginResult.self
+            )
+        } catch {
+            loginSession = LoginSession(
+                loginId: session.loginId,
+                providerId: session.providerId,
+                state: .failed,
+                message: Self.message(for: ActionError.cancelLoginFailed(Self.message(for: error)))
+            )
+            throw ActionError.cancelLoginFailed(Self.message(for: error))
+        }
         // Definitive teardown happens via `provider.loginStatus { failed }`
         // notification, not the cancel response. No state mutation here.
     }
@@ -298,10 +354,9 @@ public final class ProviderService {
     // MARK: - API key (apiKey-auth providers)
 
     /// Read all Keychain-stored API keys for providers the sidecar reported
-    /// as `apiKey`-auth, and push each to the sidecar. Keychain entries that
-    /// silently fail to load (corruption, ACL change) are logged and skipped
-    /// — `provider.statusChanged` will keep the row in `unauthenticated` and
-    /// the user can re-enter the key from Settings.
+    /// as `apiKey`-auth, and push each to the sidecar. Keychain access and
+    /// push failures are surfaced through `statusError`; they are not treated
+    /// as "missing key" because that would hide durable auth corruption.
     private func hydrateApiKeysFromKeychain(infos: [ProviderInfo]) async {
         for info in infos where info.authMethod == .apiKey {
             if hydratedApiKeyProviders.contains(info.id) { continue }
@@ -309,12 +364,14 @@ public final class ProviderService {
             do {
                 key = try keychain.loadApiKey(providerId: info.id)
             } catch {
-                FileHandle.standardError.write(
-                    Data("[provider] keychain load failed for \(info.id): \(error)\n".utf8)
+                let actionError = ActionError.keychainLoadFailed(
+                    providerId: info.id,
+                    detail: Self.message(for: error)
                 )
-                // Don't mark hydrated — next refreshStatus (e.g. after OAuth
-                // success) will retry. Keychain is durable truth; transient
-                // ACL/IO errors should not strand the provider until restart.
+                FileHandle.standardError.write(
+                    Data("[provider] \(Self.message(for: actionError))\n".utf8)
+                )
+                statusError = Self.message(for: actionError)
                 continue
             }
             guard let key, !key.isEmpty else {
@@ -324,11 +381,13 @@ public final class ProviderService {
                 hydratedApiKeyProviders.insert(info.id)
                 continue
             }
-            if let err = await pushApiKey(providerId: info.id, apiKey: key) {
+            do {
+                try await pushApiKey(providerId: info.id, apiKey: key)
+            } catch {
                 FileHandle.standardError.write(
-                    Data("[provider] hydrate push failed for \(info.id): \(err)\n".utf8)
+                    Data("[provider] hydrate push failed for \(info.id): \(Self.message(for: error))\n".utf8)
                 )
-                // Same rationale: leave unmarked so next refresh retries.
+                statusError = Self.message(for: error)
                 continue
             }
             hydratedApiKeyProviders.insert(info.id)
@@ -337,26 +396,24 @@ public final class ProviderService {
 
     /// User-driven save: persist to Keychain THEN push to sidecar. The
     /// sidecar's ack flips `state` via the `statusChanged` notification it
-    /// emits — no local mutation here. Returns the user-visible error
-    /// message, or `nil` on success.
-    @discardableResult
-    public func saveApiKey(providerId: String, apiKey: String) async -> String? {
+    /// emits — no local mutation here.
+    public func saveApiKey(providerId: String, apiKey: String) async throws {
         let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "API key cannot be empty" }
+        guard !trimmed.isEmpty else { throw ActionError.emptyApiKey }
         // Validate locally before touching Keychain so an invalid/OAuth
         // providerId can't leave an orphan secret persisted on disk.
         guard let provider = providers.first(where: { $0.id == providerId }) else {
-            return "Unknown provider: \(providerId)"
+            throw ActionError.unknownProvider(providerId)
         }
         guard provider.authMethod == .apiKey else {
-            return "Provider \(providerId) does not use API key auth"
+            throw ActionError.unsupportedAuthMethod(providerId)
         }
         do {
             try keychain.saveApiKey(providerId: providerId, apiKey: trimmed)
         } catch {
-            return "Keychain save failed: \(error)"
+            throw ActionError.keychainSaveFailed(Self.message(for: error))
         }
-        return await pushApiKey(providerId: providerId, apiKey: trimmed)
+        try await pushApiKey(providerId: providerId, apiKey: trimmed)
     }
 
     /// Read-only peek into the Keychain-stored API key, used by views to
@@ -371,12 +428,11 @@ public final class ProviderService {
     /// User-driven clear: delete from Keychain THEN tell the sidecar to
     /// drop the in-memory copy. Order matters — Keychain is the durable
     /// truth; sidecar memory is recoverable from Keychain on next boot.
-    @discardableResult
-    public func clearApiKey(providerId: String) async -> String? {
+    public func clearApiKey(providerId: String) async throws {
         do {
             _ = try keychain.deleteApiKey(providerId: providerId)
         } catch {
-            return "Keychain delete failed: \(error)"
+            throw ActionError.keychainDeleteFailed(Self.message(for: error))
         }
         do {
             _ = try await rpc.request(
@@ -384,26 +440,23 @@ public final class ProviderService {
                 params: ProviderClearApiKeyParams(providerId: providerId),
                 as: ProviderClearApiKeyResult.self
             )
-            return nil
         } catch {
-            return "Sidecar clear failed: \(error)"
+            throw ActionError.sidecarClearFailed(Self.message(for: error))
         }
     }
 
     /// Auth-method-agnostic logout. Used by Settings to expose a "Sign out"
     /// action for OAuth providers (which have no Keychain entry to delete).
     /// For apiKey providers, also wipes the local Keychain copy so the
-    /// durable truth matches the sidecar's in-memory clear. Returns the
-    /// user-visible error message, or `nil` on success.
-    @discardableResult
-    public func logout(providerId: String) async -> String? {
+    /// durable truth matches the sidecar's in-memory clear.
+    public func logout(providerId: String) async throws {
         // Local Keychain wipe first when applicable — keeps the
         // "Keychain is durable truth" invariant from clearApiKey.
         if let p = providers.first(where: { $0.id == providerId }), p.authMethod == .apiKey {
             do {
                 _ = try keychain.deleteApiKey(providerId: providerId)
             } catch {
-                return "Keychain delete failed: \(error)"
+                throw ActionError.keychainDeleteFailed(Self.message(for: error))
             }
         }
         do {
@@ -412,22 +465,20 @@ public final class ProviderService {
                 params: ProviderLogoutParams(providerId: providerId),
                 as: ProviderLogoutResult.self
             )
-            return nil
         } catch {
-            return "Sidecar logout failed: \(error)"
+            throw ActionError.sidecarLogoutFailed(Self.message(for: error))
         }
     }
 
-    private func pushApiKey(providerId: String, apiKey: String) async -> String? {
+    private func pushApiKey(providerId: String, apiKey: String) async throws {
         do {
             _ = try await rpc.request(
                 method: RPCMethod.providerSetApiKey,
                 params: ProviderSetApiKeyParams(providerId: providerId, apiKey: apiKey),
                 as: ProviderSetApiKeyResult.self
             )
-            return nil
         } catch {
-            return "Sidecar push failed: \(error)"
+            throw ActionError.sidecarPushFailed(Self.message(for: error))
         }
     }
 

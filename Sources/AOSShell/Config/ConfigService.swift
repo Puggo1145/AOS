@@ -138,27 +138,21 @@ public final class ConfigService {
         }
     }
 
-    /// One-shot latch. Optimistically flips the local `hasCompletedOnboarding`
-    /// flag, then persists via RPC. The flag is monotonic — never set back
-    /// to `false` through this code path; clearing requires deleting
-    /// `~/.aos/config.json`. Calling more than once is a no-op on disk
-    /// (idempotent merge).
+    /// One-shot latch. Persists via RPC before flipping the local
+    /// `hasCompletedOnboarding` flag so a storage/RPC failure cannot route
+    /// the current Shell session past onboarding without durable authority.
+    /// Calling more than once is a no-op on disk (idempotent merge).
     public func markOnboardingCompleted() async {
         guard !hasCompletedOnboarding else { return }
-        hasCompletedOnboarding = true
         do {
-            _ = try await rpc.request(
+            let result = try await rpc.request(
                 method: RPCMethod.configMarkOnboardingCompleted,
                 params: ConfigMarkOnboardingCompletedParams(),
                 as: ConfigMarkOnboardingCompletedResult.self
             )
+            hasCompletedOnboarding = result.hasCompletedOnboarding
             lastError = nil
         } catch {
-            // Persist failure is logged but does not roll back the
-            // local flag — the next `config.get` will reconcile if the
-            // disk write actually failed; meanwhile the user shouldn't
-            // see onboarding bounce back mid-session due to a transient
-            // RPC issue.
             lastError = String(describing: error)
             FileHandle.standardError.write(
                 Data("[config] markOnboardingCompleted failed: \(error)\n".utf8)
@@ -170,5 +164,19 @@ public final class ConfigService {
     /// Local-only — there's nothing to persist on disk.
     public func dismissCorruptionNotice() {
         recoveredFromCorruption = false
+    }
+
+    internal func _testApply(
+        providers newProviders: [ConfigProviderEntry],
+        selection newSelection: ConfigSelection?,
+        effort newEffort: String? = nil,
+        hasCompletedOnboarding completed: Bool = false
+    ) {
+        providers = newProviders
+        selection = newSelection
+        effort = newEffort
+        hasCompletedOnboarding = completed
+        loaded = true
+        lastError = nil
     }
 }

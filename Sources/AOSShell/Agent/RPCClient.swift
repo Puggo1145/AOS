@@ -59,9 +59,33 @@ public struct RPCErrorThrowable: Error {
     public init(_ rpcError: RPCError) { self.rpcError = rpcError }
 }
 
+/// Serializes writes to the sidecar pipe. FileHandle writes are blocking, but
+/// this actor gives the transport an explicit Swift-concurrency isolation
+/// boundary instead of hiding mutation behind a GCD queue.
+private actor RPCOutboundWriter {
+    private let outbound: FileHandle
+
+    init(outbound: FileHandle) {
+        self.outbound = outbound
+    }
+
+    func write(line: Data) -> Error? {
+        do {
+            try outbound.write(contentsOf: line)
+            try outbound.write(contentsOf: Data([0x0A]))
+            return nil
+        } catch {
+            FileHandle.standardError.write(
+                Data("[rpc] write failure: \(error)\n".utf8)
+            )
+            return RPCClientError.connectionClosed
+        }
+    }
+}
+
 public final class RPCClient: @unchecked Sendable {
     private let inbound: FileHandle
-    private let outbound: FileHandle
+    private let outboundWriter: RPCOutboundWriter
 
     /// Pending request continuations. Each key is the RPCId we sent.
     /// `OSAllocatedUnfairLock<State>` instead of NSLock + raw var so the
@@ -82,8 +106,6 @@ public final class RPCClient: @unchecked Sendable {
     private let handlerRegistry = OSAllocatedUnfairLock<HandlerRegistry>(
         initialState: HandlerRegistry()
     )
-
-    private let writeQueue = DispatchQueue(label: "aos.rpc.write")
 
     /// Lifecycle + serial-notification state. Originally three plain
     /// mutable properties (`readerStopped`, `notificationContinuation`,
@@ -121,7 +143,7 @@ public final class RPCClient: @unchecked Sendable {
 
     public init(inbound: FileHandle, outbound: FileHandle) {
         self.inbound = inbound
-        self.outbound = outbound
+        self.outboundWriter = RPCOutboundWriter(outbound: outbound)
     }
 
     // MARK: - Lifecycle
@@ -305,7 +327,13 @@ public final class RPCClient: @unchecked Sendable {
                 waiting?.resume(throwing: RPCClientError.timeout(method: method))
             }
 
-            self.write(line: line)
+            Task { [weak self] in
+                guard let self else { return }
+                if let writeError = await self.write(line: line) {
+                    let waiting = self.removePending(id)
+                    waiting?.resume(throwing: writeError)
+                }
+            }
         }
 
         // Decode RPCResponse<R> or RPCErrorResponse.
@@ -447,17 +475,8 @@ public final class RPCClient: @unchecked Sendable {
 
     // MARK: - Outbound writer
 
-    private func write(line: Data) {
-        writeQueue.sync {
-            do {
-                try outbound.write(contentsOf: line)
-                try outbound.write(contentsOf: Data([0x0A]))
-            } catch {
-                FileHandle.standardError.write(
-                    Data("[rpc] write failure: \(error)\n".utf8)
-                )
-            }
-        }
+    private func write(line: Data) async -> Error? {
+        await outboundWriter.write(line: line)
     }
 
     private static func encodeLine<T: Encodable>(_ value: T) throws -> Data {
@@ -629,7 +648,7 @@ public final class RPCClient: @unchecked Sendable {
                             message: "protocol MAJOR mismatch: remote=\(req.params.protocolVersion) local=\(aosProtocolVersion)"
                         )
                     )
-                    if let data = try? Self.encodeLine(err) { write(line: data) }
+                    if let data = try? Self.encodeLine(err) { _ = await write(line: data) }
                     resolveHandshake(.failure(RPCClientError.protocolMajorMismatch(
                         remote: req.params.protocolVersion,
                         local: aosProtocolVersion
@@ -641,7 +660,7 @@ public final class RPCClient: @unchecked Sendable {
                     serverInfo: ServerInfo(name: "aos-shell", version: aosProtocolVersion)
                 )
                 let resp = RPCResponse(id: req.id, result: result)
-                if let data = try? Self.encodeLine(resp) { write(line: data) }
+                if let data = try? Self.encodeLine(resp) { _ = await write(line: data) }
                 resolveHandshake(.success(result))
             } catch {
                 FileHandle.standardError.write(
@@ -656,7 +675,7 @@ public final class RPCClient: @unchecked Sendable {
         let handler = handlerRegistry.withLock { $0.requests[method] }
         if let handler {
             if let response = await handler(line) {
-                write(line: response)
+                _ = await write(line: response)
             }
             return
         }
@@ -670,7 +689,7 @@ public final class RPCClient: @unchecked Sendable {
                     message: "method not found: \(method)"
                 )
             )
-            if let data = try? Self.encodeLine(err) { write(line: data) }
+            if let data = try? Self.encodeLine(err) { _ = await write(line: data) }
         }
     }
 

@@ -13,6 +13,7 @@ import Combine
 // All publishers fire on the main runloop because every downstream consumer
 // (NotchViewModel, EdgeHighlightOverlay) is @MainActor.
 
+@MainActor
 public final class EventMonitors {
     public static let shared = EventMonitors()
 

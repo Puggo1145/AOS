@@ -22,12 +22,27 @@ import AOSOSSenseKit
 
 @MainActor
 public final class CompositionRoot {
+    public enum BootState: Equatable, Sendable {
+        case idle
+        case starting
+        case sidecarLaunching
+        case handshaking
+        case mountingUI
+        case bootstrappingSession
+        case refreshingServices
+        case running
+        case stopping
+        case stopped
+        case fatal(String)
+    }
+
     public let permissionsService: PermissionsService
     public let senseStore: SenseStore
     public let computerUseCore: ComputerUseCore
     public let adapterRegistry: AdapterRegistry
     public let visualCapturePolicyStore: VisualCapturePolicyStore
     public let sidecarProcess: SidecarProcess
+    public let sidecarSupervisor: SidecarSupervisor
     public private(set) var rpcClient: RPCClient?
     public private(set) var agentService: AgentService?
     public private(set) var sessionService: SessionService?
@@ -38,11 +53,13 @@ public final class CompositionRoot {
     public private(set) var devModeWindowController: DevModeWindowController?
     private var devModeOpenObserver: NSObjectProtocol?
     public private(set) var notchWindowController: NotchWindowController?
+    public private(set) var bootState: BootState = .idle
 
     /// Latest fatal error surfaced during boot (e.g. handshake mismatch,
     /// bun missing). The OpenedPanelView reads `agentService.lastErrorMessage`
     /// for run-time errors; this property is for boot-time diagnostics.
     public private(set) var fatalBootError: String?
+    private var fatalBootAlertPresented: Bool = false
 
     /// Bootstrap session.create failure — distinct from `fatalBootError`
     /// because the sidecar handshake succeeded; only the initial session
@@ -59,10 +76,16 @@ public final class CompositionRoot {
         )
         self.computerUseCore = ComputerUseCore()
         self.visualCapturePolicyStore = VisualCapturePolicyStore()
-        self.sidecarProcess = SidecarProcess()
+        let sidecarProcess = SidecarProcess()
+        self.sidecarProcess = sidecarProcess
+        self.sidecarSupervisor = SidecarSupervisor(process: sidecarProcess)
+        self.sidecarSupervisor.setFatalHandler { [weak self] message in
+            self?.handleUnexpectedSidecarExit(message: message)
+        }
     }
 
     public func start() async {
+        bootState = .starting
         await Self.registerBuiltinSenseAdapters(into: adapterRegistry)
 
         // 1. SenseStore: starts WindowMirror + initial permissions probe.
@@ -70,14 +93,17 @@ public final class CompositionRoot {
 
         // 2. Spawn Bun sidecar; wire stdio to the RPC client.
         let pipes: SidecarPipes
+        bootState = .sidecarLaunching
+        sidecarSupervisor.beginLaunch()
         do {
             pipes = try sidecarProcess.spawn()
+            sidecarSupervisor.didLaunch()
         } catch {
+            sidecarSupervisor.didFailLaunch()
             FileHandle.standardError.write(
                 Data("[shell] sidecar spawn failed: \(error)\n".utf8)
             )
-            fatalBootError = "Sidecar failed to start: \(error)"
-            mountWindow()
+            enterFatalBootState("Sidecar failed to start: \(error)")
             return
         }
         let client = RPCClient(
@@ -127,19 +153,21 @@ public final class CompositionRoot {
         // 4. Mount the notch window before awaiting handshake so the user
         //    sees the bar immediately. ProviderService starts in `unknown`
         //    state — onboard renders a loading affordance until step 6.
+        bootState = .mountingUI
         mountWindow()
 
         // 5. Await handshake. MAJOR mismatch from the sidecar terminates it
         //    and surfaces a fatal error. Inbound rpc.hello path is handled
         //    inside RPCClient.
+        bootState = .handshaking
         do {
             _ = try await client.awaitHandshake(timeout: 5)
         } catch {
             FileHandle.standardError.write(
                 Data("[shell] handshake failed: \(error)\n".utf8)
             )
-            fatalBootError = "RPC handshake failed: \(error)"
             sidecarProcess.terminate()
+            enterFatalBootState("RPC handshake failed: \(error)")
             EventMonitors.shared.start()
             return
         }
@@ -153,6 +181,7 @@ public final class CompositionRoot {
         //    async hop. Failure here is recorded as `sessionBootError` so the
         //    composer can disable input and surface a precise message instead
         //    of pretending submit will work.
+        bootState = .bootstrappingSession
         do {
             _ = try await session.create()
         } catch {
@@ -170,12 +199,14 @@ public final class CompositionRoot {
         //    loading affordance, which is the right signal in that case.
         //    Pull config in parallel so the settings panel has data on first
         //    open (catalog snapshot + saved selection).
+        bootState = .refreshingServices
         async let providerRefresh: () = provider.refreshStatus()
         async let configRefresh: () = config.refresh()
         _ = await (providerRefresh, configRefresh)
 
         // 8. Start global event monitors (closed/popping/opened state machine).
         EventMonitors.shared.start()
+        bootState = .running
 
     }
 
@@ -229,7 +260,45 @@ public final class CompositionRoot {
         )
     }
 
+    private func handleUnexpectedSidecarExit(status: Int32) {
+        handleUnexpectedSidecarExit(message: SidecarSupervisor.unexpectedExitMessage(status: status))
+    }
+
+    private func handleUnexpectedSidecarExit(message: String) {
+        FileHandle.standardError.write(
+            Data("[shell] \(message)\n".utf8)
+        )
+        bootState = .fatal(message)
+        fatalBootError = message
+        rpcClient?.stop()
+        EventMonitors.shared.start()
+        presentFatalBootError(message)
+    }
+
+    private func enterFatalBootState(_ message: String) {
+        bootState = .fatal(message)
+        fatalBootError = message
+        presentFatalBootError(message)
+    }
+
+    private func presentFatalBootError(_ message: String) {
+        guard !fatalBootAlertPresented else { return }
+        fatalBootAlertPresented = true
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "AOS failed to start"
+        alert.informativeText = message
+        alert.addButton(withTitle: "Quit AOS")
+        alert.addButton(withTitle: "Keep Open")
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            NSApp.terminate(nil)
+        }
+    }
+
     public func stop() {
+        bootState = .stopping
         EventMonitors.shared.stop()
         if let token = devModeOpenObserver {
             NotificationCenter.default.removeObserver(token)
@@ -247,7 +316,9 @@ public final class CompositionRoot {
         computerUseRPCService = nil
         agentService = nil
         sessionService = nil
+        sidecarSupervisor.expectTermination()
         sidecarProcess.terminate()
         senseStore.stop()
+        bootState = .stopped
     }
 }

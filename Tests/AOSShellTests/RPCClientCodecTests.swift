@@ -242,6 +242,36 @@ struct RPCClientCodecTests {
         #expect(n <= 0)
     }
 
+    @Test("outbound write failure resolves the request immediately with connectionClosed")
+    func outboundWriteFailureDoesNotWaitForTimeout() async throws {
+        let inbound = Pipe()
+        let outbound = Pipe()
+        let client = RPCClient(
+            inbound: inbound.fileHandleForReading,
+            outbound: outbound.fileHandleForWriting
+        )
+        client.start()
+        defer { client.stop() }
+
+        try outbound.fileHandleForWriting.close()
+
+        let start = Date()
+        do {
+            _ = try await client.request(
+                method: RPCMethod.rpcPing,
+                params: PingParams(),
+                as: PingResult.self,
+                timeout: 1
+            )
+            Issue.record("expected closed outbound handle to fail the request")
+        } catch RPCClientError.connectionClosed {
+            let elapsed = Date().timeIntervalSince(start)
+            #expect(elapsed < 0.5, "write failure took \(elapsed)s; expected immediate connectionClosed")
+        } catch {
+            Issue.record("expected connectionClosed, got \(error)")
+        }
+    }
+
     @Test("majorVersion parses the leading integer")
     func majorVersionParse() {
         #expect(RPCClient.majorVersion("1.2.3") == 1)

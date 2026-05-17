@@ -348,7 +348,7 @@ context 候选呈现。
 - `ClipboardItem` 类型与 pasteboard 抽取规则（type priority、文本逐字捕获、
   image metadata-only）仍住在 `AOSOSSenseKit` 包里，作为 `ClipboardPasteboardExtractor.extract(from:)` 的纯函数 API。这条契约属于
   OS Sense 的投影规则
-- 触发与状态归属于 Shell composer：`ChipInputView`（`AOSShell/Notch/Components/`，
+- 触发与状态归属于 Shell composer：`ChipInputView`（`AOSShell/Notch/Composer/`，
   NSTextView wrapper）拦截 Cmd+V，调 extractor 一次性快照 `NSPasteboard.general`，
   把结果作为 `NSTextAttachment`（`ClipboardChipCell`）插入到 caret 位置；
   同一个 turn 可以插入多个 chip

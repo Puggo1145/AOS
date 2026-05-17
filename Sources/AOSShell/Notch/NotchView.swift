@@ -160,10 +160,10 @@ struct NotchView: View {
         ZStack(alignment: .top) {
             if viewModel.status == .opened {
                 openedContent
-                    .animation(.notchHeight, value: viewModel.showSettings)
-                    .animation(.notchHeight, value: viewModel.showHistory)
-                    .animation(.notchHeight, value: viewModel.providerService.hasReadyProvider)
-                    .animation(.notchHeight, value: viewModel.permissionsService.onboardingPermissionsComplete)
+                    .animation(reduceMotion ? nil : .notchHeight, value: viewModel.showSettings)
+                    .animation(reduceMotion ? nil : .notchHeight, value: viewModel.showHistory)
+                    .animation(reduceMotion ? nil : .notchHeight, value: viewModel.providerService.hasReadyProvider)
+                    .animation(reduceMotion ? nil : .notchHeight, value: viewModel.permissionsService.onboardingPermissionsComplete)
             }
 
             if viewModel.status != .opened {
@@ -228,25 +228,18 @@ struct NotchView: View {
                 .modifier(OnboardingMeasurement(viewModel: viewModel))
                 .transition(.blurReplace)
             } else {
-                OpenedPanelView(
-                    viewModel: viewModel,
-                    senseStore: viewModel.senseStore,
-                    agentService: viewModel.agentService,
-                    visualCapturePolicyStore: viewModel.visualCapturePolicyStore
-                )
+                OpenedPanelView(viewModel: viewModel)
                 .transition(.blurReplace)
             }
         }
-        .task(id: shouldMarkOnboardingDone) {
+        .task(id: viewModel.shouldMarkOnboardingDone) {
             // Latch: when the Shell first sees both prerequisites
             // satisfied, persist `hasCompletedOnboarding=true` via RPC so
             // future sessions skip onboarding even if a permission or
             // provider drops. Idempotent — safe to fire on every change.
-            if shouldMarkOnboardingDone {
-                await viewModel.configService.markOnboardingCompleted()
-            }
+            await viewModel.markOnboardingCompletedIfNeeded()
         }
-        .task(id: providerReadyKey) {
+        .task(id: viewModel.providerReadyKey) {
             // First-auth selection bootstrap: if the user hasn't explicitly
             // chosen a provider yet, `effectiveSelection` falls back to the
             // catalog's first entry (e.g. codex) — which can leave the
@@ -256,40 +249,8 @@ struct NotchView: View {
             // provider is, persist a selection to the ready one. Only
             // fires while `selection == nil` so explicit user picks are
             // never overridden.
-            await reconcileSelectionIfNeeded()
+            await viewModel.reconcileSelectionIfNeeded()
         }
-    }
-
-    /// Stable signal that flips whenever any provider's readiness changes.
-    /// Used as the `task(id:)` key so the reconciliation re-runs at the
-    /// right moments without firing on unrelated re-renders.
-    private var providerReadyKey: String {
-        viewModel.providerService.providers
-            .map { "\($0.id):\($0.state == .ready ? 1 : 0)" }
-            .joined(separator: ",")
-    }
-
-    @MainActor
-    private func reconcileSelectionIfNeeded() async {
-        let cs = viewModel.configService
-        let ps = viewModel.providerService
-        guard ps.statusLoaded, cs.selection == nil else { return }
-        guard let sel = cs.effectiveSelection else { return }
-        let currentReady = ps.providers.contains { $0.id == sel.providerId && $0.state == .ready }
-        if currentReady { return }
-        guard let ready = ps.providers.first(where: { $0.state == .ready }),
-              let entry = cs.provider(id: ready.id) else { return }
-        await cs.selectModel(providerId: ready.id, modelId: entry.defaultModelId)
-    }
-
-    /// Both onboard prerequisites first satisfied while config has
-    /// loaded and the latch is still false — i.e., the moment to flip
-    /// `hasCompletedOnboarding` for good.
-    private var shouldMarkOnboardingDone: Bool {
-        viewModel.configService.loaded
-            && !viewModel.configService.hasCompletedOnboarding
-            && viewModel.permissionsService.onboardingPermissionsComplete
-            && viewModel.providerService.hasReadyProvider
     }
 
     private var closedBar: some View {

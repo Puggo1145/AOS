@@ -41,9 +41,14 @@ struct ProviderServiceTests {
             ProviderService.Provider(id: "deepseek", name: "deepseek", authMethod: .apiKey, state: .unauthenticated),
         ])
         let bogusId = "nonexistent-\(UUID().uuidString)"
-        let err = await svc.saveApiKey(providerId: bogusId, apiKey: "sk-should-not-persist")
-        #expect(err != nil)
-        #expect(err?.contains("Unknown provider") == true)
+        do {
+            try await svc.saveApiKey(providerId: bogusId, apiKey: "sk-should-not-persist")
+            Issue.record("expected unknown provider error")
+        } catch ProviderService.ActionError.unknownProvider(let providerId) {
+            #expect(providerId == bogusId)
+        } catch {
+            Issue.record("expected unknownProvider, got \(error)")
+        }
         // Keychain must remain empty for the bogus id — proves we returned
         // before `keychain.saveApiKey`.
         let stored = try keychain.loadApiKey(providerId: bogusId)
@@ -55,9 +60,14 @@ struct ProviderServiceTests {
         let (svc, keychain) = makeService(providers: [
             ProviderService.Provider(id: "chatgpt-plan", name: "chatgpt-plan", authMethod: .oauth, state: .unauthenticated),
         ])
-        let err = await svc.saveApiKey(providerId: "chatgpt-plan", apiKey: "sk-should-not-persist")
-        #expect(err != nil)
-        #expect(err?.contains("does not use API key auth") == true)
+        do {
+            try await svc.saveApiKey(providerId: "chatgpt-plan", apiKey: "sk-should-not-persist")
+            Issue.record("expected unsupported auth method error")
+        } catch ProviderService.ActionError.unsupportedAuthMethod(let providerId) {
+            #expect(providerId == "chatgpt-plan")
+        } catch {
+            Issue.record("expected unsupportedAuthMethod, got \(error)")
+        }
         let stored = try keychain.loadApiKey(providerId: "chatgpt-plan")
         #expect(stored == nil)
     }
@@ -67,8 +77,13 @@ struct ProviderServiceTests {
         let (svc, _) = makeService(providers: [
             ProviderService.Provider(id: "deepseek", name: "deepseek", authMethod: .apiKey, state: .unauthenticated),
         ])
-        let err = await svc.saveApiKey(providerId: "deepseek", apiKey: "   ")
-        #expect(err == "API key cannot be empty")
+        do {
+            try await svc.saveApiKey(providerId: "deepseek", apiKey: "   ")
+            Issue.record("expected empty API key error")
+        } catch ProviderService.ActionError.emptyApiKey {
+        } catch {
+            Issue.record("expected emptyApiKey, got \(error)")
+        }
     }
 
     @Test("peekApiKey returns nil for a never-stored providerId")
