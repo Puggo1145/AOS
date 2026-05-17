@@ -7,3 +7,5 @@ bun.lockb
 bun.lock
 *.xcodeproj
 .DS_Store
+.dist/
+dist/
