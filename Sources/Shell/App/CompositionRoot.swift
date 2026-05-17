@@ -50,6 +50,7 @@ public final class CompositionRoot {
     public private(set) var configService: ConfigService?
     private(set) var computerUseRPCService: ComputerUseRPCService?
     public private(set) var devContextService: DevContextService?
+    private(set) var devComputerUseService: DevComputerUseService?
     public private(set) var devModeWindowController: DevModeWindowController?
     private var devModeOpenObserver: NSObjectProtocol?
     public private(set) var notchWindowController: NotchWindowController?
@@ -119,9 +120,10 @@ public final class CompositionRoot {
         self.providerService = provider
         let config = ConfigService(rpc: client)
         self.configService = config
+        let shellComputerUseClient = LiveShellComputerUseClient(core: computerUseCore)
         self.computerUseRPCService = ComputerUseRPCService(
             rpc: client,
-            core: LiveShellComputerUseClient(core: computerUseCore)
+            core: shellComputerUseClient
         )
         let session = SessionService(rpc: client)
         self.sessionService = session
@@ -146,15 +148,19 @@ public final class CompositionRoot {
             }
         }
 
-        // Dev Mode is purely observational: the service subscribes to
-        // `dev.context.changed` and the controller owns its own NSWindow.
-        // Wire the "Dev Mode" button in Settings to the window via
-        // NotificationCenter so the notch view tree stays unaware of it.
+        // Dev Mode owns its own services and NSWindow. Context/OS Sense stay
+        // read-only; Computer Use gets a separate diagnostic adapter that
+        // starts and stops only the app session selected inside the panel.
+        // Wire the Settings entry through NotificationCenter so the notch
+        // view tree stays unaware of the debug surface.
         let devContext = DevContextService(rpc: client)
         self.devContextService = devContext
+        let devComputerUse = DevComputerUseService(client: shellComputerUseClient)
+        self.devComputerUseService = devComputerUse
         let devWindow = DevModeWindowController(
             contextService: devContext,
             senseStore: senseStore,
+            computerUseService: devComputerUse,
             sessionStore: store
         )
         self.devModeWindowController = devWindow

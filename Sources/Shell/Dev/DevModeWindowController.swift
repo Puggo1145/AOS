@@ -22,25 +22,28 @@ public extension Notification.Name {
 // existing instance to front; the window is kept alive after close so future
 // `show()` calls re-present without re-hydration.
 //
-// Why a separate window: Dev Mode is observational and out-of-band relative
-// to the notch. Hosting it inside the notch panel would leak debug surfaces
-// into the user-facing UI and force the notch's tight frame onto a view that
-// wants a wide, scrollable raw payload.
+// Why a separate window: Dev Mode is out-of-band relative to the notch.
+// Hosting it inside the notch panel would leak debug surfaces into the
+// user-facing UI and force the notch's tight frame onto views that want wide,
+// scrollable diagnostic payloads.
 
 @MainActor
 public final class DevModeWindowController: NSObject, NSWindowDelegate {
     private let contextService: DevContextService
     private let senseStore: SenseStore
+    private let computerUseService: DevComputerUseService
     private weak var sessionStore: SessionStore?
     private var window: NSWindow?
 
-    public init(
+    init(
         contextService: DevContextService,
         senseStore: SenseStore,
+        computerUseService: DevComputerUseService,
         sessionStore: SessionStore? = nil
     ) {
         self.contextService = contextService
         self.senseStore = senseStore
+        self.computerUseService = computerUseService
         self.sessionStore = sessionStore
     }
 
@@ -64,6 +67,7 @@ public final class DevModeWindowController: NSObject, NSWindowDelegate {
             rootView: DevModePanelView(
                 contextService: contextService,
                 senseStore: senseStore,
+                computerUseService: computerUseService,
                 sessionStore: sessionStore
             )
         )
