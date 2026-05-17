@@ -20,7 +20,7 @@ let tmpHome: string;
 
 beforeEach(() => {
   originalHome = process.env.HOME;
-  tmpHome = mkdtempSync(join(tmpdir(), "aos-handler-test-"));
+  tmpHome = mkdtempSync(join(tmpdir(), "notch-agent-handler-test-"));
   process.env.HOME = tmpHome;
 });
 
@@ -31,8 +31,8 @@ afterEach(() => {
 });
 
 function writeRaw(content: string): void {
-  mkdirSync(join(tmpHome, ".aos"), { recursive: true });
-  writeFileSync(join(tmpHome, ".aos", "config.json"), content, "utf-8");
+  mkdirSync(join(tmpHome, ".notch-agent"), { recursive: true });
+  writeFileSync(join(tmpHome, ".notch-agent", "config.json"), content, "utf-8");
 }
 
 /// Minimal dispatcher stub that just captures the handlers

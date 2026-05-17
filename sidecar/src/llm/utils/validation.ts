@@ -7,7 +7,7 @@
 //   - enum constraints (deep-equality on primitives)
 //   - nested properties / items
 //
-// We deliberately do NOT pull in AJV: AOS only validates short tool call
+// We deliberately do NOT pull in AJV: Notch Agent only validates short tool call
 // payloads in this round. Coercion is intentionally minimal — we accept
 // numeric strings as numbers and the strings "true"/"false" as booleans
 // to absorb the most common LLM mistakes per guide §4.5; everything else

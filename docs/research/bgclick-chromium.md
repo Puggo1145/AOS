@@ -1,12 +1,12 @@
 # Web Content Background Click
 
 This document is the source of truth for the web-content background click path
-that currently works in AOS. It was first validated on Chromium / Electron and
+that currently works in Notch Agent. It was first validated on Chromium / Electron and
 now also covers Safari through an explicit known-browser bundle-id rule.
 
 ## Goal
 
-Given a visible known-browser or Electron window, AOS must deliver a left click
+Given a visible known-browser or Electron window, Notch Agent must deliver a left click
 into the target web content while preserving the user's front window and cursor
 ownership:
 
@@ -79,7 +79,7 @@ browser web-content event path.
 ## Focus Without Raise
 
 Chromium needs a pre-click target focus state for the pid-routed mouse events
-to reach web content. AOS uses `SkyLightWindowFocuser.focusWindowWithoutRaising`
+to reach web content. Notch Agent uses `SkyLightWindowFocuser.focusWindowWithoutRaising`
 for this.
 
 The focus call posts target-side SkyLight/HIServices event records:
@@ -99,7 +99,7 @@ Important invariants:
 
 When the app session stops, cleanup no longer uses target-side defocus. Live
 validation showed that private event can leave the target window stuck inactive
-for real user clicks and drags after AOS releases control.
+for real user clicks and drags after Notch Agent releases control.
 
 ## Web Content Mouse Sequence
 
@@ -166,7 +166,7 @@ delivery and window-order stability.
 ## Window Order Preservation
 
 The target may transiently become active or attempt to rise after mouse
-dispatch. AOS no longer attempts to repair background z-order. It protects the
+dispatch. Notch Agent no longer attempts to repair background z-order. It protects the
 user's active/front window state and treats any non-active background-window
 reordering as acceptable.
 
@@ -182,7 +182,7 @@ Those are the protected windows for diagnostics only. `protected-covered`
 reports when Chrome crosses above them, but the guard does not reorder Chrome or
 the protected windows.
 
-AOS deliberately does not use `AXRaise` or `SLSOrderWindow` in this path. The
+Notch Agent deliberately does not use `AXRaise` or `SLSOrderWindow` in this path. The
 guard only restores original front focus and reactivates the original front app
 when Chrome remains active.
 
@@ -204,7 +204,7 @@ the session without running a defocus cleanup pass.
 
 Live Chrome validation used:
 
-1. Launch `.build/debug/AOSComputerUseCLI interactive`.
+1. Launch `.build/debug/ComputerUseCLI interactive`.
 2. Select `start-app-session`, then select pid `45785` and window `384636`.
 3. Select `measure-left-click-window-order`, choose window `384636`, and enter:
    `coor=90,310`, `runs=20`, `duration-ms=500`, `interval-ms=1`,
@@ -220,7 +220,7 @@ Summary: max active contiguous 15ms, max rank1 contiguous 0ms, max protected-cov
 
 Stress validation at a text-input point used:
 
-1. Launch `.build/debug/AOSComputerUseCLI interactive`.
+1. Launch `.build/debug/ComputerUseCLI interactive`.
 2. Select `start-app-session`, then select pid `45785` and window `384636`.
 3. Select `measure-left-click-window-order`, choose window `384636`, and enter:
    `coor=500,490`, `runs=100`, `duration-ms=500`, `interval-ms=1`,
@@ -255,22 +255,22 @@ run, not total duration.
 
 ## Files
 
-- `Sources/AOSComputerUseKit/ComputerUseCore.swift`
+- `Sources/ComputerUseKit/ComputerUseCore.swift`
   - Orchestrates validation, app session, target focus, mouse dispatch,
     session release, and the active-state guard.
-- `Sources/AOSComputerUseKit/Input/BackgroundMouseEvent.swift`
+- `Sources/ComputerUseKit/Input/BackgroundMouseEvent.swift`
   - Defines coordinate mouse event intent, independent from delivery path.
-- `Sources/AOSComputerUseKit/Input/BackgroundMouseEventDelivery.swift`
+- `Sources/ComputerUseKit/Input/BackgroundMouseEventDelivery.swift`
   - Classifies AppKit vs web-content mouse event delivery routes.
-- `Sources/AOSComputerUseKit/Input/MouseEventPoster.swift`
+- `Sources/ComputerUseKit/Input/MouseEventPoster.swift`
   - Implements event stamping, AppKit event posting, and the SkyLight
     web-content mouse-event sequence.
-- `Sources/AOSComputerUseKit/Windows/SkyLightWindowFocuser.swift`
+- `Sources/ComputerUseKit/Windows/SkyLightWindowFocuser.swift`
   - Posts target-side focus records without raising; defocus remains a
     low-level diagnostic primitive.
-- `Sources/AOSComputerUseKit/Windows/WindowOrderGuardian.swift`
+- `Sources/ComputerUseKit/Windows/WindowOrderGuardian.swift`
   - Defines protected windows and protected-covered diagnostics.
-- `Sources/AOSComputerUseCLI/ComputerUseCLI.swift`
+- `Sources/ComputerUseCLI/ComputerUseCLI.swift`
   - Provides `start-app-session`, `stop-app-session`, `left-click`, `right-click`,
     web-content-only `drag`, `--trace`,
     `observe-window-order`, and `measure-left-click-window-order` diagnostics

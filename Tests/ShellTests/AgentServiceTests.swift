@@ -1,0 +1,459 @@
+import Testing
+import Foundation
+@testable import Shell
+@testable import RPCSchema
+
+// MARK: - AgentServiceTests
+//
+// AgentService is a passive mirror of the sidecar's Conversation. These
+// tests drive its `internal` notification handlers directly and assert that:
+//   - `conversation.turnStarted` materializes a turn in `turns`
+//   - `ui.token` deltas land on the matching turn's reply
+//   - `ui.status` / `ui.error` patch the matching turn's status + global
+//     status emoji, and the global status auto-reverts after the per-revert
+//     delay while the turn itself is preserved
+//   - `conversation.reset` wipes everything
+
+@MainActor
+@Suite("AgentService mirror")
+struct AgentServiceTests {
+
+    /// Build a real RPCClient over a closed pipe pair so init() succeeds —
+    /// no RPC traffic actually flows in these tests; we exercise handlers
+    /// and the test seams directly.
+    private func makeService(
+        stopComputerUseAppSessionAfterManualAbort: @escaping () async throws -> Void = {}
+    ) -> AgentService {
+        let inbound = Pipe()
+        let outbound = Pipe()
+        let rpc = RPCClient(
+            inbound: inbound.fileHandleForReading,
+            outbound: outbound.fileHandleForWriting
+        )
+        let session = SessionService(rpc: rpc)
+        let store = SessionStore(rpc: rpc, sessionService: session)
+        // Pre-adopt a bootstrap session id so the active-mirror projection
+        // (`s.status`, `s.turns`, ...) works without driving session.* RPCs.
+        store.adoptCreated(SessionListItem(
+            id: "S",
+            title: "test",
+            createdAt: 0,
+            turnCount: 0,
+            lastActivityAt: 0
+        ))
+        session.sessionStore = store
+        return AgentService(
+            rpc: rpc,
+            sessionStore: store,
+            stopComputerUseAppSessionAfterManualAbort: stopComputerUseAppSessionAfterManualAbort
+        )
+    }
+
+    @Test("tokens for unknown turn id are dropped")
+    func tokensDroppedForStaleTurn() {
+        let s = makeService()
+        s.handleToken(UITokenParams(sessionId: "S", turnId: "T1", delta: "hi"))
+        #expect(s.turns.isEmpty)
+    }
+
+    @Test("conversation.turnStarted appends a turn and flips status to working")
+    func turnStartedAppends() {
+        let s = makeService()
+        s._testTurnStarted(id: "T1", prompt: "hi")
+        #expect(s.turns.count == 1)
+        #expect(s.turns[0].id == "T1")
+        #expect(s.turns[0].prompt == "hi")
+        #expect(s.currentTurn == "T1")
+        #expect(s.status == .working)
+    }
+
+    @Test("queued prompt clears when its turn is materialized")
+    func queuedPromptClearsOnTurnStarted() {
+        let s = makeService()
+        s.sessionStore.activeMirror?.setQueuedPrompt(QueuedPrompt(turnId: "T2", prompt: "steer"))
+        #expect(s.queuedPrompt?.prompt == "steer")
+        s._testTurnStarted(id: "T2", prompt: "steer")
+        #expect(s.queuedPrompt == nil)
+        #expect(s.turns.last?.prompt == "steer")
+    }
+
+    @Test("conversation.reset clears queued prompt")
+    func resetClearsQueuedPrompt() {
+        let s = makeService()
+        s.sessionStore.activeMirror?.setQueuedPrompt(QueuedPrompt(turnId: "T2", prompt: "steer"))
+        s.handleConversationReset(ConversationResetParams(sessionId: "S"))
+        #expect(s.queuedPrompt == nil)
+    }
+
+    @Test("ui.status maps to AgentStatus and updates the matching turn")
+    func statusMapping() async throws {
+        let s = makeService()
+        s._testTurnStarted(id: "T1")
+        s.handleStatus(UIStatusParams(sessionId: "S", turnId: "T1", status: .working))
+        #expect(s.status == .working)
+        #expect(s.turns.last?.status == .working)
+        // Turn status is always set immediately — the semantic state must
+        // reflect the sidecar's authoritative value. The display projection
+        // (`status`) is debounced to suppress flicker for fast tools.
+        s.handleStatus(UIStatusParams(sessionId: "S", turnId: "T1", status: .waiting))
+        #expect(s.turns.last?.status == .waiting)
+        #expect(s.status == .working)
+        try await waitUntil(timeout: 2) { s.status == .waiting }
+        #expect(s.status == .waiting)
+    }
+
+    @Test("fast waiting → working does not flicker .waiting into the display")
+    func waitingDebounceCancelled() async throws {
+        let s = makeService()
+        s._testTurnStarted(id: "T1")
+        s.handleStatus(UIStatusParams(sessionId: "S", turnId: "T1", status: .waiting))
+        // Turn status is immediately `.waiting` — semantic state is never delayed.
+        #expect(s.turns.last?.status == .waiting)
+        // Display status stays `.working` during the debounce window.
+        #expect(s.status == .working)
+        // Superseding status arrives well within the 250ms debounce window —
+        // matches the "fast local tool" path on the sidecar.
+        try await Task.sleep(for: .milliseconds(50))
+        s.handleStatus(UIStatusParams(sessionId: "S", turnId: "T1", status: .working))
+        try await Task.sleep(for: .milliseconds(400))
+        // Display never showed `.waiting` — debounce cancelled in time.
+        #expect(s.status == .working)
+        #expect(s.turns.last?.status == .working)
+    }
+
+    @Test("done auto-reverts global status to idle within ~1.5s but keeps the turn")
+    func doneRevert() async throws {
+        let s = makeService()
+        s._testTurnStarted(id: "T2")
+        s.handleStatus(UIStatusParams(sessionId: "S", turnId: "T2", status: .done))
+        #expect(s.status == .done)
+        #expect(s.turns.last?.status == .done)
+        try await Task.sleep(for: .milliseconds(1500))
+        // Global status reverts so the closed-bar emoji returns to its
+        // resting glyph; the turn's per-turn `status` and `currentTurn` are
+        // intentionally retained — the panel keeps the last reply visible
+        // until the user fires a new prompt or hits "+" reset.
+        #expect(s.status == .idle)
+        #expect(s.turns.last?.status == .done)
+        #expect(s.currentTurn == "T2")
+    }
+
+    @Test("error stamps the turn and auto-reverts global status to idle within ~2.5s")
+    func errorRevert() async throws {
+        let s = makeService()
+        s._testTurnStarted(id: "T3")
+        s.handleError(UIErrorParams(sessionId: "S", turnId: "T3", code: -32003, message: "no auth"))
+        #expect(s.status == .error)
+        #expect(s.turns.last?.errorMessage == "no auth")
+        #expect(s.turns.last?.status == .error)
+        try await Task.sleep(for: .milliseconds(2500))
+        #expect(s.status == .idle)
+        // Per-turn error message persists so the history row keeps its
+        // banner.
+        #expect(s.turns.last?.errorMessage == "no auth")
+    }
+
+    @Test("tokens for the current turn append to its reply")
+    func tokensAppend() {
+        let s = makeService()
+        s._testTurnStarted(id: "T4")
+        s.handleToken(UITokenParams(sessionId: "S", turnId: "T4", delta: "Hel"))
+        s.handleToken(UITokenParams(sessionId: "S", turnId: "T4", delta: "lo"))
+        #expect(s.turns.last?.reply == "Hello")
+        // tokens for an unknown turn id drop on the floor; the current
+        // turn's reply is unchanged.
+        s.handleToken(UITokenParams(sessionId: "S", turnId: "Tstale", delta: "X"))
+        #expect(s.turns.last?.reply == "Hello")
+    }
+
+    @Test("multiple turns each retain their own reply")
+    func multiTurnHistory() {
+        let s = makeService()
+        s._testTurnStarted(id: "T1", prompt: "first")
+        s.handleToken(UITokenParams(sessionId: "S", turnId: "T1", delta: "one"))
+        s._testTurnStarted(id: "T2", prompt: "second")
+        s.handleToken(UITokenParams(sessionId: "S", turnId: "T2", delta: "two"))
+        #expect(s.turns.count == 2)
+        #expect(s.turns[0].reply == "one")
+        #expect(s.turns[1].reply == "two")
+    }
+
+    @Test("conversation.reset wipes turns and resets status")
+    func conversationReset() {
+        let s = makeService()
+        s._testTurnStarted(id: "T1", prompt: "first")
+        s.handleToken(UITokenParams(sessionId: "S", turnId: "T1", delta: "one"))
+        #expect(s.turns.count == 1)
+        s.handleConversationReset(ConversationResetParams(sessionId: "S"))
+        #expect(s.turns.isEmpty)
+        #expect(s.currentTurn == nil)
+        #expect(s.status == .idle)
+    }
+
+    @Test("stale status after reset is ignored")
+    func staleStatusAfterResetIgnored() {
+        let s = makeService()
+        s._testTurnStarted(id: "T1")
+        s.handleConversationReset(ConversationResetParams(sessionId: "S"))
+        s.handleStatus(UIStatusParams(sessionId: "S", turnId: "T1", status: .done))
+        #expect(s.status == .idle)
+        #expect(s.turns.isEmpty)
+    }
+
+    @Test("stale error after reset is ignored")
+    func staleErrorAfterResetIgnored() {
+        let s = makeService()
+        s._testTurnStarted(id: "T1")
+        s.handleConversationReset(ConversationResetParams(sessionId: "S"))
+        s.handleError(UIErrorParams(sessionId: "S", turnId: "T1", code: -32000, message: "late"))
+        #expect(s.status == .idle)
+        #expect(s.turns.isEmpty)
+    }
+
+    // MARK: - Thinking lifecycle
+    //
+    // The `ui.thinking` channel carries explicit lifecycle events: `.delta`
+    // chunks accumulate the trace and stamp `thinkingStartedAt` on first
+    // arrival; `.end` stamps `thinkingEndedAt`. The Shell never infers either
+    // transition from neighboring channels (`ui.token`, `ui.status`,
+    // `ui.error`) — the sidecar owns the timing.
+
+    @Test("first ui.thinking delta stamps startedAt and accumulates the trace")
+    func thinkingDeltaAccumulates() {
+        let s = makeService()
+        s._testTurnStarted(id: "TH1")
+        s.handleThinking(UIThinkingParams(sessionId: "S", turnId: "TH1", kind: .delta, delta: "Considering "))
+        s.handleThinking(UIThinkingParams(sessionId: "S", turnId: "TH1", kind: .delta, delta: "the request…"))
+        #expect(s.turns.last?.thinking == "Considering the request…")
+        #expect(s.turns.last?.thinkingStartedAt != nil)
+        #expect(s.turns.last?.thinkingEndedAt == nil)
+    }
+
+    @Test("ui.thinking end stamps thinkingEndedAt exactly once")
+    func thinkingEndStamps() {
+        let s = makeService()
+        s._testTurnStarted(id: "TH2")
+        s.handleThinking(UIThinkingParams(sessionId: "S", turnId: "TH2", kind: .delta, delta: "x"))
+        let firstStart = s.turns.last?.thinkingStartedAt
+        s.handleThinking(UIThinkingParams(sessionId: "S", turnId: "TH2", kind: .end))
+        let firstEnd = s.turns.last?.thinkingEndedAt
+        #expect(firstEnd != nil)
+        // A second end must not move the stamp — the lifecycle is a
+        // one-shot transition, not a re-trigger.
+        s.handleThinking(UIThinkingParams(sessionId: "S", turnId: "TH2", kind: .end))
+        #expect(s.turns.last?.thinkingEndedAt == firstEnd)
+        #expect(s.turns.last?.thinkingStartedAt == firstStart)
+    }
+
+    @Test("ui.token does NOT close thinking — only an explicit end does")
+    func tokenDoesNotCloseThinking() {
+        let s = makeService()
+        s._testTurnStarted(id: "TH3")
+        s.handleThinking(UIThinkingParams(sessionId: "S", turnId: "TH3", kind: .delta, delta: "trace"))
+        s.handleToken(UITokenParams(sessionId: "S", turnId: "TH3", delta: "reply"))
+        // Reply accumulates as expected, but thinking remains open until the
+        // sidecar emits `.end`.
+        #expect(s.turns.last?.reply == "reply")
+        #expect(s.turns.last?.thinkingEndedAt == nil)
+    }
+
+    @Test("ui.status .done does NOT close thinking — only an explicit end does")
+    func statusDoneDoesNotCloseThinking() {
+        let s = makeService()
+        s._testTurnStarted(id: "TH4")
+        s.handleThinking(UIThinkingParams(sessionId: "S", turnId: "TH4", kind: .delta, delta: "trace"))
+        s.handleStatus(UIStatusParams(sessionId: "S", turnId: "TH4", status: .done))
+        #expect(s.turns.last?.thinkingEndedAt == nil)
+    }
+
+    @Test("stale ui.thinking after reset is ignored")
+    func staleThinkingAfterResetIgnored() {
+        let s = makeService()
+        s._testTurnStarted(id: "TH5")
+        s.handleConversationReset(ConversationResetParams(sessionId: "S"))
+        s.handleThinking(UIThinkingParams(sessionId: "S", turnId: "TH5", kind: .delta, delta: "late"))
+        s.handleThinking(UIThinkingParams(sessionId: "S", turnId: "TH5", kind: .end))
+        #expect(s.turns.isEmpty)
+    }
+
+    @Test("payload-too-large message names both the actual size and the limit")
+    func payloadTooLargeMessageShape() {
+        let msg = AgentService.formatPayloadTooLargeMessage(
+            bytes: 3 * 1024 * 1024,
+            limit: 2 * 1024 * 1024
+        )
+        // Surfaces both numbers so the user knows how far over the cap they
+        // are and what the cap is — vague "too large" copy would force them
+        // to guess how much to remove.
+        #expect(msg.contains("3.00"))
+        #expect(msg.contains("2 MiB"))
+    }
+
+    @Test("submit with oversize payload sets lastErrorMessage and surfaces .error")
+    func submitOversizeSurfacesUserMessage() async {
+        let s = makeService()
+        // 3 MiB prompt forces the outbound size guard in RPCClient.request
+        // to throw before any byte hits the pipe — exercises the full
+        // submit catch path end-to-end (no synthetic error injection).
+        let huge = String(repeating: "x", count: 3 * 1024 * 1024)
+        await s.submit(prompt: huge, citedContext: CitedContext())
+        #expect(s.status == .error)
+        #expect(s.lastErrorMessage != nil)
+        #expect(s.turns.isEmpty)  // no synthetic turn invented
+    }
+
+    @Test("conversation.reset clears lastErrorMessage so the banner disappears")
+    func resetClearsLastErrorMessage() async {
+        let s = makeService()
+        let huge = String(repeating: "x", count: 3 * 1024 * 1024)
+        await s.submit(prompt: huge, citedContext: CitedContext())
+        #expect(s.lastErrorMessage != nil)
+        s.handleConversationReset(ConversationResetParams(sessionId: "S"))
+        #expect(s.lastErrorMessage == nil)
+    }
+
+    @Test("resetSession surfaces RPC failure instead of silently swallowing it")
+    func resetSessionSurfacesRPCFailure() async throws {
+        let s = try makeServiceWithClosedOutbound()
+        await s.resetSession()
+        #expect(s.lastErrorMessage?.contains("Lost the agent connection") == true)
+    }
+
+    @Test("cancel surfaces RPC failure instead of silently swallowing it")
+    func cancelSurfacesRPCFailure() async throws {
+        let s = try makeServiceWithClosedOutbound()
+        s._testTurnStarted(id: "T-cancel")
+        await s.cancel()
+        #expect(s.lastErrorMessage?.contains("Lost the agent connection") == true)
+    }
+
+    @Test("manual cancel stops computer use app session even when agent cancel fails")
+    func cancelStopsComputerUseAppSessionOnAgentCancelFailure() async throws {
+        let recorder = ManualAbortAppSessionStopRecorder()
+        let s = try makeServiceWithClosedOutbound(
+            stopComputerUseAppSessionAfterManualAbort: { await recorder.stop() }
+        )
+        s._testTurnStarted(id: "T-cancel")
+
+        await s.cancel()
+
+        #expect(await recorder.callCount == 1)
+        #expect(s.lastErrorMessage?.contains("Lost the agent connection") == true)
+    }
+
+    @Test("manual cancel of queued prompt also stops computer use app session")
+    func queuedCancelStopsComputerUseAppSession() async throws {
+        let recorder = ManualAbortAppSessionStopRecorder()
+        let s = try makeServiceWithClosedOutbound(
+            stopComputerUseAppSessionAfterManualAbort: { await recorder.stop() }
+        )
+        s.sessionStore.activeMirror?.setQueuedPrompt(QueuedPrompt(turnId: "T-queued", prompt: "queued"))
+
+        await s.cancel()
+
+        #expect(await recorder.callCount == 1)
+        #expect(s.lastErrorMessage?.contains("Lost the agent connection") == true)
+    }
+
+    // MARK: - s03 TodoWrite mirror
+    //
+    // The Shell side just routes `ui.todo` notifications to the right
+    // per-session mirror; the wire shape is byte-equal to the sidecar's
+    // (covered by RPC fixture roundtrip), so these tests pin the
+    // session-routing + reset behaviour.
+
+    @Test("ui.todo replaces the active session's plan in whole-list shape")
+    func todoReplacesActivePlan() {
+        let s = makeService()
+        let items: [TodoItemWire] = [
+            TodoItemWire(id: "1", text: "draft", status: .inProgress),
+            TodoItemWire(id: "2", text: "review", status: .pending),
+        ]
+        s.handleTodo(UITodoParams(sessionId: "S", items: items))
+        #expect(s.todos.count == 2)
+        #expect(s.todos[0].status == .inProgress)
+        // A subsequent ui.todo with a tighter list MUST replace, not merge.
+        let next: [TodoItemWire] = [
+            TodoItemWire(id: "1", text: "draft", status: .completed),
+        ]
+        s.handleTodo(UITodoParams(sessionId: "S", items: next))
+        #expect(s.todos.count == 1)
+        #expect(s.todos[0].status == .completed)
+    }
+
+    @Test("conversation.reset wipes the todo plan along with the turns")
+    func todoClearedOnReset() {
+        let s = makeService()
+        s.handleTodo(UITodoParams(
+            sessionId: "S",
+            items: [TodoItemWire(id: "1", text: "x", status: .pending)]
+        ))
+        #expect(!s.todos.isEmpty)
+        s.handleConversationReset(ConversationResetParams(sessionId: "S"))
+        #expect(s.todos.isEmpty)
+    }
+
+    @Test("ui.todo for an inactive session is stored on its own mirror, not the active one")
+    func todoRoutesPerSession() {
+        let s = makeService()
+        // Active session is "S" — emit a plan for a different session id.
+        // The active projection (`s.todos`) must not pick it up.
+        s.handleTodo(UITodoParams(
+            sessionId: "OTHER",
+            items: [TodoItemWire(id: "1", text: "x", status: .pending)]
+        ))
+        #expect(s.todos.isEmpty)
+        // The OTHER session's mirror does carry the plan, so when the user
+        // activates it the panel hydrates correctly.
+        let other = s.sessionStore.mirror(for: "OTHER")
+        #expect(other.todos.count == 1)
+    }
+
+    private func makeServiceWithClosedOutbound(
+        stopComputerUseAppSessionAfterManualAbort: @escaping () async throws -> Void = {}
+    ) throws -> AgentService {
+        let inbound = Pipe()
+        let outbound = Pipe()
+        let rpc = RPCClient(
+            inbound: inbound.fileHandleForReading,
+            outbound: outbound.fileHandleForWriting
+        )
+        let session = SessionService(rpc: rpc)
+        let store = SessionStore(rpc: rpc, sessionService: session)
+        store.adoptCreated(SessionListItem(
+            id: "S",
+            title: "test",
+            createdAt: 0,
+            turnCount: 0,
+            lastActivityAt: 0
+        ))
+        session.sessionStore = store
+        let service = AgentService(
+            rpc: rpc,
+            sessionStore: store,
+            stopComputerUseAppSessionAfterManualAbort: stopComputerUseAppSessionAfterManualAbort
+        )
+        try outbound.fileHandleForWriting.close()
+        return service
+    }
+
+    private func waitUntil(
+        timeout: TimeInterval,
+        condition: @MainActor @escaping () -> Bool
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        throw RPCClientError.timeout(method: "test:waitUntil")
+    }
+}
+
+private actor ManualAbortAppSessionStopRecorder {
+    private(set) var callCount = 0
+
+    func stop() {
+        callCount += 1
+    }
+}

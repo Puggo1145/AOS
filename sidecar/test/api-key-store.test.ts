@@ -253,7 +253,7 @@ let tempHome: string | undefined;
 
 function withTempHome(): string {
   prevHome = process.env.HOME;
-  tempHome = mkdtempSync(join(tmpdir(), "aos-logout-test-"));
+  tempHome = mkdtempSync(join(tmpdir(), "notch-agent-logout-test-"));
   process.env.HOME = tempHome;
   return tempHome;
 }
@@ -261,7 +261,7 @@ function withTempHome(): string {
 afterEach(() => {
   if (tempHome) {
     // Restore directory perms before cleanup so EACCES tests don't leak.
-    try { chmodSync(join(tempHome, ".aos", "auth"), 0o700); } catch {}
+    try { chmodSync(join(tempHome, ".notch-agent", "auth"), 0o700); } catch {}
     try { rmSync(tempHome, { recursive: true, force: true }); } catch {}
     tempHome = undefined;
   }
@@ -287,7 +287,7 @@ test("provider.logout (apiKey) wipes in-memory key and notifies", async () => {
 
 test("provider.logout (oauth) deletes token file and is idempotent on missing file", async () => {
   const home = withTempHome();
-  const tokenDir = join(home, ".aos", "auth");
+  const tokenDir = join(home, ".notch-agent", "auth");
   mkdirSync(tokenDir, { recursive: true, mode: 0o700 });
   const tokenPath = join(tokenDir, "chatgpt.json");
   writeFileSync(tokenPath, "{}", { mode: 0o600 });
@@ -307,7 +307,7 @@ test("provider.logout (oauth) deletes token file and is idempotent on missing fi
 
 test("provider.logout (oauth) fails loud on non-ENOENT filesystem errors", async () => {
   const home = withTempHome();
-  const tokenDir = join(home, ".aos", "auth");
+  const tokenDir = join(home, ".notch-agent", "auth");
   mkdirSync(tokenDir, { recursive: true, mode: 0o700 });
   const tokenPath = join(tokenDir, "chatgpt.json");
   writeFileSync(tokenPath, "{}", { mode: 0o600 });

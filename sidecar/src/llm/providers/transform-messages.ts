@@ -1,6 +1,6 @@
 // Cross-model message normalization (guide §6).
 //
-// Even though the AOS agent loop currently only ever submits a single
+// Even though the Notch Agent agent loop currently only ever submits a single
 // `UserMessage` per turn (zero-history single-shot), `transformMessages`
 // is implemented in full so that the future thinking / tool use / multi
 // turn paths require zero edits here.

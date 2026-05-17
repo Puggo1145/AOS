@@ -17,7 +17,7 @@ Shell 通过 `computerUse.*` JSON-RPC request handler 把明确批准的业务 s
 ## 保留模块
 
 ```
-Sources/AOSComputerUseKit/
+Sources/ComputerUseKit/
   ComputerUseCore.swift
   Apps/
     AppInfo.swift
@@ -44,7 +44,7 @@ Sources/AOSComputerUseKit/
     AXElementEventPoster.swift
 ```
 
-`AOSComputerUseKit` 仍依赖 `AOSAXSupport`，用于 shared AX primitives、Chromium / Electron web accessibility activation、`_AXUIElementGetWindow` bridging。`AOSOSSenseKit` 和 `AOSComputerUseKit` 可以共同依赖 `AOSAXSupport`，但不得互相依赖。
+`ComputerUseKit` 仍依赖 `AXSupport`，用于 shared AX primitives、Chromium / Electron web accessibility activation、`_AXUIElementGetWindow` bridging。`OSSenseKit` 和 `ComputerUseKit` 可以共同依赖 `AXSupport`，但不得互相依赖。
 
 ## Public API
 
@@ -138,8 +138,8 @@ Sidecar agent 只暴露以下业务工具名，并一一映射到 `ComputerUseCo
 - `perform_AX_action` -> `postEventToAXElement(windowId:stateId:elementIndex:event:)`
 
 Shell owns the live `ComputerUseCore` instance and registers `computerUse.*`
-request handlers on the stdio JSON-RPC channel. `Sources/AOSRPCSchema/ComputerUse.swift`
-defines the wire DTOs; `Sources/AOSShell/Agent/ComputerUseRPCService.swift` maps
+request handlers on the stdio JSON-RPC channel. `Sources/RPCSchema/ComputerUse.swift`
+defines the wire DTOs; `Sources/Shell/Agent/ComputerUseRPCService.swift` maps
 those DTOs into Kit value types. Sidecar registers the eight tools in
 `sidecar/src/agent/tools/computer-use.ts` after the live `Dispatcher` is available.
 
@@ -153,17 +153,17 @@ Not exposed as agent business tools:
 
 ## CLI
 
-`AOSComputerUseCLI` 是 terminal-only interface，用于不启动整个 AOS Shell 时直接调用 `ComputerUseCore`。CLI 的 argv parsing、stdout/stderr formatting、exit code、permission prompts、screenshot file output 都在 executable target 内部；foundation 能力仍由 `AOSComputerUseKit` 提供。依赖方向固定为：
+`ComputerUseCLI` 是 terminal-only interface，用于不启动整个 Notch Agent Shell 时直接调用 `ComputerUseCore`。CLI 的 argv parsing、stdout/stderr formatting、exit code、permission prompts、screenshot file output 都在 executable target 内部；foundation 能力仍由 `ComputerUseKit` 提供。依赖方向固定为：
 
 ```
-AOSComputerUseCLI -> AOSComputerUseKit -> AOSAXSupport
+ComputerUseCLI -> ComputerUseKit -> AXSupport
 ```
 
-`AOSComputerUseKit` 不依赖 CLI、Shell、Sidecar 或 RPC。
+`ComputerUseKit` 不依赖 CLI、Shell、Sidecar 或 RPC。
 
 CLI target 内部按职责拆分：
 
-- `AOSComputerUseCLIExecutable.swift`：executable 入口，只允许进入 interactive host 或打印 help。
+- `ComputerUseCLIExecutable.swift`：executable 入口，只允许进入 interactive host 或打印 help。
 - `ComputerUseCLI.swift`：command facade、dispatch、shared command helpers。
 - `Types.swift`：shared CLI result types。
 - `Parser.swift`：argv parsing、usage errors、command request models。
@@ -177,9 +177,9 @@ CLI target 内部按职责拆分：
 
 executable 只支持：
 
-- `swift run AOSComputerUseCLI --help`
-- `swift run AOSComputerUseCLI help`
-- `swift run AOSComputerUseCLI interactive`
+- `swift run ComputerUseCLI --help`
+- `swift run ComputerUseCLI help`
+- `swift run ComputerUseCLI interactive`
 
 standalone command execution 已移除。除 `help` / `--help` / `interactive` 外，直接用
 executable 调用命令会返回 usage error；Computer Use CLI 之后固定是一个持有同一个
@@ -254,14 +254,14 @@ section，随后 command palette 在自己的可清理区域重绘。该模式�
 
 ```mermaid
 flowchart TD
-  CLI["AOSComputerUseCLI"] --> Service
+  CLI["ComputerUseCLI"] --> Service
   Caller["Swift caller"] --> Service["ComputerUseCore actor"]
   Service --> Apps["AppEnumerator"]
   Service --> Windows["WindowEnumerator"]
   Service --> Snapshot["AccessibilitySnapshot"]
   Service --> Cache["StateCache"]
   Service --> Capture["WindowCapture"]
-  Snapshot --> AXSupport["AOSAXSupport"]
+  Snapshot --> AXSupport["AXSupport"]
 ```
 
 ## 约束

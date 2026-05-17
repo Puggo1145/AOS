@@ -1,9 +1,9 @@
 // Bash tool — execute shell commands via `Bun.spawn`.
 //
 // Design choices:
-//   - cwd starts in the AOS workspace so model-created scratch artifacts land
-//     in AOS-owned storage by default. If spawning from that directory fails
-//     (for example, the user deleted it while AOS is running), retry without a
+//   - cwd starts in the Notch Agent workspace so model-created scratch artifacts land
+//     in Notch Agent-owned storage by default. If spawning from that directory fails
+//     (for example, the user deleted it while Notch Agent is running), retry without a
 //     pinned cwd and leave workspace recovery to the next sidecar boot.
 //   - `bash -lc <cmd>` so the model can chain commands, use pipes, and
 //     pick up the user's shell rc (PATH, conda, asdf, etc.).
@@ -21,7 +21,7 @@ import { accessSync, constants, statSync } from "node:fs";
 const MAX_OUTPUT_BYTES = 50_000;
 const MAX_OUTPUT_LINES = 500;
 
-/// Default hard timeout when the model omits `timeout`. AOS runs as a
+/// Default hard timeout when the model omits `timeout`. Notch Agent runs as a
 /// background OS-level helper; an unbounded `tail -f` / `sleep 999` would
 /// pin the turn forever. 120s is generous for typical commands and short
 /// enough that a runaway is recoverable without manual intervention.
@@ -154,7 +154,7 @@ async function runBash(
     }
     if (spawn.cwdFallback) {
       const note =
-        `[cwd fallback: AOS workspace ${spawn.cwdFallback.requestedCwd} was unavailable; ` +
+        `[cwd fallback: Notch Agent workspace ${spawn.cwdFallback.requestedCwd} was unavailable; ` +
         `command ran from ${spawn.cwdFallback.actualCwd}. Spawn error: ${spawn.cwdFallback.reason}]`;
       displayText = `${note}\n${displayText}`;
     }

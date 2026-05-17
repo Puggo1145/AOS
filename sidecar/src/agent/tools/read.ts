@@ -2,8 +2,8 @@
 //
 // Takes a path plus an optional 1-based inclusive line range. Omitted `end`
 // returns 500 lines from `start` (default: 1). Like `bash`, the path is NOT
-// sandboxed — AOS is an OS-level helper, not a chroot. The model is nudged
-// toward `~/.aos/workspace/` via the system prompt.
+// sandboxed — Notch Agent is an OS-level helper, not a chroot. The model is nudged
+// toward `~/.notch-agent/workspace/` via the system prompt.
 //
 // The implementation streams line-by-line rather than loading the file into
 // memory. We still scan to EOF so the trailing remaining-line marker is exact.

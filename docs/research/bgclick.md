@@ -1,6 +1,6 @@
 # Background Click
 
-本文记录 AOS 当前已经验证稳定的 general AppKit background mouse event 链路。
+本文记录 Notch Agent 当前已经验证稳定的 general AppKit background mouse event 链路。
 目标是在不影响用户当前前台窗口的情况下，对后台目标窗口投放坐标鼠标事件：
 
 - 目标窗口可以获得 AppKit 输入路由所需的 focus / active 状态。
@@ -21,7 +21,7 @@ Computer Use 二进制分析都说明：mouse down/up 仍可能触发 WindowServ
 2. 用 pid-scoped mouse event 把点击投进目标进程。
 3. 观察点击造成的 z-order 副作用；只在它威胁用户当前 active/front 窗口状态时做 focus cleanup。
 
-AOS 目前在短生命周期 CLI 里实现了同一模型的同步版本：投放阶段立即检查 active/front
+Notch Agent 目前在短生命周期 CLI 里实现了同一模型的同步版本：投放阶段立即检查 active/front
 状态，并在点击后用短时间 dense polling 捕捉 delayed raise。
 
 ## Chain
@@ -30,7 +30,7 @@ AOS 目前在短生命周期 CLI 里实现了同一模型的同步版本：投�
 
 文件：
 
-- `Sources/AOSComputerUseKit/Windows/SkyLightWindowFocuser.swift`
+- `Sources/ComputerUseKit/Windows/SkyLightWindowFocuser.swift`
 
 点击前和显式 `focus-window` 使用同一个 `focusWindowWithoutRaising` 路径，只对目标
 进程的 PSN 发送 target-side focus/key-window event records：
@@ -59,7 +59,7 @@ SLPSPostEventRecordTo(targetPSN, keyWindow(windowId, phase: end))
 
 文件：
 
-- `Sources/AOSComputerUseKit/Input/MouseEventPoster.swift`
+- `Sources/ComputerUseKit/Input/MouseEventPoster.swift`
 
 当前 general path 使用 public per-pid route：
 
@@ -101,8 +101,8 @@ mouseMoved -> mouseDown(button) -> mouseUp(button)
 
 文件：
 
-- `Sources/AOSComputerUseKit/ComputerUseCore.swift`
-- `Sources/AOSComputerUseKit/Windows/WindowOrderGuardian.swift`
+- `Sources/ComputerUseKit/ComputerUseCore.swift`
+- `Sources/ComputerUseKit/Windows/WindowOrderGuardian.swift`
 
 在 mouse poster 每个阶段之后，core 立即运行一次 active-state guard：
 
@@ -123,7 +123,7 @@ afterTargetUp   -> guard
 只观察 overlapping windows 是必要的。多屏环境里，global window rank 可能变化但视觉上
 不互相遮挡；把 non-overlapping windows 纳入判断会引入无关噪声。
 
-AOS 不再尝试在后台做完美 z-order preservation。实测中 Chrome/AppKit target 被系统
+Notch Agent 不再尝试在后台做完美 z-order preservation。实测中 Chrome/AppKit target 被系统
 raise 后，如果再用 `AXRaise` 或 `SLSOrderWindow` 修复全部窗口顺序，最容易影响用户窗口。
 当前策略是：允许 target 在后台压过非 active cover，但持续保证用户点击前的 active app/window
 不被留下切走。`WindowOrderGuardian` 只报告 target 是否越过了原本覆盖它的 overlapping
@@ -148,15 +148,15 @@ window:   300ms
 - 反汇编可见 attempt cap `0x28`，即 40 次。
 - Swift `Duration` literal 解码约为 5ms。
 
-Codex 是常驻进程，能在观察到 order change 后开始 5ms retry。AOS CLI 是短命命令，
+Codex 是常驻进程，能在观察到 order change 后开始 5ms retry。Notch Agent CLI 是短命命令，
 只能从点击前/点击后开始轮询，所以 guard window 放宽到 300ms。
 
 ### 5. App Session Cleanup
 
 文件：
 
-- `Sources/AOSComputerUseKit/Windows/SkyLightWindowFocuser.swift`
-- `Sources/AOSComputerUseKit/ComputerUseCore.swift`
+- `Sources/ComputerUseKit/Windows/SkyLightWindowFocuser.swift`
+- `Sources/ComputerUseKit/ComputerUseCore.swift`
 
 pid-scoped mouse event 投放后，目标窗口会作为当前 app session 保持“后台 active/key”
 状态。这个状态用于让输入框 focus、caret、右键菜单等 transient UI 在视觉 snapshot 和
@@ -192,7 +192,7 @@ session 结束后停留在无法响应真实用户鼠标点击/拖拽的 inactiv
    让目标 AppKit 窗口相信自己可接收输入。
 2. **Event delivery**：pid-scoped `CGEvent.postToPid` 把鼠标事件送进目标进程，不碰全局 HID cursor。
 3. **Order drift detection**：`WindowOrderGuardian` 只观察 target 是否越过原 overlapping cover，不直接重排任何窗口。
-4. **App session cleanup**：`stopAppSession` 只释放 AOS 的 session ownership 和 overlay；
+4. **App session cleanup**：`stopAppSession` 只释放 Notch Agent 的 session ownership 和 overlay；
    不再用 private defocus 修改目标窗口的真实交互状态。
 
 因此用户看到的效果是：
@@ -209,14 +209,14 @@ session 结束后停留在无法响应真实用户鼠标点击/拖拽的 inactiv
 启动坐标 probe：
 
 ```zsh
-.build/debug/AOSComputerUseCLI interactive
+.build/debug/ComputerUseCLI interactive
 ```
 
 然后在 Command 菜单选择 `open-coor-test`。
 
 进入 interactive host 后，先显式开始 app session，再向当前 session 下的窗口 local coordinate 投放：
 
-1. 启动 `.build/debug/AOSComputerUseCLI interactive`。
+1. 启动 `.build/debug/ComputerUseCLI interactive`。
 2. 在 Command 菜单选择 `start-app-session`，按 App / Window prompt 选择目标。
 3. 选择 `left-click` 或 `right-click`，在 Window 菜单选择当前 session 的目标窗口，并在 prompt 输入 `x,y` 和可选 `count`。
 4. 选择 `drag` 时，在 Window 菜单选择目标窗口，按 prompt 输入 start/end `x,y` 和 button。
@@ -236,14 +236,14 @@ pid 校验 window ownership，`stop-app-session` 释放当前 session 和 overla
 target window 发送 defocus。成对 start/stop 需要调用方复用同一个
 `ComputerUseCore` lifetime；当前 CLI 只保留 interactive host 来持有这个有状态 core。
 
-在 CLI 中执行 `.build/debug/AOSComputerUseCLI interactive` 后，通过 Command 菜单选择
+在 CLI 中执行 `.build/debug/ComputerUseCLI interactive` 后，通过 Command 菜单选择
 `start-app-session` 和 `stop-app-session`。
 
 ## Validation Targets
 
 当前保留两个独立 pid 的 AppKit probe：
 
-- `AOSCoordinateTarget`
+- `CoordinateTarget`
   - 画 top-left 坐标网格。
   - 记录 mouse move/down/up 和 local monitor 事件。
   - 用于验证坐标转换和事件是否进入目标进程。
@@ -265,10 +265,10 @@ target window 发送 defocus。成对 start/stop 需要调用方复用同一个
   Electron/CEF/Chromium runtime evidence, known Chromium-family browser bundle
   ids, known Electron bundle ids, and explicit Safari bundle id use
   `webContent`; everything else defaults to `appKit`.
-- CLI 版本用同步 300ms guard 模拟常驻 observer。长期形态应迁入 AOS app 进程，做真正
+- CLI 版本用同步 300ms guard 模拟常驻 observer。长期形态应迁入 Notch Agent app 进程，做真正
   的 `WindowOrderingObserver`，减少命令返回延迟。
 - 当前方案不追求完美保持所有后台窗口的相对顺序；如果 target 被系统 raise 到 non-active
-  cover 上方，AOS 接受这个后台顺序变化。
+  cover 上方，Notch Agent 接受这个后台顺序变化。
 - 目标窗口必须是当前 Space 上可见的 layer-0 window；隐藏、最小化、跨 Space 的窗口
   不在当前已验证范围内。
 
@@ -299,7 +299,7 @@ target window 发送 defocus。成对 start/stop 需要调用方复用同一个
   - orchestrates validation, app session, focus, event post, immediate guard,
     and delayed guard for background mouse events.
 
-- `AOSComputerUseCLI`
+- `ComputerUseCLI`
   - exposes the current diagnostic commands, including `start-app-session`,
     `stop-app-session`, `left-click`, `right-click`, `drag`, and
     `open-coor-test`.

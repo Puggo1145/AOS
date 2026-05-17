@@ -1,8 +1,8 @@
 // Persistent storage for the ChatGPT plan OAuth token.
 //
 // Layout (per docs/designs/llm-provider.md):
-//   ~/.aos/auth/chatgpt.json        mode 0600
-//   ~/.aos/auth/                    mode 0700 (created on demand)
+//   ~/.notch-agent/auth/chatgpt.json        mode 0600
+//   ~/.notch-agent/auth/                    mode 0700 (created on demand)
 //
 // Writes are atomic: serialize to a sibling tempfile, fsync, then
 // rename. This avoids torn reads if multiple sidecar instances refresh
@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 
-function aosHome(): string {
+function notchHome(): string {
   // Prefer HOME env (test-friendly); fall back to os.homedir().
   return process.env.HOME && process.env.HOME.length > 0 ? process.env.HOME : homedir();
 }
@@ -28,7 +28,7 @@ export interface ChatGPTPlanToken {
 }
 
 export function chatgptTokenPath(): string {
-  return join(aosHome(), ".aos", "auth", "chatgpt.json");
+  return join(notchHome(), ".notch-agent", "auth", "chatgpt.json");
 }
 
 function ensureDir(path: string): void {

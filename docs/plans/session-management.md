@@ -2,7 +2,7 @@
 
 设计依据：
 - [docs/designs/session-management.md](../designs/session-management.md)
-- [docs/designs/rpc-protocol.md](../designs/rpc-protocol.md)（本轮新增 namespace `session.*`、错误码段 `-32400 ~ -32499`、`AOS_PROTOCOL_VERSION` bump 至 `2.0.0`，以及 `agent.*` / `conversation.*` / `ui.*` / `dev.*` 加 `sessionId` 字段，需要在 namespace 表、错误码表、各 method 描述同步更新）
+- [docs/designs/rpc-protocol.md](../designs/rpc-protocol.md)（本轮新增 namespace `session.*`、错误码段 `-32400 ~ -32499`、`NOTCH_PROTOCOL_VERSION` bump 至 `2.0.0`，以及 `agent.*` / `conversation.*` / `ui.*` / `dev.*` 加 `sessionId` 字段，需要在 namespace 表、错误码表、各 method 描述同步更新）
 
 ## 范围
 
@@ -59,7 +59,7 @@ snapshot 加 `sessionId`，UI 标注 active 与否。不做 per-session map。
 
 `session.activate` 返回的 snapshot 只覆盖 `reply / status / errorMessage / errorCode / citedContext / startedAt`；`thinking / thinkingStartedAt / thinkingEndedAt` 保留 mirror 现值。详见 design `§ Snapshot merge 契约`。
 
-### 10. `AOS_PROTOCOL_VERSION` bump 到 `2.0.0`
+### 10. `NOTCH_PROTOCOL_VERSION` bump 到 `2.0.0`
 
 `agent.*` 加必填字段是 wire breaking change，且现有 `RPCClient` 在 `rpc.hello` 阶段强制 MAJOR 一致。不 bump 旧 Shell 连新 Sidecar 会以参数错误形式失败而非协议错误，诊断成本更高。
 
@@ -89,12 +89,12 @@ snapshot 加 `sessionId`，UI 标注 active 与否。不做 per-session map。
 
 目标：暴露多会话能力到 wire，同时 Shell 完成显式 bootstrap，保证合入即可运行。
 
-**为什么不可拆**：`agent.*` 加必填 `sessionId` + `AOS_PROTOCOL_VERSION` bump 是 wire breaking change。如果 Sidecar 先合，Shell 还在发旧格式 + 旧版本号，`rpc.hello` MAJOR 检查直接拒连。必须同 PR：
+**为什么不可拆**：`agent.*` 加必填 `sessionId` + `NOTCH_PROTOCOL_VERSION` bump 是 wire breaking change。如果 Sidecar 先合，Shell 还在发旧格式 + 旧版本号，`rpc.hello` MAJOR 检查直接拒连。必须同 PR：
 
 #### Sidecar 侧
 
 - 改 `sidecar/src/rpc/rpc-types.ts`：
-  - `AOS_PROTOCOL_VERSION = "2.0.0"`
+  - `NOTCH_PROTOCOL_VERSION = "2.0.0"`
   - `AgentSubmitParams` / `AgentCancelParams` / `AgentResetParams` 加 `sessionId`
   - `ConversationTurnStartedNotification` / `ConversationResetNotification` 加 `sessionId`
   - `UIToken / UIThinkingDelta / UIThinkingEnd / UIStatus / UIError` 全部加 `sessionId`
@@ -116,20 +116,20 @@ snapshot 加 `sessionId`，UI 标注 active 与否。不做 per-session map。
 - 改 `sidecar/src/agent/context-observer.ts`：`DevContextSnapshot` 加 `sessionId`；保留单 latest 语义
 - 删除 Step 1 的"进程级 bootstrap session"逻辑，改为 manager 启动时为空，等待 Shell `session.create`
 
-#### Schema (AOSRPCSchema) 侧
+#### Schema (RPCSchema) 侧
 
-- 新增 `Sources/AOSRPCSchema/Session.swift`：`SessionId / SessionInfo / SessionListItem / SessionCreateParams / SessionListResult / SessionActivateParams / SessionActivateResult / SessionCreatedNotification / SessionActivatedNotification / SessionListChangedNotification` Codable
-- 改 `Sources/AOSRPCSchema/Agent.swift`（或对应文件）：3 个 `agent.*` params 加 `sessionId`
-- 改 `Sources/AOSRPCSchema/Conversation.swift`（或对应文件）：2 个 notification 加 `sessionId`
-- 改 `Sources/AOSRPCSchema/UI.swift`（或对应文件）：5 个 `ui.*` params 加 `sessionId`
-- 改 `Sources/AOSRPCSchema/Dev.swift`（或对应文件）：`DevContextSnapshot` 加 `sessionId`
-- 改 schema 中的 `aosProtocolVersion = "2.0.0"`
+- 新增 `Sources/RPCSchema/Session.swift`：`SessionId / SessionInfo / SessionListItem / SessionCreateParams / SessionListResult / SessionActivateParams / SessionActivateResult / SessionCreatedNotification / SessionActivatedNotification / SessionListChangedNotification` Codable
+- 改 `Sources/RPCSchema/Agent.swift`（或对应文件）：3 个 `agent.*` params 加 `sessionId`
+- 改 `Sources/RPCSchema/Conversation.swift`（或对应文件）：2 个 notification 加 `sessionId`
+- 改 `Sources/RPCSchema/UI.swift`（或对应文件）：5 个 `ui.*` params 加 `sessionId`
+- 改 `Sources/RPCSchema/Dev.swift`（或对应文件）：`DevContextSnapshot` 加 `sessionId`
+- 改 schema 中的 `notchProtocolVersion = "2.0.0"`
 
 #### Shell 侧（最小 bootstrap，不做多镜像）
 
-- 新增 `Sources/AOSShell/Agent/SessionService.swift`：包装 `session.create / list / activate` 三个 RPC，对外暴露 async API
-- 改 `Sources/AOSShell/App/CompositionRoot.swift`（或对应启动序列）：`rpc.hello` 完成后调 `SessionService.create()`，把返回的 sessionId 存为 "current"
-- 改 `Sources/AOSShell/Agent/AgentService.swift`：`submit / cancel / reset` 三个对外方法接受/读取 current sessionId 字段，把它带进对应 RPC params
+- 新增 `Sources/Shell/Agent/SessionService.swift`：包装 `session.create / list / activate` 三个 RPC，对外暴露 async API
+- 改 `Sources/Shell/App/CompositionRoot.swift`（或对应启动序列）：`rpc.hello` 完成后调 `SessionService.create()`，把返回的 sessionId 存为 "current"
+- 改 `Sources/Shell/Agent/AgentService.swift`：`submit / cancel / reset` 三个对外方法接受/读取 current sessionId 字段，把它带进对应 RPC params
 - 接收 `ui.*` / `conversation.*` 时忽略 `sessionId` 字段（本步只跑单 session，多镜像在 Step 3 做）
 
 #### Fixture 全量更新（共 18 项）
@@ -171,9 +171,9 @@ snapshot 加 `sessionId`，UI 标注 active 与否。不做 per-session map。
 目标：把 Shell 端从单镜像改成 `[SessionId: ConversationMirror]`，做正确的字段归属与 snapshot merge。
 
 文件改动：
-- 新增 `Sources/AOSShell/Agent/ConversationMirror.swift`：从现有 `AgentService` 拆出 per-session 字段（`turns / currentTurn / status / lastErrorMessage / doneRevertTask / errorRevertTask`）
-- 新增 `Sources/AOSShell/Agent/SessionStore.swift`：`@Observable`，`mirrors: [SessionId: ConversationMirror]`、`activeId: SessionId?`、`list: [SessionListItem]`
-- 改 `Sources/AOSShell/Agent/AgentService.swift`：薄化为"当前 active 的转发器"；全局展示状态从 `mirrors[activeId]?.status` 派生
+- 新增 `Sources/Shell/Agent/ConversationMirror.swift`：从现有 `AgentService` 拆出 per-session 字段（`turns / currentTurn / status / lastErrorMessage / doneRevertTask / errorRevertTask`）
+- 新增 `Sources/Shell/Agent/SessionStore.swift`：`@Observable`，`mirrors: [SessionId: ConversationMirror]`、`activeId: SessionId?`、`list: [SessionListItem]`
+- 改 `Sources/Shell/Agent/AgentService.swift`：薄化为"当前 active 的转发器"；全局展示状态从 `mirrors[activeId]?.status` 派生
 - `ui.*` / `conversation.*` notification handler 按 `sessionId` 路由到对应 mirror（如果不存在则按需创建）
 - 实现 `session.activate` 的 snapshot merge：sidecar-authoritative 字段覆盖；mirror-only display 字段（thinking）保留
 - 处理首次 activate 路径（mirror 不存在）按 snapshot 初始化
@@ -249,13 +249,13 @@ snapshot 加 `sessionId`，UI 标注 active 与否。不做 per-session map。
 
 - [ ] **Sidecar**：新增 `session/{types,session,manager,handlers}.ts`，去掉 `conversation` / `turns` 模块单例
 - [ ] **Sidecar dispatcher**：`directionOf` 加 `session: both`、新增 `SESSION_METHOD_KINDS` 表，反向调用单测覆盖
-- [ ] **Sidecar wire schema**：`AOS_PROTOCOL_VERSION = "2.0.0"`；3 个 `agent.*` params + 2 个 `conversation.*` params + 5 个 `ui.*` params 加 `sessionId`；`DevContextSnapshot` 加 `sessionId`（同时覆盖 `dev.context.changed` 和 `dev.context.get` response）；新增 6 个 `session.*` method；新增错误码 `-32400 / -32401`
-- [ ] **Schema (AOSRPCSchema)**：新增 `Sources/AOSRPCSchema/Session.swift`；同步全部字段；`aosProtocolVersion = "2.0.0"`
+- [ ] **Sidecar wire schema**：`NOTCH_PROTOCOL_VERSION = "2.0.0"`；3 个 `agent.*` params + 2 个 `conversation.*` params + 5 个 `ui.*` params 加 `sessionId`；`DevContextSnapshot` 加 `sessionId`（同时覆盖 `dev.context.changed` 和 `dev.context.get` response）；新增 6 个 `session.*` method；新增错误码 `-32400 / -32401`
+- [ ] **Schema (RPCSchema)**：新增 `Sources/RPCSchema/Session.swift`；同步全部字段；`notchProtocolVersion = "2.0.0"`
 - [ ] **Fixture 全量更新**：12 个改 + 6 个新 + `rpc.hello.json` version 更新（合计 19 个文件）
 - [ ] **Shell**：`SessionService` / `SessionStore` / `ConversationMirror` 三类落地；`AgentService` 改为 active 转发；启动期 `session.create` 显式 bootstrap
 - [ ] **Snapshot merge**：sidecar-authoritative 字段覆盖、mirror-only display 字段保留的合并契约实现 + 测试
 - [ ] **Notch UI**："+" 按钮、历史按钮、active 高亮、空状态文案"本次启动以来"
 - [ ] **Dev Mode**：snapshot 显示 sessionId + active 标注；删除旧"默认显示 active"措辞
 - [ ] **测试**：dispatcher 反向调用、多 session 并发按 sessionId+turnId 路由不串、单 turn 流式顺序保持、agent.reset 隔离 + 触发 session.listChanged、unknown sessionId 错误码、snapshot merge 不污染 thinking、inactive session 不污染 active 全局状态、ContextObserver global latest 行为、`rpc.hello` MAJOR mismatch 拒连
-- [ ] **docs/designs/rpc-protocol.md** 同步：namespace 表加 `session.*`、错误码表加 `-32400~-32499`、`agent.*` / `conversation.*` / `ui.*` / `dev.*` method 描述更新 `sessionId` 字段、`AOS_PROTOCOL_VERSION` 标注 `2.0.0`
+- [ ] **docs/designs/rpc-protocol.md** 同步：namespace 表加 `session.*`、错误码表加 `-32400~-32499`、`agent.*` / `conversation.*` / `ui.*` / `dev.*` method 描述更新 `sessionId` 字段、`NOTCH_PROTOCOL_VERSION` 标注 `2.0.0`
 - [ ] 进程退出后无遗留状态（默认行为，无需主动清理）

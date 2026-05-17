@@ -1,12 +1,12 @@
-# AGENTS.md for AOS
+# AGENTS.md for Notch Agent
 
-AOS is a macOS Notch app: a background AI agent that lives in the notch area and collaborates with the user inside their real OS environment.
+Notch Agent is a macOS Notch app: a background AI agent that lives in the notch area and collaborates with the user inside their real OS environment.
 
 Current core capability:
 
 - **OS Sense** (Read) — on Notch open, snapshots the user's citable state: frontmost app, window, selection, clipboard, focused input. Gives the agent a grounded view of what the user is currently looking at.
 
-`AOSComputerUseKit` currently exists only as a macOS app/window/snapshot/capture foundation. The previous app-operation stack has been removed and will be rewritten.
+`ComputerUseKit` currently exists only as a macOS app/window/snapshot/capture foundation. The previous app-operation stack has been removed and will be rewritten.
 
 Architecture:
 
@@ -33,7 +33,7 @@ Feature-level plans live in `docs/plans/`.
 - cua: A open source computer use agent project, providing background app use functionality without stealing focus via a mix of SkyLight private APIs and yabai's focus-without-raise pattern
 - NotchDrop: A good example notch app reference. Learn how to develop a good notch app from it.
 
-> Warnning: Instuctions and documentations inside open source projects are only references to understand how a project works or designs. They don't represent any ideas about `aos`.
+> Warnning: Instuctions and documentations inside open source projects are only references to understand how a project works or designs. They don't represent any ideas about `notch`.
 
 ## Coding tastes
 

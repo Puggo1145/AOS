@@ -1,1 +1,1 @@
-{"id":1,"jsonrpc":"2.0","method":"rpc.hello","params":{"clientInfo":{"name":"aos-sidecar","version":"0.1.0"},"protocolVersion":"2.0.0"}}
+{"id":1,"jsonrpc":"2.0","method":"rpc.hello","params":{"clientInfo":{"name":"notch-agent-sidecar","version":"0.1.0"},"protocolVersion":"2.0.0"}}

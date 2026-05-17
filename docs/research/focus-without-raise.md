@@ -1,14 +1,14 @@
 # Focus Without Raise
 
-本文记录 AOS 当前 `AOSComputerUseKit` 中实际使用的 window
+本文记录 Notch Agent 当前 `ComputerUseKit` 中实际使用的 window
 focus-without-raise primitive。目标是给定 `pid + CGWindowID`，让目标窗口进入
 可接收定向输入的状态，同时不改变窗口 z-order、不触发 Space follow、不 deactive 用户
 当前前台窗口。
 
 实现文件：
 
-- `Sources/AOSComputerUseKit/Windows/SkyLightWindowFocuser.swift`
-- `Sources/AOSComputerUseKit/ComputerUseCore.swift`
+- `Sources/ComputerUseKit/Windows/SkyLightWindowFocuser.swift`
+- `Sources/ComputerUseKit/ComputerUseCore.swift`
 
 ## Current Primitive
 
@@ -42,7 +42,7 @@ SLSOrderWindow
 ## Why Target Only
 
 yabai 的完整 window switching path 会在部分场景中向 previous PSN 发 defocus，并通过
-`_SLPSSetFrontProcessWithOptions` 完成系统前台窗口切换。AOS 的 background computer
+`_SLPSSetFrontProcessWithOptions` 完成系统前台窗口切换。Notch Agent 的 background computer
 use path不能使用这套完整切换语义：
 
 - previous-PSN defocus 会让用户当前窗口失去 key/active 状态。
@@ -51,7 +51,7 @@ use path不能使用这套完整切换语义：
 - `_SLPSSetFrontProcessWithOptions(kCPSNoWindows)` 不能完成 Chrome 等目标所需的
   后台输入激活。
 
-WindowServer 允许跨 app 的多个窗口短时间同时处于 active/key-like 状态。AOS 利用这点：
+WindowServer 允许跨 app 的多个窗口短时间同时处于 active/key-like 状态。Notch Agent 利用这点：
 只给目标窗口补足输入路由状态，让用户当前 front window 保持自己的状态。
 
 ## Event Record Layout
@@ -115,7 +115,7 @@ try await ComputerUseCore.focusWindowWithoutRaise(pid: pid, windowId: windowId)
 
 CLI:
 
-Launch `.build/debug/AOSComputerUseCLI interactive`, select `focus-window`,
+Launch `.build/debug/ComputerUseCLI interactive`, select `focus-window`,
 then select the target app/window in the palette prompts.
 
 `ComputerUseCore` validates that `windowId` belongs to `pid` before it calls the

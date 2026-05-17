@@ -45,7 +45,7 @@
 - 静态检查：`Core/*` 任一文件不出现 `FinderAdapter` / `BrowserAdapter` / `finder.selection` / `browser.tab` 字面量
 
 **Stage 3**：
-- Figma 前台、无 selection / input、screen-recording 已授权 → Notch 展开后 chip 出现 "Window snapshot"，但**不发生任何截图捕获**（Activity Monitor 验证 AOS Shell 进程无 SCStream）
+- Figma 前台、无 selection / input、screen-recording 已授权 → Notch 展开后 chip 出现 "Window snapshot"，但**不发生任何截图捕获**（Activity Monitor 验证 Notch Agent Shell 进程无 SCStream）
 - 用户在 Figma 选中元素 → 视觉 chip 自动从 row 中消失（`behaviors.isEmpty` 不再成立），仍未捕获任何截图
 - 用户保持视觉 chip 选中 → 点 send → Shell 单次调用 `SCScreenshotManager.captureImage(...)`，长边 ≤ 1280px 的 PNG 出现在 RPC `citedContext.visual.frame`
 - 用户取消视觉 chip 选中 → 点 send → RPC 中 `visual` 字段缺失，未发生捕获

@@ -59,8 +59,8 @@ Expected: PASS.
 ### Task 2: Add Wire Schema
 
 **Files:**
-- Create: `Sources/AOSRPCSchema/ComputerUse.swift`
-- Modify: `Sources/AOSRPCSchema/Messages.swift`
+- Create: `Sources/RPCSchema/ComputerUse.swift`
+- Modify: `Sources/RPCSchema/Messages.swift`
 - Modify: `sidecar/src/rpc/rpc-types.ts`
 - Modify: `sidecar/src/rpc/method-catalog.ts`
 
@@ -85,9 +85,9 @@ Add Swift and TS `RPCMethod` constants for `computerUse.listApps`, `computerUse.
 ### Task 3: Shell RPC Service
 
 **Files:**
-- Create: `Sources/AOSShell/Agent/ComputerUseRPCService.swift`
-- Modify: `Sources/AOSShell/App/CompositionRoot.swift`
-- Create: `Tests/AOSShellTests/ComputerUseRPCServiceTests.swift`
+- Create: `Sources/Shell/Agent/ComputerUseRPCService.swift`
+- Modify: `Sources/Shell/App/CompositionRoot.swift`
+- Create: `Tests/ShellTests/ComputerUseRPCServiceTests.swift`
 
 - [ ] **Step 1: Write failing Swift mapping tests**
 
@@ -128,7 +128,7 @@ Expected: PASS.
 Run:
 
 ```bash
-swift test --filter AOSRPCSchemaTests
+swift test --filter RPCSchemaTests
 cd sidecar && bun test test/tool-registry.test.ts test/dispatcher.test.ts
 ```
 

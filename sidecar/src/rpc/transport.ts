@@ -1,4 +1,4 @@
-// NDJSON stdio transport for the AOS sidecar RPC channel.
+// NDJSON stdio transport for the Notch Agent sidecar RPC channel.
 //
 // Per docs/designs/rpc-protocol.md:
 //   - Framing: one JSON object per line, '\n' separated, UTF-8.

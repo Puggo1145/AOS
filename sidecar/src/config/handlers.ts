@@ -70,7 +70,7 @@ function resolveSelectedModel(selection: { providerId: string; modelId: string }
 
 export function registerConfigHandlers(dispatcher: Dispatcher): void {
   dispatcher.registerRequest(RPCMethod.configGet, async (): Promise<ConfigGetResult> => {
-    // Auto-recover from corruption: AOS's user config is small (selection
+    // Auto-recover from corruption: Notch Agent's user config is small (selection
     // / effort / onboarding flag) and trivially re-set, so a one-shot
     // reset + banner is a better UX than blocking the user behind a parse
     // error they can't read. The Shell shows a notice via

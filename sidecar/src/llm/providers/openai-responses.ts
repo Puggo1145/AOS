@@ -120,7 +120,7 @@ export function buildPayload(model: Model<"openai-responses">, context: Context,
   return payload;
 }
 
-// Each AOS `Message` may expand into multiple Responses-API input items:
+// Each Notch Agent `Message` may expand into multiple Responses-API input items:
 // reasoning, message, and function_call are all top-level items, not content
 // blocks of a single message. Only `output_text` is a valid assistant
 // content-block type — sending `{type:"reasoning"}` inside `content` triggers

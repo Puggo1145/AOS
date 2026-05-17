@@ -21,7 +21,7 @@ function ctx(signal?: AbortSignal): ToolExecContext {
 }
 
 function tempDir(): string {
-  return mkdtempSync(join(tmpdir(), `aos-tools-${Math.random().toString(36).slice(2)}-`));
+  return mkdtempSync(join(tmpdir(), `notch-agent-tools-${Math.random().toString(36).slice(2)}-`));
 }
 
 function textOf(result: { content: { type: string; text?: string }[] }): string {
@@ -135,7 +135,7 @@ test("read expands a leading ~ to the user's home directory", async () => {
   // surfaced when the resolved path doesn't exist.
   const home = process.env.HOME ?? "";
   await expect(
-    createReadTool().execute({ path: "~/__aos_does_not_exist__" }, ctx()),
+    createReadTool().execute({ path: "~/__notch_does_not_exist__" }, ctx()),
   ).rejects.toThrow(new RegExp(home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
 

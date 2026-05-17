@@ -1,8 +1,8 @@
 # LLM Provider 适配层设计指南
 
-基于对 pi-mono `packages/ai` 的通读整理，抽取多 provider LLM 适配层的通用设计模式。不包含 AOS 业务逻辑，聚焦「怎么把 Anthropic / OpenAI / Google / vLLM / 自部署 等风格各异的 LLM API 塞进同一条调用路径」。
+基于对 pi-mono `packages/ai` 的通读整理，抽取多 provider LLM 适配层的通用设计模式。不包含 Notch Agent 业务逻辑，聚焦「怎么把 Anthropic / OpenAI / Google / vLLM / 自部署 等风格各异的 LLM API 塞进同一条调用路径」。
 
-目标读者：实现 AOS agent runtime 的工程师。本文是上层架构参考，不覆盖任何单一 provider 的完整字段。
+目标读者：实现 Notch Agent agent runtime 的工程师。本文是上层架构参考，不覆盖任何单一 provider 的完整字段。
 
 ---
 

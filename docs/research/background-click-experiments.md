@@ -121,7 +121,7 @@ insufficient. The remaining unknown is whether Codex prevents Chromium's order
 change from happening, or whether its long-lived order observer repairs the
 change before the next visible composite frame.
 
-Passive AOS observation during a Codex Computer Use Chrome Canvas drag gives a
+Passive Notch Agent observation during a Codex Computer Use Chrome Canvas drag gives a
 more specific result:
 
 - frontmost app stayed Ghostty for the whole 15s observation;
@@ -136,7 +136,7 @@ diagnostic output: Ghostty stayed frontmost, Chrome was never active,
 `protected-covered` stayed `0`, and target rank moved from `2` to `3` at about
 `2664ms`, then back to `2` at about `3226ms`.
 
-That rank movement is not the Chrome raise seen in AOS's failed browser click:
+That rank movement is not the Chrome raise seen in Notch Agent's failed browser click:
 Chrome did not become rank `1`, did not become the frontmost app, and did not
 cover the protected window. The result is consistent with Codex avoiding the
 visible raise entirely while still allowing some background-window stack
@@ -146,7 +146,7 @@ than "final rank unchanged" but looser than "no rank ever changes": the target
 must not become frontmost, must not become active, and must not cover protected
 windows.
 
-Passive AOS observation during the current AOS Chromium `left-click`
+Passive Notch Agent observation during the current Notch Agent Chromium `left-click`
 shows the failing shape clearly:
 
 - the external observer saw Chrome become target rank `1` at about `2048ms`;
@@ -159,7 +159,7 @@ shows the failing shape clearly:
 
 This is the first direct apples-to-apples timing contrast: Codex's Chrome
 Canvas drag only showed background rank movement with no active/rank-1/
-protected-window violation, while AOS's Chromium click crosses both `target
+protected-window violation, while Notch Agent's Chromium click crosses both `target
 rank 1` and `target active true` shortly after dispatch. One caveat in the
 two-terminal run: the external observer's `max protected-covered 0` can be a
 false negative because the user switched from the observer terminal to a second
@@ -167,13 +167,13 @@ Ghostty window before launching `left-click`; the command-local trace
 sampled the actual front Ghostty window at click time and reported
 `protected-covered 1`.
 
-Implication for AOS:
+Implication for Notch Agent:
 
-- AOS already has the Chromium AX enablement primitive
+- Notch Agent already has the Chromium AX enablement primitive
   (`AXManualAccessibility`, `AXEnhancedUserInterface`, retained AX observer),
   but the current `left-click` path does not use AX actions or synthetic
   AX focus. It always tries the pixel mouse path.
-- AOS's `WindowOrderGuardian` is command-scoped. It samples protected windows
+- Notch Agent's `WindowOrderGuardian` is command-scoped. It samples protected windows
   before the click, repairs after selected event stages, then polls for a fixed
   window. It is not a long-lived `CGWindow` / WindowServer observer.
 - The Chrome traces show a key distinction: `NSWorkspace.frontmostApplication`
@@ -184,7 +184,7 @@ Implication for AOS:
   while another app remains frontmost.
 - Therefore the current best explanation is not that Chrome cannot be
   "suppressed" at all. It is that the browser pixel route couples real page
-  mouse delivery to a late WindowServer/Chromium ordering correction, and AOS
+  mouse delivery to a late WindowServer/Chromium ordering correction, and Notch Agent
   currently tries to clean it up from a short-lived polling loop. Codex likely
   has an observer already armed before the action and can repair from the order
   notification itself.
@@ -193,7 +193,7 @@ Implication for AOS:
   next display transaction. A post-command polling guard can be correct in
   final state but still visibly flash; an event-driven observer has a plausible
   path to repair inside the same frame budget.
-- The current delayed repair loop does not merely react too late; in the AOS
+- The current delayed repair loop does not merely react too late; in the Notch Agent
   Chromium click trace it keeps calling repair while Chrome remains active and
   continues covering the protected window. The repair path needs either a
   stronger deactivation/order operation or an observer loop that can react to
@@ -256,10 +256,10 @@ Implication for AOS:
 
 These names do not prove the implementation, but they suggest the next useful
 comparison is behavioral: watch Codex Computer Use perform the same browser
-pixel click with an external AOS observer and determine whether it:
+pixel click with an external Notch Agent observer and determine whether it:
 
 - prevents the raise before it becomes visible;
-- repairs the raise faster than AOS's current guard;
+- repairs the raise faster than Notch Agent's current guard;
 - uses a different event target or trust path;
 - avoids raw mouse delivery for Chrome page content.
 
@@ -267,7 +267,7 @@ To support that comparison, interactive `observe-mouse-events` now adds
 a second passive diagnostic surface. It installs listen-only CGEvent taps and
 records the tap location (`hid`, `session`, `annotated`), mouse event type,
 screen location, source/target pids, standard mouse fields, and the raw fields
-currently used by AOS's Chromium stamp (`0`, `40`, `51`, `58`, `91`, `92`).
+currently used by Notch Agent's Chromium stamp (`0`, `40`, `51`, `58`, `91`, `92`).
 
 The first version only watched `.cgSessionEventTap`. Live Codex comparison on
 Chrome canvas returned `events: 0` while Codex still drew on the page, so that
@@ -276,7 +276,7 @@ single tap was too narrow to prove anything. The diagnostic now defaults to
 prints the layer that observed each event. The intended Codex comparison flow
 now runs inside the interactive CLI host:
 
-1. Launch `.build/debug/AOSComputerUseCLI interactive`.
+1. Launch `.build/debug/ComputerUseCLI interactive`.
 2. Select `observe-mouse-events`.
 3. Choose to filter to a target, then select pid `45785` and window `384636`.
 4. Enter `duration-ms=15000` and select tap location `all`.
@@ -307,31 +307,31 @@ drag, but only at `cgAnnotatedSessionEventTap`:
 This rules out a lower-than-CGEvent-only explanation for Codex's canvas path:
 Codex does expose mouse delivery through the annotated event stream. It also
 explains why the session-only observer returned zero events. The next useful
-comparison is now AOS's current Chromium post under the same all-tap observer,
+comparison is now Notch Agent's current Chromium post under the same all-tap observer,
 specifically checking the annotated stream's raw field `0`, raw field `58`,
 primer location, target click-state sequence, and the simultaneous
 window-order violation.
 
-The same all-tap observer on AOS's current Chromium `left-click` showed
+The same all-tap observer on Notch Agent's current Chromium `left-click` showed
 the same annotated-only delivery layer, but a different event shape:
 
-- AOS emitted five annotated events:
+- Notch Agent emitted five annotated events:
   `mouseMoved(target)`, `leftDown/leftUp(primer)`,
   `leftDown/leftUp(target)`;
-- AOS used global `(-1, -1)` for the primer, while Codex used `x = -1` with
+- Notch Agent used global `(-1, -1)` for the primer, while Codex used `x = -1` with
   a positive Y near the target window's bottom edge;
-- AOS raw field `0` sequence was `2, 1, 2, 3, 3`; Codex's observed sequence
+- Notch Agent raw field `0` sequence was `2, 1, 2, 3, 3`; Codex's observed sequence
   was `0, 1, 2, 1, ...`;
-- AOS raw field `58` changed on every event and matched per-event nanosecond
+- Notch Agent raw field `58` changed on every event and matched per-event nanosecond
   timestamps; Codex raw field `58` stayed stable across the gesture and used
   the seconds-scale uptime stamp;
-- the external window-order observer saw AOS's violation start at about
+- the external window-order observer saw Notch Agent's violation start at about
   `2267ms`, after the primer pair and before the target down event. Chrome
   became rank `1` and covered the protected window before the real target
   click was dispatched.
 
 That localizes the visible raise to the primer/timestamp shape, not the target
-click itself. AOS's Chromium route has now been changed to match the Codex
+click itself. Notch Agent's Chromium route has now been changed to match the Codex
 annotated shape more closely:
 
 - primer point: just outside the left edge of the target window at the
@@ -361,11 +361,11 @@ one-shot stamp tweak:
    delete the current fixed CUA/yabai primer sequence.
 3. If Codex mouse events are not visible through the tap, treat that as
    evidence for a deeper WindowServer route and continue binary/runtime
-   inspection before touching AOS delivery code.
+   inspection before touching Notch Agent delivery code.
 4. Independently of the final mouse poster, move Chromium interactions behind
    a long-lived browser interaction session that owns order/focus observation
    before, during, and after the dispatch. Codex's `ComputerUseAppController`
-   keeps `orderingObserver` and `focusEnforcer` as session state; AOS's
+   keeps `orderingObserver` and `focusEnforcer` as session state; Notch Agent's
    command-local `WindowOrderGuardian` is the wrong shape for this problem.
 5. Keep AX action delivery separate from pixel delivery. AX actions can use
    synthetic focus/enforcement, but canvas/video/WebGL targets must remain a
@@ -381,7 +381,7 @@ Immediate execution state:
 2. Done: the same observer watched Codex Computer Use draw into Chrome Canvas.
    The target rank changed in the background, but Chrome never became active,
    never became rank `1`, and never covered the protected frontmost window.
-3. Done: the same observer watched AOS's current Chromium click. AOS produced
+3. Done: the same observer watched Notch Agent's current Chromium click. Notch Agent produced
    `target rank 1`, `target active true`, and command-local
    `protected-covered 1` shortly after the mouse dispatch.
 4. Tried and rejected: the delayed repair guard repeated target-side
@@ -405,7 +405,7 @@ Immediate execution state:
    `SLSRequestNotificationsForWindows` still allowed the same visible
    rank-1/protected-covered interval.
 10. Done: added `observe-mouse-events`, a listen-only CGEvent tap diagnostic
-    for comparing Codex's real mouse event fields against AOS's Chromium
+    for comparing Codex's real mouse event fields against Notch Agent's Chromium
     stamp.
 11. Tried and rejected as sufficient: the first mouse observer only watched
     the session tap; live Codex Chrome canvas drawing produced `events: 0`,
@@ -415,10 +415,10 @@ Immediate execution state:
     output.
 13. Done: `--tap-location all` captured Codex Chrome canvas delivery at the
     annotated tap only. Codex uses the same target pid/window stamp family but
-    a different primer position and raw field sequence from AOS's earlier
+    a different primer position and raw field sequence from Notch Agent's earlier
     Chromium poster.
-14. Done: compared AOS's Chromium poster against Codex's annotated stream and
-    changed AOS's Chromium route to use Codex-style primer position, raw field
+14. Done: compared Notch Agent's Chromium poster against Codex's annotated stream and
+    changed Notch Agent's Chromium route to use Codex-style primer position, raw field
     `0` sequence, and stable seconds-scale raw field `58` timestamp.
 15. Done: live validation showed the Chromium mouse event fields now match the
     Codex-style annotated stream (`raw[0]` sequence `0,1,2,1,1`, stable

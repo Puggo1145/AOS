@@ -66,7 +66,7 @@ Agent 的本质是一个 while 循环，由 `stop_reason` 决定何时退出：
 
 这套模式是**所有上层能力的公共载体**。后续 section 加入的 tool、planning、compaction、subagent、team，都没有改变这个 loop 的控制形态，只是改变「工具集合、messages 内容、调度策略」。
 
-### 2.2 AOS 落地形态
+### 2.2 Notch Agent 落地形态
 
 Sidecar (Bun/TS) 侧 runtime 的最核心 module 就是这个 loop。输入来自 Shell 通过 JSON-RPC 送入的 user prompt（含用户引用 context），输出通过 `ui.*` 通知向 Shell 流式推送。loop 本身应保持极薄 —— 一切扩展点通过「外部状态 + 可插拔 hooks」接入。
 
@@ -97,9 +97,9 @@ Sidecar (Bun/TS) 侧 runtime 的最核心 module 就是这个 loop。输入来�
 
 ### 3.2 分类
 
-教程里的 tool 按角色分四类，AOS 需要各自对应：
+教程里的 tool 按角色分四类，Notch Agent 需要各自对应：
 
-| 类别 | 举例 | AOS 对应 |
+| 类别 | 举例 | Notch Agent 对应 |
 |---|---|---|
 | Filesystem | `read_file` / `write_file` / `edit_file` / `bash` | Sidecar 本地 FS + Shell 代理的系统能力 |
 | Planning | `todo` / `task_*` | Sidecar 自管 |
@@ -273,7 +273,7 @@ Layer 3 (tool_result，按需，~2000 tokens/skill):
 
 结构：每个 skill 是一个目录，含 `SKILL.md`，YAML frontmatter 里写 `name` + `description`，body 是完整说明。`SkillLoader` 启动时 `rglob("SKILL.md")` 扫出全部，description 拼到 system prompt，body 等 `load_skill` 调用再发。
 
-AOS 的对应：Sidecar 启动时扫 `~/.aos/skills/` 目录（按 AOS 数据布局约定），同样做 Layer 1 / Layer 3 分层注入。macOS 原生操作、app 专用交互 pattern（如 Safari / Notes / Mail 的惯用写入方式）都适合做成 skill。
+Notch Agent 的对应：Sidecar 启动时扫 `~/.notch-agent/skills/` 目录（按 Notch Agent 数据布局约定），同样做 Layer 1 / Layer 3 分层注入。macOS 原生操作、app 专用交互 pattern（如 Safari / Notes / Mail 的惯用写入方式）都适合做成 skill。
 
 细节见 `design docs/s05-skill-loading.md`、`code-examples/s05_skill_loading.py`。
 
@@ -449,7 +449,7 @@ learn-claude-code 没有抽象成统一的 hook 框架，但可以归纳出 harn
 | `on_task_status_change` | 触发 worktree teardown、广播到 lead | s12 `task.completed` |
 | `on_idle / on_shutdown` | 归还资源、持久化状态 | s11 idle poll、s10 shutdown handshake |
 
-AOS 在 Sidecar 端应把这些切点显式化，不要散落在 loop 代码里。外围扩展（日志、trace、UI 流式）全部靠订阅这些事件实现。
+Notch Agent 在 Sidecar 端应把这些切点显式化，不要散落在 loop 代码里。外围扩展（日志、trace、UI 流式）全部靠订阅这些事件实现。
 
 ## 14. Memory / 持久化
 
@@ -472,11 +472,11 @@ skills/<name>/SKILL.md               # 领域知识
 - 崩溃 / 重启后无需 schema migration
 - 备份 / sync（iCloud、rsync）天然
 
-AOS 的对应：所有 agent 运行时状态写 `~/.aos/`（参见 tech stack 约定），保持同样的「目录即 namespace，文件即单位」的组织方式。
+Notch Agent 的对应：所有 agent 运行时状态写 `~/.notch-agent/`（参见 tech stack 约定），保持同样的「目录即 namespace，文件即单位」的组织方式。
 
 ## 15. Session 管理
 
-一个 AOS 会话的生命周期在 Sidecar 侧大致是：
+一个 Notch Agent 会话的生命周期在 Sidecar 侧大致是：
 
 ```
 session start
@@ -510,7 +510,7 @@ load ambient state
 
 ## 16. Streaming 与中断（Cancellation）
 
-learn-claude-code 为了教学清晰，用的是 non-streaming `messages.create`，没有涉及流式输出与中断。但 AOS 是面向用户交互的产品，必须补齐。落地要点：
+learn-claude-code 为了教学清晰，用的是 non-streaming `messages.create`，没有涉及流式输出与中断。但 Notch Agent 是面向用户交互的产品，必须补齐。落地要点：
 
 - 用 Anthropic SDK 的 `messages.stream()` 或等价能力，得到 chunk 流
 - harness 对 chunk 做两件事：
@@ -519,19 +519,19 @@ learn-claude-code 为了教学清晰，用的是 non-streaming `messages.create`
 - **中断**：Shell 通过 RPC 发 `agent.cancel`，sidecar 关掉当前流的 reader，把已生成的部分作为 assistant 消息落地（保持 loop 不变形），然后退出本轮
 - **工具中断**：执行中的 tool（尤其 background subprocess）必须支持 cancel —— worktree / subprocess 用 kill
 
-这套 streaming + cancel 不是 learn-claude-code 的主题，但是 AOS 的必做项，设计时预留 hook：`on_llm_chunk`、`on_cancel`。
+这套 streaming + cancel 不是 learn-claude-code 的主题，但是 Notch Agent 的必做项，设计时预留 hook：`on_llm_chunk`、`on_cancel`。
 
 ## 17. MCP 与外部工具协议
 
 learn-claude-code 在 s05 的 skill 样例中提及 `mcp-builder` 这个 skill，但 section 主体不涉及 MCP 协议本身。原则上：
 
 - MCP server 暴露的 tool 可以直接挂接到 §3 的 dispatch map 里（MCP client 作为 adapter，把 MCP tool schema 翻译成 LLM tools 声明，把 LLM tool_use 翻译成 MCP 调用）
-- MCP 在 AOS 里是**外部工具接入渠道**，与 Sidecar 自己实现的工具（filesystem、planning）并列
+- MCP 在 Notch Agent 里是**外部工具接入渠道**，与 Sidecar 自己实现的工具（filesystem、planning）并列
 - MCP 不承担 Shell ↔ Sidecar 的内部通信（那是 JSON-RPC 的事）
 
-具体接入设计不在本指南范围，参考 `modelcontextprotocol.io` 与 AOS 后续的 MCP 集成计划。
+具体接入设计不在本指南范围，参考 `modelcontextprotocol.io` 与 Notch Agent 后续的 MCP 集成计划。
 
-## 18. AOS 建议落地顺序
+## 18. Notch Agent 建议落地顺序
 
 按依赖关系分阶段。每阶段都是**可运行、可自测的最小 runtime**，不要跳阶段。
 
@@ -555,43 +555,43 @@ learn-claude-code 在 s05 的 skill 样例中提及 `mcp-builder` 这个 skill�
 
 7. **TodoWrite**：内存 TodoManager + nag reminder。面向单 session 任务。
 8. **micro_compact**：每轮前替换旧 tool_result。零成本、无感。
-9. **auto_compact + transcripts**：阈值触发，dump 到 `~/.aos/transcripts/`，summary 还回 messages。
+9. **auto_compact + transcripts**：阈值触发，dump 到 `~/.notch-agent/transcripts/`，summary 还回 messages。
 10. **manual compact tool**。
 
 产出：长会话不崩、token 预算可控。
 
 ### 阶段 D：领域知识与子任务（对齐 s04 + s05）
 
-11. **Skill loader**：`~/.aos/skills/<name>/SKILL.md`，Layer 1 描述 + Layer 3 按需注入。把第一批 macOS app skill（Notes / Mail / Calendar 写入模式）做出来。
+11. **Skill loader**：`~/.notch-agent/skills/<name>/SKILL.md`，Layer 1 描述 + Layer 3 按需注入。把第一批 macOS app skill（Notes / Mail / Calendar 写入模式）做出来。
 12. **Subagent (`task` tool)**：独立 `messages[]`、禁递归、只回文本。
 
 产出：agent 具备领域化工作能力，主对话不被探索污染。
 
-### 阶段 E：Computer Use 重写（AOS 自己的事）
+### 阶段 E：Computer Use 重写（Notch Agent 自己的事）
 
-13. **基于 AOSComputerUseKit foundation 重新设计操作层**：先定义新的模块边界，再决定是否接入 Sidecar tool dispatch。
+13. **基于 ComputerUseKit foundation 重新设计操作层**：先定义新的模块边界，再决定是否接入 Sidecar tool dispatch。
 14. **权限 prompt**：如果重新暴露 app 操作 tool，执行前通过 `ui.*` 请求用户确认，高敏感操作走人机回路。
 
 产出：agent 能操作真实 macOS app，读写闭环。
 
 ### 阶段 F：持久任务 + 并发（对齐 s07 + s08）
 
-15. **Task graph**：`~/.aos/tasks/task_<id>.json`，`blockedBy` / `owner` / `worktree` 字段齐全。工具 `task_create/update/list/get`。
+15. **Task graph**：`~/.notch-agent/tasks/task_<id>.json`，`blockedBy` / `owner` / `worktree` 字段齐全。工具 `task_create/update/list/get`。
 16. **Background tasks**：耗时 shell 操作派生 daemon 线程，notification queue drain 到 user 消息。
 
 产出：跨 session 目标可留存，长耗时操作不再卡 loop。
 
 ### 阶段 G：多 agent 协作（对齐 s09 + s10 + s11）
 
-17. **Teammate + MessageBus**：`~/.aos/team/` 下 config + JSONL inbox。每个 teammate 自跑 agent loop。
+17. **Teammate + MessageBus**：`~/.notch-agent/team/` 下 config + JSONL inbox。每个 teammate 自跑 agent loop。
 18. **Shutdown / plan approval 协议**：request-response + FSM。
 19. **Autonomous idle loop**：空闲时扫 task board + 收件箱，identity re-injection。
 
-产出：AOS 可以是团队，不只是单体。
+产出：Notch Agent 可以是团队，不只是单体。
 
 ### 阶段 H：执行隔离（对齐 s12）
 
-20. **Worktree manager**：`~/.aos/worktrees/` + `git worktree` 绑定 task_id。`events.jsonl` 事件流。
+20. **Worktree manager**：`~/.notch-agent/worktrees/` + `git worktree` 绑定 task_id。`events.jsonl` 事件流。
 
 产出：多 agent 并行不再互踩。
 
@@ -599,7 +599,7 @@ learn-claude-code 在 s05 的 skill 样例中提及 `mcp-builder` 这个 skill�
 
 21. **MCP client adapter**：把外部 MCP server 的 tool 接入 dispatch map。
 
-产出：AOS agent 能复用生态工具。
+产出：Notch Agent agent 能复用生态工具。
 
 ---
 

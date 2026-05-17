@@ -11,7 +11,7 @@ Notch 在 sidecar 没有可用 LLM provider 时，opened 态展示 Onboarding �
 
 两类进入 onboarding 的路径：
 
-1. **启动期**：`~/.aos/auth/chatgpt.json` 缺失或 schema 损坏 → `provider.status` 直接返回 `unauthenticated`
+1. **启动期**：`~/.notch-agent/auth/chatgpt.json` 缺失或 schema 损坏 → `provider.status` 直接返回 `unauthenticated`
 2. **运行期**：token 文件存在但 refresh 失败（refresh token 已失效 / endpoint 拒绝）→ runtime 侧 `readChatGPTToken()` 把失效文件 rename 到 `chatgpt.json.invalid` 并抛 `AuthInvalidatedError`，agent loop 同时发 `ui.error` 与 `provider.statusChanged { state: "unauthenticated", reason: "authInvalidated" }`，Shell 收到后切回 onboard
 
 `provider.status` 不做网络 refresh，只做磁盘存在 + schema 检查；refresh 验证由真正的 LLM 调用承担。这避免启动阻塞，也保证运行期失效能立即反映到 UI 而不是死循环。
@@ -159,7 +159,7 @@ provider stream 顶层 `try/catch` 检测 `instanceof AuthInvalidatedError` → 
 
 ### Method 与错误常量
 
-`AOSRPCSchema/Messages.swift` 与 `sidecar/src/rpc/rpc-types.ts` 同步新增：
+`RPCSchema/Messages.swift` 与 `sidecar/src/rpc/rpc-types.ts` 同步新增：
 
 ```
 RPCMethod.providerStatus         = "provider.status"
@@ -242,11 +242,11 @@ llm/auth/oauth/chatgpt-plan  →  llm/auth/oauth/storage
 ### Shell
 
 ```
-Sources/AOSRPCSchema/
+Sources/RPCSchema/
   Provider.swift                       # ProviderInfo / 5 个 params/results / login state enum
   Messages.swift                       # RPCMethod / RPCErrorCode 新增常量
 
-Sources/AOSShell/
+Sources/Shell/
   Provider/
     ProviderService.swift              # @Observable，registerHandlers + queryStatus + startLogin
   Notch/Onboarding/
@@ -255,9 +255,9 @@ Sources/AOSShell/
   Notch/NotchViewModel.swift           # 改：注入 providerService 引用
   App/CompositionRoot.swift            # 改：构造 ProviderService、mount 后异步 refreshStatus
 
-Tests/AOSShellTests/
+Tests/ShellTests/
   ProviderServiceTests.swift           # 状态机 + notification handler + invalidated 路径
-Tests/AOSRPCSchemaTests/
+Tests/RPCSchemaTests/
   RoundtripTests.swift                 # 新增 provider.* fixture 测试
 tests/rpc-fixtures/
   provider.status.json

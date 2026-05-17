@@ -12,7 +12,7 @@ import type { Dispatcher } from "../src/rpc/dispatcher";
 import type { ComputerUseGetAppStateResult } from "../src/rpc/rpc-types";
 
 function tempScreenshotPath(bytes = "fake-image-bytes"): string {
-  const dir = mkdtempSync(join(tmpdir(), "aos-computer-use-screenshot-"));
+  const dir = mkdtempSync(join(tmpdir(), "notch-agent-computer-use-screenshot-"));
   const path = join(dir, "screenshot.png");
   writeFileSync(path, bytes);
   return path;

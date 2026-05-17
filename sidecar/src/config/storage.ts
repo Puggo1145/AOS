@@ -1,8 +1,8 @@
-// Persistent global user config at ~/.aos/config.json.
+// Persistent global user config at ~/.notch-agent/config.json.
 //
 // Layout:
-//   ~/.aos/config.json   mode 0600
-//   ~/.aos/              mode 0700 (created on demand)
+//   ~/.notch-agent/config.json   mode 0600
+//   ~/.notch-agent/              mode 0700 (created on demand)
 //
 // Atomic-write pattern (sibling tmpfile + rename) so a crash during write
 // can never produce a torn file. Schema is intentionally minimal — this
@@ -26,12 +26,12 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, chmodSy
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 
-function aosHome(): string {
+function notchHome(): string {
   return process.env.HOME && process.env.HOME.length > 0 ? process.env.HOME : homedir();
 }
 
 export function userConfigPath(): string {
-  return join(aosHome(), ".aos", "config.json");
+  return join(notchHome(), ".notch-agent", "config.json");
 }
 
 export interface ModelSelection {
@@ -53,7 +53,7 @@ export interface UserConfig {
   /// Once `true`, the Shell stops routing the user back to the onboard
   /// panels even if a permission or provider drops — those failures
   /// surface as inline warnings + Settings affordances instead. Cleared
-  /// only by deleting `~/.aos/config.json`.
+  /// only by deleting `~/.notch-agent/config.json`.
   hasCompletedOnboarding?: boolean;
 }
 

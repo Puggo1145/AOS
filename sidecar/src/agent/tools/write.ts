@@ -2,12 +2,12 @@
 //
 // Whole-file write semantics: the model supplies the full final content,
 // not a diff. Parent directories are created as needed so a fresh
-// `~/.aos/workspace/notes/today.md` works on the first call. Existing files
+// `~/.notch-agent/workspace/notes/today.md` works on the first call. Existing files
 // are overwritten without a backup — the model is expected to `read` first
 // when it cares about preserving prior content.
 //
 // Like the other file tools, the path is NOT sandboxed; the system prompt
-// nudges the model toward `~/.aos/workspace/` for scratch artifacts.
+// nudges the model toward `~/.notch-agent/workspace/` for scratch artifacts.
 
 import { promises as fs } from "node:fs";
 import { homedir } from "node:os";

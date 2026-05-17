@@ -28,7 +28,7 @@ import {
 const ORIGINAL_HOME = process.env.HOME;
 
 function setTempHome(): string {
-  const home = mkdtempSync(join(tmpdir(), "aos-pkce-test-"));
+  const home = mkdtempSync(join(tmpdir(), "notch-agent-pkce-test-"));
   process.env.HOME = home;
   return home;
 }

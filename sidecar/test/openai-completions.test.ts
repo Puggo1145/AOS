@@ -90,7 +90,7 @@ const DEEPSEEK_COMPAT_RAW: OpenAICompletionsCompat = {
 const DEEPSEEK_COMPAT = resolveCompat(DEEPSEEK_COMPAT_RAW);
 const DEFAULT_COMPAT = resolveCompat();
 
-function ctx(messages: Message[], systemPrompt = "you are AOS"): Context {
+function ctx(messages: Message[], systemPrompt = "you are Notch Agent"): Context {
   return { systemPrompt, messages, tools: [] };
 }
 
@@ -141,7 +141,7 @@ test("default compat: system role + max_completion_tokens + store false", () => 
   expect(payload["max_completion_tokens"]).toBe(1024);
   expect(payload["max_tokens"]).toBeUndefined();
   const messages = payload["messages"] as Array<Record<string, unknown>>;
-  expect(messages[0]).toEqual({ role: "system", content: "you are AOS" });
+  expect(messages[0]).toEqual({ role: "system", content: "you are Notch Agent" });
 });
 
 test("DeepSeek compat: max_tokens (not max_completion_tokens), no store, no developer role", () => {

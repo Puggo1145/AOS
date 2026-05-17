@@ -27,7 +27,7 @@ Notch 打开只是 UI 视图切换，不触发任何数据采集。用户在展�
 3. **Behavior 是 opaque payload**——SenseStore / RPC / 默认 UI 全程透传，不读字段；只有 LLM 在 prompt 里消费具体结构
 4. **失败隔离**——任一 adapter 失败不影响 General Probe 与其他 adapter
 5. **共享 AX 底座**——任何组件**为接收 AX 通知**而订阅时必须通过 `AXObserverHub`，由 hub 统一管理 observer 生命周期、跨进程消息分发、retain 关系。Computer Use foundation 只做 snapshot/capture 基础能力，不接收或分发 AX 通知。
-6. **共享 AX SPI 底层模块**——`_AXUIElementGetWindow` 等 macOS 私有 AX SPI 的 `@_silgen_name` 桥接归属于独立的 `AOSAXSupport` Swift package，OS Sense Core 与 `AOSComputerUseKit` 都依赖它。**禁止 `AOSOSSenseKit` 依赖 `AOSComputerUseKit`**（读侧不得依赖写侧），任何 SPI 复用必须经由 `AOSAXSupport` 下沉。
+6. **共享 AX SPI 底层模块**——`_AXUIElementGetWindow` 等 macOS 私有 AX SPI 的 `@_silgen_name` 桥接归属于独立的 `AXSupport` Swift package，OS Sense Core 与 `ComputerUseKit` 都依赖它。**禁止 `OSSenseKit` 依赖 `ComputerUseKit`**（读侧不得依赖写侧），任何 SPI 复用必须经由 `AXSupport` 下沉。
 7. **共享权限服务**——Accessibility / Screen Recording / Automation 的运行时探测由 Shell 级 `PermissionsService` 统一负责，OS Sense / Computer Use / 权限引导 UI 全部读同一份 `PermissionState`，不得在模块内自起探测路径。
 
 ## SenseContext 数据结构
@@ -139,7 +139,7 @@ GeneralProbe 的 CFRange 通道，需要 app-specific adapter。
 `AXValue`。只在 `general.textSelection` 与 degraded `general.selectedText` 之间保留优先级，
 避免同一 selection 被重复表达。
 
-**`currentInput.target` 定位契约**：`target.locatorId` 由 `AOSAXSupport.AXElementLocator`
+**`currentInput.target` 定位契约**：`target.locatorId` 由 `AXSupport.AXElementLocator`
 生成，输入包括 stable app/window identity、从 window 到 focused element 的 ancestor path、
 每层同 signature sibling ordinal 与常用 AX 属性；window title 与 screen frame 作为 payload
 metadata 输出，不参与 `locatorId`，避免标题变化或窗口移动后 context 与下一次 app state
@@ -147,11 +147,11 @@ metadata 输出，不参与 `locatorId`，避免标题变化或窗口移动后 c
 GeneralProbe 只在 focused element 切换时计算 locator；`AXValueChanged` 只更新 `value`，
 但 exact textSelection 存在时可跳过 `value` 读取，不做全窗口遍历。
 
-**Notch 抢焦保留规则**：用户先聚焦外部 app 输入框，再打开 Notch 并聚焦 AOS 输入框时，
+**Notch 抢焦保留规则**：用户先聚焦外部 app 输入框，再打开 Notch 并聚焦 Notch Agent 输入框时，
 部分 app 会把自己的 `AXFocusedUIElement` 暴露为 missing。这个事件不代表用户在源 app
-内部换了目标，因此 GeneralProbe 保留上一 focused element 与 `currentInput`：仅当 AOS
+内部换了目标，因此 GeneralProbe 保留上一 focused element 与 `currentInput`：仅当 Notch Agent
 自身持有 key window，或 `NSWorkspace.frontmostApplication` 已不是源 app 时触发保留。
-若源 app 仍是前台且 AOS 没有 key window，missing focus 才清空 `currentInput`。
+若源 app 仍是前台且 Notch Agent 没有 key window，missing focus 才清空 `currentInput`。
 
 **不使用 pasteboard 作为 live selection**：Copy/Paste 证明的是前台 app 在 copy
 gesture 时能把自己的选区写入 pasteboard，不证明 OS Sense 在 copy 前拥有全局
@@ -196,7 +196,7 @@ chip 表面只显示固定 label（`Selected text` / `Current input`），不暴
 
 `SenseStore` 是唯一持有 `SenseContext` 的对象，所有写入经它的串行化入口，确保单源真相。
 
-`AXWebAccessibilityActivator` 属于 `AOSAXSupport`，由 OS Sense 和 Computer Use foundation 共同复用。它只负责 Chromium / Electron web AX tree 的激活信号：写 `AXManualAccessibility` / `AXEnhancedUserInterface`、保留 no-op `AXObserver`、等待 `AXWebArea` 出现。OS Sense 仍然只在 `GeneralProbe` 中读取 focused element 与直接 selection / value / selected items。
+`AXWebAccessibilityActivator` 属于 `AXSupport`，由 OS Sense 和 Computer Use foundation 共同复用。它只负责 Chromium / Electron web AX tree 的激活信号：写 `AXManualAccessibility` / `AXEnhancedUserInterface`、保留 no-op `AXObserver`、等待 `AXWebArea` 出现。OS Sense 仍然只在 `GeneralProbe` 中读取 focused element 与直接 selection / value / selected items。
 
 ## 事件源与字段映射
 
@@ -340,15 +340,15 @@ emits `kind = "browser.tab"`，payload schema：
 理由：始终镜像 pasteboard 不能区分"用户碰巧最近拷贝过什么"和"用户想把这
 个内容引用进 prompt"。前者会把无关内容（密码管理器临时项、其他 app 的复制
 回收）暴露给 LLM 直到用户主动取消勾选。粘贴这个 gesture 本身就是有意图的
-信号——只在用户真的把 clipboard 粘到 AOS 输入框时，才把它作为可引用的
+信号——只在用户真的把 clipboard 粘到 Notch Agent 输入框时，才把它作为可引用的
 context 候选呈现。
 
 **实现归属**：
 
 - `ClipboardItem` 类型与 pasteboard 抽取规则（type priority、文本逐字捕获、
-  image metadata-only）仍住在 `AOSOSSenseKit` 包里，作为 `ClipboardPasteboardExtractor.extract(from:)` 的纯函数 API。这条契约属于
+  image metadata-only）仍住在 `OSSenseKit` 包里，作为 `ClipboardPasteboardExtractor.extract(from:)` 的纯函数 API。这条契约属于
   OS Sense 的投影规则
-- 触发与状态归属于 Shell composer：`ChipInputView`（`AOSShell/Notch/Composer/`，
+- 触发与状态归属于 Shell composer：`ChipInputView`（`Shell/Notch/Composer/`，
   NSTextView wrapper）拦截 Cmd+V，调 extractor 一次性快照 `NSPasteboard.general`，
   把结果作为 `NSTextAttachment`（`ClipboardChipCell`）插入到 caret 位置；
   同一个 turn 可以插入多个 chip
@@ -376,8 +376,8 @@ context 候选呈现。
 
 ```
 packages/
-  AOSOSSenseKit/
-    Sources/AOSOSSenseKit/
+  OSSenseKit/
+    Sources/OSSenseKit/
       Core/                         # 不得 import Adapters/*
         SenseStore.swift            # @MainActor + @Observable，唯一写入入口
         AXObserverHub.swift         # 跨进程 AX 订阅与生命周期管理
@@ -391,7 +391,7 @@ packages/
       Adapters/                     # 由 Shell composition root 注册
         FinderAdapter.swift         # 内部 FinderSelection 类型 → envelope 映射
         BrowserAdapter.swift        # 内部 BrowserTab 类型 → envelope 映射
-    Tests/AOSOSSenseKitTests/
+    Tests/OSSenseKitTests/
       GeneralProbeTests.swift
       AdapterRegistryTests.swift
       ScreenMirrorTests.swift
@@ -401,11 +401,11 @@ packages/
 
 `SenseStore` 是对外唯一入口。Shell 启动时构造一次。
 
-## 与 AOS 主进程集成
+## 与 Notch Agent 主进程集成
 
 ```
 ┌─────────────────────────────────┐        ┌─────────────────────┐
-│   AOS Shell (SwiftUI)           │        │  Bun Sidecar (TS)   │
+│   Notch Agent Shell (SwiftUI)           │        │  Bun Sidecar (TS)   │
 │                                  │        │                     │
 │   App launch                     │        │                     │
 │       │                          │        │                     │
@@ -430,7 +430,7 @@ packages/
 └─────────────────────────────────┘        └─────────────────────┘
 ```
 
-- `AOSOSSenseKit` 作为 Swift package 直接链接进 Shell，进程级单例
+- `OSSenseKit` 作为 Swift package 直接链接进 Shell，进程级单例
 - Shell 启动即 `SenseStore.start()`，常驻订阅 OS 事件
 - Notch UI 通过 `@Bindable` 直接绑定 `SenseStore.context`
 - 用户提交时，Shell 把勾选条目从 live `SenseContext` **投影**到 wire-only `CitedContext` object（schema 见 `designs/rpc-protocol.md`），再编码为 JSON 发给 Bun。`CitedContext` 是 object，不是裸 envelope 数组——`behaviors` 字段才是 `BehaviorEnvelope[]`，同时还会带 `app` / `window` / `visual` / `clipboard` 的引用快照

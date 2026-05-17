@@ -69,7 +69,7 @@ sidecar/src/agent/
 
 ### 模块归属（Shell 端字段三层）
 
-当前 `Sources/AOSShell/Agent/AgentService.swift` 是单镜像，`turns / currentTurn / status / lastErrorMessage / doneRevertTask / errorRevertTask` 全部集中在一处。多 session 后必须明确分层，否则 inactive session 的 `ui.status done` 会污染 active session 的 closed-bar 状态。
+当前 `Sources/Shell/Agent/AgentService.swift` 是单镜像，`turns / currentTurn / status / lastErrorMessage / doneRevertTask / errorRevertTask` 全部集中在一处。多 session 后必须明确分层，否则 inactive session 的 `ui.status done` 会污染 active session 的 closed-bar 状态。
 
 | 层 | 字段 | 说明 |
 |---|---|---|
@@ -84,7 +84,7 @@ sidecar/src/agent/
 | `llm/*` | 不动 | session 抽象完全在 agent/ 内部 |
 | `rpc/dispatcher.ts` | **要改** | 新增 `session` namespace 方向（见 § dispatcher 协议方向） |
 | `rpc/rpc-types.ts` | 加字段 | `agent.*` params 加 `sessionId`；`ui.*` / `conversation.*` / `dev.context.changed` 加 `sessionId`；新增 `session.*` |
-| `Sources/AOSRPCSchema/` | 加文件 | 新增 `Session.swift`（schema source of truth） |
+| `Sources/RPCSchema/` | 加文件 | 新增 `Session.swift`（schema source of truth） |
 | `prompt.ts` | 不动 | 仍然只看 turn 级别的 `citedContext` |
 | `context-observer.ts` | 加字段 | snapshot 加 `sessionId`；保留 global latest 单值（见 § ContextObserver） |
 
@@ -142,10 +142,10 @@ Turn 级事件（`turnStarted` / `uiToken` / ...）**不经过 manager**，仍�
 
 ### Protocol version bump
 
-当前 `AOS_PROTOCOL_VERSION = "1.0.0"`，且 `RPCClient` 在 `rpc.hello` 阶段对 MAJOR 不一致直接拒连。本轮变更不兼容（`agent.*` 加必填 `sessionId`、多组通知加字段、新增 namespace），**必须 bump 到 `2.0.0`**。
+当前 `NOTCH_PROTOCOL_VERSION = "1.0.0"`，且 `RPCClient` 在 `rpc.hello` 阶段对 MAJOR 不一致直接拒连。本轮变更不兼容（`agent.*` 加必填 `sessionId`、多组通知加字段、新增 namespace），**必须 bump 到 `2.0.0`**。
 
-- `sidecar/src/rpc/rpc-types.ts:14` `AOS_PROTOCOL_VERSION = "2.0.0"`
-- `Sources/AOSRPCSchema/` 内对应常量 `aosProtocolVersion = "2.0.0"`
+- `sidecar/src/rpc/rpc-types.ts:14` `NOTCH_PROTOCOL_VERSION = "2.0.0"`
+- `Sources/RPCSchema/` 内对应常量 `notchProtocolVersion = "2.0.0"`
 - 不提供 1.x ↔ 2.x 桥接：旧版混跑预期立刻被 `rpc.hello` MAJOR 检查拦下
 
 ### 新增 namespace

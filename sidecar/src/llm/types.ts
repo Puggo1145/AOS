@@ -1,4 +1,4 @@
-// Unified LLM types for AOS sidecar.
+// Unified LLM types for Notch Agent sidecar.
 //
 // Mirrors the Message / Content / Event / Model / Options / Capability /
 // Tool / Usage / StopReason contracts described in
@@ -6,7 +6,7 @@
 // verbatim by docs/designs/llm-provider.md.
 //
 // Field names and discriminated-union variants are intentionally left
-// open even when AOS does not yet emit them this round (thinking,
+// open even when Notch Agent does not yet emit them this round (thinking,
 // toolCall, image input). Keeping the full surface lets future provider
 // variants and turn-replay paths drop in without breaking call sites.
 
@@ -14,7 +14,7 @@
 // API & Provider identity
 // ---------------------------------------------------------------------------
 
-/// Wire protocol families. AOS only registers `openai-responses` this round,
+/// Wire protocol families. Notch Agent only registers `openai-responses` this round,
 /// but the union is forward-compatible so cross-model `transformMessages`
 /// can already reason about same-source vs cross-source replay.
 export type Api =
@@ -26,7 +26,7 @@ export type Api =
   | "bedrock-converse-stream";
 
 /// Open string: concrete providers register themselves into the registry.
-/// AOS only ships `chatgpt-plan` this round.
+/// Notch Agent only ships `chatgpt-plan` this round.
 export type Provider = string;
 
 // ---------------------------------------------------------------------------

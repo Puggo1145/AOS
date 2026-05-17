@@ -5,7 +5,7 @@
 ## 实现阶段
 
 ### Stage 1：协议骨架
-- `AOSRPCSchema` Swift package 搭建，包含 Message / Hello / Error 基础类型
+- `RPCSchema` Swift package 搭建，包含 Message / Hello / Error 基础类型
 - `sidecar/src/rpc-types.ts` 手写对应 TS 类型
 - `rpc-fixtures/` 初始 fixture + 两端 conformance test + CI
 - Swift RPC codec（parse/serialize/dispatch，含 timeout 和并发模型）

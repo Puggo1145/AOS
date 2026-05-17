@@ -1,4 +1,4 @@
-// AOS sidecar entry point. Bun executes this file as the child process.
+// Notch Agent sidecar entry point. Bun executes this file as the child process.
 //
 // Lifecycle (per docs/designs/rpc-protocol.md §"版本协商"):
 //   1. Start the dispatcher reader so we can receive the rpc.hello response.
@@ -23,15 +23,15 @@ import { registerComputerUseTools } from "./agent/tools/computer-use";
 import { registerBuiltinAmbient } from "./agent/ambient";
 import { ensureWorkspace } from "./agent/workspace";
 import { logger } from "./log";
-import { AOS_PROTOCOL_VERSION, RPCMethod, type HelloResult } from "./rpc/rpc-types";
+import { NOTCH_PROTOCOL_VERSION, RPCMethod, type HelloResult } from "./rpc/rpc-types";
 
 // Side-effect: triggers register-builtins (api providers + model catalog).
 import "./llm";
 
 async function main(): Promise<void> {
-  process.stderr.write(`[aos-sidecar] starting; protocol ${AOS_PROTOCOL_VERSION}\n`);
+  process.stderr.write(`[notch-agent-sidecar] starting; protocol ${NOTCH_PROTOCOL_VERSION}\n`);
 
-  // Side-effect bootstrap: ensure ~/.aos/workspace/ exists (the agent's
+  // Side-effect bootstrap: ensure ~/.notch-agent/workspace/ exists (the agent's
   // default scratch directory) and register every built-in tool into the
   // global ToolRegistry before the agent loop ever runs.
   ensureWorkspace();
@@ -69,15 +69,15 @@ async function main(): Promise<void> {
     const result = await dispatcher.request<HelloResult>(
       RPCMethod.rpcHello,
       {
-        protocolVersion: AOS_PROTOCOL_VERSION,
-        clientInfo: { name: "aos-sidecar", version: "0.1.0" },
+        protocolVersion: NOTCH_PROTOCOL_VERSION,
+        clientInfo: { name: "notch-agent-sidecar", version: "0.1.0" },
       },
       { timeoutMs: 5_000 },
     );
     const remoteMajor = result.protocolVersion.split(".")[0];
-    const localMajor = AOS_PROTOCOL_VERSION.split(".")[0];
+    const localMajor = NOTCH_PROTOCOL_VERSION.split(".")[0];
     if (remoteMajor !== localMajor) {
-      logger.error("protocol major mismatch", { remote: result.protocolVersion, local: AOS_PROTOCOL_VERSION });
+      logger.error("protocol major mismatch", { remote: result.protocolVersion, local: NOTCH_PROTOCOL_VERSION });
       process.exit(2);
     }
     logger.info("rpc.hello ok", { protocolVersion: result.protocolVersion });

@@ -2,7 +2,7 @@
 
 ## 目标
 
-定义 AOS Shell (Swift) 和 Bun Sidecar (TS) 之间的**唯一通信通道**。承载：
+定义 Notch Agent Shell (Swift) 和 Bun Sidecar (TS) 之间的**唯一通信通道**。承载：
 - Shell → Bun：用户提交的 prompt（含用户显式引用的 context 子集）、设置变更
 - Bun → Shell：流式 agent 输出、状态更新
 
@@ -21,18 +21,18 @@
 | 传输 | stdio，UTF-8 newline-delimited JSON | Shell 作为 parent spawn Bun，stdin/stdout 天然双工 |
 | Framing | 每行一个 JSON 对象（`\n` 分隔） | 不做 `Content-Length` header，stdio 场景够用 |
 | 编码实现 | 两端各自手写 codec | 不引第三方库；Swift / TS 各 <200 行 |
-| 日志通道 | Bun stderr | Shell 接收 stderr 转 AOS 日志系统，与 RPC 通道物理隔离 |
+| 日志通道 | Bun stderr | Shell 接收 stderr 转 Notch Agent 日志系统，与 RPC 通道物理隔离 |
 
 ## 进程 topology
 
 ```
 ┌──────────────────────────────┐
-│  AOS Shell (Swift, parent)   │
+│  Notch Agent Shell (Swift, parent)   │
 │  ┌────────────────────────┐  │
 │  │  RPC Dispatcher        │  │──── stdin/stdout ────┐
 │  ├────────────────────────┤  │                       │
-│  │  AOSOSSenseKit         │  │    stderr (logs)      │
-│  │  AOSComputerUseKit     │  │   ◄───────────────┐   │
+│  │  OSSenseKit         │  │    stderr (logs)      │
+│  │  ComputerUseKit     │  │   ◄───────────────┐   │
 │  └────────────────────────┘  │                   │   │
 └──────────────┬───────────────┘                   │   │
                │ spawns                            │   │
@@ -100,9 +100,9 @@ Method 名用点号分隔：`<namespace>.<method>`。每个 namespace 有**固�
 
 ```ts
 // Request
-{ protocolVersion: "2.0.0", clientInfo: { name: "aos-sidecar", version: "..." } }
+{ protocolVersion: "2.0.0", clientInfo: { name: "notch-agent-sidecar", version: "..." } }
 // Result
-{ protocolVersion: "2.0.0", serverInfo: { name: "aos-shell", version: "..." } }
+{ protocolVersion: "2.0.0", serverInfo: { name: "notch-agent-shell", version: "..." } }
 ```
 
 大版本不匹配 → Shell 回 `ProtocolVersionMismatch` 错误并终止 Bun。
@@ -220,7 +220,7 @@ Lifecycle 不变量：
 
 ### `config.*`（Shell → Bun）
 
-Sidecar 拥有持久化（`~/.aos/config.json`）和 catalog（provider/model 目录）。Shell 的 settings panel 完全只读，通过下面三个方法 driven。
+Sidecar 拥有持久化（`~/.notch-agent/config.json`）和 catalog（provider/model 目录）。Shell 的 settings panel 完全只读，通过下面三个方法 driven。
 
 | Method | 类型 | Params | Result |
 |---|---|---|---|
@@ -243,7 +243,7 @@ interface ConfigSelection   { providerId: string; modelId: string; }
   - 文件**存在但 JSON 损坏 / schema 不符** → `config.get` 抛 `agentConfigInvalid` (-32301)；用户必须显式重置或修复
   - `agent.submit` 时若 selection 指向已被 catalog 删除的 model → `runTurn` 抛 internalError 并走 `ui.error`（不静默换默认）
   - `config.set` / `config.setEffort` 在「现有 config 损坏」时容忍——把它当作空配置 merge，给用户一条恢复路径
-- 设置变更不走 `settings.update` notification（设计文档原本预留的字段）；Shell 主动 RPC 写、agent loop 在每次 `agent.submit` 时重读 `~/.aos/config.json`。这是 stage 0 的简化，可与 `settings.*` 合并。
+- 设置变更不走 `settings.update` notification（设计文档原本预留的字段）；Shell 主动 RPC 写、agent loop 在每次 `agent.submit` 时重读 `~/.notch-agent/config.json`。这是 stage 0 的简化，可与 `settings.*` 合并。
 
 ### `settings.*`（Shell → Bun）
 
@@ -304,7 +304,7 @@ JSON-RPC 标准错误码保留：`-32700 ~ -32603`。应用自定义错误分段
 | `-32204` | `loginNotConfigured` | client_id / endpoint 未配置 |
 | `-32300 ~ -32399` | `agent.*` | Agent 层错误 |
 | `-32300` | `agentContextOverflow` | 超过 model.contextWindow，不做 compaction，直接 ui.error |
-| `-32301` | `agentConfigInvalid` | `~/.aos/config.json` 损坏或 schema 不符（fail-fast，不静默回落） |
+| `-32301` | `agentConfigInvalid` | `~/.notch-agent/config.json` 损坏或 schema 不符（fail-fast，不静默回落） |
 | `-32400 ~ -32499` | `session.*` | Session 管理错误 |
 | `-32400` | `unknownSession` | `agent.*` / `session.activate` 引用了不存在的 sessionId |
 | `-32401` | `noActiveSession` | 保留——目前每个 session-aware 调用都显式带 sessionId，wire 上未实际使用 |
@@ -361,14 +361,14 @@ Swift Codable 为 source of truth，TS 类型手写同步，一致性通过 fixt
 
 ```
 packages/
-  AOSRPCSchema/                           # Swift package
-    Sources/AOSRPCSchema/
+  RPCSchema/                           # Swift package
+    Sources/RPCSchema/
       Messages.swift                      # Request/Response/Notification 基础类型 + RPCMethod / RPCErrorCode 常量
       Agent.swift                         # agent.* params/results + CitedContext / CitedVisual / CitedClipboard / BehaviorEnvelope
       Session.swift                       # session.* params/results + SessionListItem
       UI.swift                            # ui.* params
       Settings.swift                      # settings.* params
-    Tests/AOSRPCSchemaTests/
+    Tests/RPCSchemaTests/
   sidecar/
     src/rpc-types.ts                      # 手写 TS 类型，与 Swift 一一对应
 tests/
@@ -393,12 +393,12 @@ tests/
     ts-roundtrip-test.ts                  # fixture → parse → re-serialize → 断言 byte-equal
 ```
 
-**Canonical encoder**：Swift 侧 `AOSRPCSchema/CanonicalEncoder.swift` 暴露 `CanonicalJSON.encode(_:)`，`outputFormatting = [.sortedKeys, .withoutEscapingSlashes]`。这两个 flag 都不能省：
+**Canonical encoder**：Swift 侧 `RPCSchema/CanonicalEncoder.swift` 暴露 `CanonicalJSON.encode(_:)`，`outputFormatting = [.sortedKeys, .withoutEscapingSlashes]`。这两个 flag 都不能省：
 
 - `.sortedKeys` 让对象键按字典序，与 TS 端 `JSON.stringify(sortKeys(value))` 对齐
 - `.withoutEscapingSlashes` 是关键——Foundation 默认把字符串内的 `/` 编码为 `\/`，而 `JSON.stringify` 不转义。少了这个 flag，运行时 Swift 发出的 wire bytes 和 TS 发出的 / fixture 文件存的版本不一致
 
-`AOSShell/RPCClient` 在编码每条 NDJSON 时调用 `CanonicalJSON.encode`；测试 fixture 的 byte-equal 断言也用同一个函数——「测试通过但运行时漂移」的伪造稳定性被这个共用 helper 物理消除。
+`Shell/RPCClient` 在编码每条 NDJSON 时调用 `CanonicalJSON.encode`；测试 fixture 的 byte-equal 断言也用同一个函数——「测试通过但运行时漂移」的伪造稳定性被这个共用 helper 物理消除。
 
 规则：
 - 每个 method 的 params / result 在 `rpc-fixtures/` 至少有一条 canonical sample
@@ -406,13 +406,13 @@ tests/
 - 新增 / 修改 method 的 PR 必须同步更新：Swift Codable、TS 类型、fixtures
 - CI 跑两端 conformance test，任一不通过阻断合并
 
-协议版本常量在 `AOSRPCSchema/Messages.swift` 和 `sidecar/src/rpc-types.ts` 各自声明，fixture 里验证版本字段值一致。
+协议版本常量在 `RPCSchema/Messages.swift` 和 `sidecar/src/rpc-types.ts` 各自声明，fixture 里验证版本字段值一致。
 
 ## 版本协商
 
 - `rpc.hello` 是 Bun 的第一条消息，必须带 `protocolVersion: "MAJOR.MINOR.PATCH"`
 - Shell 的策略：MAJOR 不匹配 → 拒绝握手 + 终止 Bun；MINOR/PATCH 不匹配 → 日志 warn，接受
-- 协议版本常量在 `AOSRPCSchema/Messages.swift` 和 `sidecar/src/rpc-types.ts` 各自声明，conformance fixture 断言两端一致
+- 协议版本常量在 `RPCSchema/Messages.swift` 和 `sidecar/src/rpc-types.ts` 各自声明，conformance fixture 断言两端一致
 
 ## 不做的事
 

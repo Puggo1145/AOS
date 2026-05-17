@@ -1,7 +1,7 @@
 // Per-turn prompt assembly: folds the wire `CitedContext` into the LLM-facing
 // user message so the agent actually sees what the user was looking at.
 //
-// Per docs/designs/os-sense.md "与 AOS 主进程集成":
+// Per docs/designs/os-sense.md "与 Notch Agent 主进程集成":
 //   "BehaviorEnvelope payload 完全 opaque, Bun 持有、序列化进 prompt、转发给 LLM"
 //
 // Format is plain text wrapped in <os-context> tags so the LLM can clearly

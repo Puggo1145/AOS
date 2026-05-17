@@ -51,7 +51,7 @@ export function createComputerUseTools(dispatcher: Dispatcher): ToolHandler[] {
   return [
     rpcTool({
       name: "list_apps",
-      description: "List macOS applications available to AOS Computer Use.",
+      description: "List macOS applications available to Notch Agent Computer Use.",
       method: RPCMethod.computerUseListApps,
       parameters: {
         type: "object",

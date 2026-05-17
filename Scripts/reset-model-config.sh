@@ -5,29 +5,29 @@
 # Recording + Accessibility every loop.
 #
 # Wiped:
-#   - ~/.aos/config.json              (selection, effort, hasCompletedOnboarding)
-#   - ~/.aos/auth/                    (chatgpt.json OAuth token)
-#   - Keychain entries under service "com.aos.apikey" (DeepSeek + future apiKey providers)
+#   - ~/.notch-agent/config.json              (selection, effort, hasCompletedOnboarding)
+#   - ~/.notch-agent/auth/                    (chatgpt.json OAuth token)
+#   - Keychain entries under service "com.notch-agent.apikey" (DeepSeek + future apiKey providers)
 #
 # Not touched:
 #   - TCC ScreenCapture / Accessibility grants
-#   - ~/.aos/run/ and any workspaces
-#   - The AOS.app bundle, signing identity, anything else
+#   - ~/.notch-agent/run/ and any workspaces
+#   - The Notch Agent.app bundle, signing identity, anything else
 set -euo pipefail
 
-BUNDLE_ID="com.aos.shell"
-AOS_HOME="${HOME}/.aos"
-APIKEY_SERVICE="com.aos.apikey"
+BUNDLE_ID="com.notch-agent.shell"
+NOTCH_HOME="${HOME}/.notch-agent"
+APIKEY_SERVICE="com.notch-agent.apikey"
 
-echo "==> Quitting AOS if running"
-pkill -x AOS 2>/dev/null || true
+echo "==> Quitting Notch Agent if running"
+pkill -x "Notch Agent" 2>/dev/null || true
 sleep 0.4
 
-echo "==> Removing ${AOS_HOME}/config.json"
-rm -f "${AOS_HOME}/config.json"
+echo "==> Removing ${NOTCH_HOME}/config.json"
+rm -f "${NOTCH_HOME}/config.json"
 
-echo "==> Removing ${AOS_HOME}/auth/"
-rm -rf "${AOS_HOME}/auth"
+echo "==> Removing ${NOTCH_HOME}/auth/"
+rm -rf "${NOTCH_HOME}/auth"
 
 echo "==> Clearing Keychain API keys (service=${APIKEY_SERVICE})"
 # `security delete-generic-password` removes one entry per call and exits

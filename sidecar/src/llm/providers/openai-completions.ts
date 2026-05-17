@@ -1,7 +1,7 @@
 // OpenAI Chat Completions API streaming provider.
 //
 // A subset port of pi-mono's `openai-completions.ts` (~1100 lines). We kept
-// only what AOS needs in this round: streaming text + reasoning + tool calls,
+// only what Notch Agent needs in this round: streaming text + reasoning + tool calls,
 // usage + cost, transformMessages-driven cross-source replay normalization.
 //
 // Stripped (intentional, YAGNI):

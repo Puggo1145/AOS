@@ -1,4 +1,4 @@
-// JSON-RPC 2.0 dispatcher for the AOS sidecar.
+// JSON-RPC 2.0 dispatcher for the Notch Agent sidecar.
 //
 // Implements the contract in docs/designs/rpc-protocol.md §"Dispatcher 并发模型"
 // and §"Namespace 规则":

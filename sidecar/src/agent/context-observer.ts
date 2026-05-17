@@ -78,6 +78,6 @@ export class ContextObserver {
   }
 }
 
-/// Singleton: AOS Stage 0 has exactly one agent loop. Tests can construct
+/// Singleton: Notch Agent Stage 0 has exactly one agent loop. Tests can construct
 /// throwaway `ContextObserver` instances and inject them.
 export const contextObserver = new ContextObserver();

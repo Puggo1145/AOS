@@ -16,7 +16,7 @@ export interface SystemPromptInput {
 export function buildSystemPrompt(input: SystemPromptInput = {}): string {
   const workspace = input.workspace ?? workspaceDir();
   return [
-    "You are AOS, an AI agent embedded in MacOS. Be concise and helpful.",
+    "You are Notch Agent, an AI agent embedded in MacOS. Be concise and helpful.",
     "",
     `You are at your personal workspace: ${workspace}`,
     "Use this directory by default for drafts, generated artifacts, and temp files.",

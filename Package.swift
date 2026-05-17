@@ -1,53 +1,53 @@
 // swift-tools-version: 5.10
 import PackageDescription
 
-// AOS SwiftPM workspace.
+// Notch Agent SwiftPM workspace.
 //
 // Targets:
-//   - executable `AOSShell`      (Notch UI + RPC client + AgentService composition root)
-//   - executable `AOSComputerUseCLI` (terminal entrypoint for Computer Use core)
-//   - library `AOSRPCSchema`     (wire protocol — see docs/plans/rpc-protocol.md)
-//   - library `AOSOSSenseKit`    (OS Sense — see docs/designs/os-sense.md)
-//   - library `AOSComputerUseKit` (Computer Use foundation)
-//   - library `AOSAXSupport`     (shared AX SPI bridge + Chromium AX activation —
+//   - executable `Shell`      (Notch UI + RPC client + AgentService composition root)
+//   - executable `ComputerUseCLI` (terminal entrypoint for Computer Use core)
+//   - library `RPCSchema`     (wire protocol — see docs/plans/rpc-protocol.md)
+//   - library `OSSenseKit`    (OS Sense — see docs/designs/os-sense.md)
+//   - library `ComputerUseKit` (Computer Use foundation)
+//   - library `AXSupport`     (shared AX SPI bridge + Chromium AX activation —
 //                                 see docs/designs/os-sense.md §"共享 AX SPI 底层模块".
 //                                 Holds `_AXUIElementGetWindow` and
 //                                 `AXWebAccessibilityActivator` so OS Sense
-//                                 and AOSComputerUseKit both depend on it
+//                                 and ComputerUseKit both depend on it
 //                                 without read-side ↔ write-side coupling.)
 let package = Package(
-    name: "AOS",
+    name: "notch-agent",
     platforms: [
         .macOS(.v14)
     ],
     products: [
         .executable(
-            name: "AOSShell",
-            targets: ["AOSShell"]
+            name: "Shell",
+            targets: ["Shell"]
         ),
         .library(
-            name: "AOSRPCSchema",
-            targets: ["AOSRPCSchema"]
+            name: "RPCSchema",
+            targets: ["RPCSchema"]
         ),
         .library(
-            name: "AOSOSSenseKit",
-            targets: ["AOSOSSenseKit"]
+            name: "OSSenseKit",
+            targets: ["OSSenseKit"]
         ),
         .library(
-            name: "AOSAXSupport",
-            targets: ["AOSAXSupport"]
+            name: "AXSupport",
+            targets: ["AXSupport"]
         ),
         .library(
-            name: "AOSComputerUseKit",
-            targets: ["AOSComputerUseKit"]
+            name: "ComputerUseKit",
+            targets: ["ComputerUseKit"]
         ),
         .executable(
-            name: "AOSComputerUseCLI",
-            targets: ["AOSComputerUseCLI"]
+            name: "ComputerUseCLI",
+            targets: ["ComputerUseCLI"]
         ),
         .executable(
-            name: "AOSCoordinateTarget",
-            targets: ["AOSCoordinateTarget"]
+            name: "CoordinateTarget",
+            targets: ["CoordinateTarget"]
         )
     ],
     dependencies: [
@@ -59,81 +59,81 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "AOSRPCSchema",
-            path: "Sources/AOSRPCSchema"
+            name: "RPCSchema",
+            path: "Sources/RPCSchema"
         ),
         .testTarget(
-            name: "AOSRPCSchemaTests",
-            dependencies: ["AOSRPCSchema"],
-            path: "Tests/AOSRPCSchemaTests"
+            name: "RPCSchemaTests",
+            dependencies: ["RPCSchema"],
+            path: "Tests/RPCSchemaTests"
         ),
         // Shared AX primitives. Owns the `_AXUIElementGetWindow` SPI bridge
         // and Chromium / Electron web AX activation so OS Sense and
-        // AOSComputerUseKit both depend on this package, never on each other.
+        // ComputerUseKit both depend on this package, never on each other.
         .target(
-            name: "AOSAXSupport",
-            path: "Sources/AOSAXSupport"
+            name: "AXSupport",
+            path: "Sources/AXSupport"
         ),
         .testTarget(
-            name: "AOSAXSupportTests",
-            dependencies: ["AOSAXSupport"],
-            path: "Tests/AOSAXSupportTests"
+            name: "AXSupportTests",
+            dependencies: ["AXSupport"],
+            path: "Tests/AXSupportTests"
         ),
         // OS Sense — read-side OS state mirror. No dependency on
-        // `AOSRPCSchema`: per `docs/designs/os-sense.md` §"依赖方向（核心契约）",
+        // `RPCSchema`: per `docs/designs/os-sense.md` §"依赖方向（核心契约）",
         // OS Sense is read-side, RPC is wire — strict module isolation. The
         // Shell composition layer projects from the live model to the wire
         // schema; this package never imports the wire types.
         .target(
-            name: "AOSOSSenseKit",
-            dependencies: ["AOSAXSupport"],
-            path: "Sources/AOSOSSenseKit"
+            name: "OSSenseKit",
+            dependencies: ["AXSupport"],
+            path: "Sources/OSSenseKit"
         ),
         .testTarget(
-            name: "AOSOSSenseKitTests",
-            dependencies: ["AOSOSSenseKit", "AOSAXSupport"],
-            path: "Tests/AOSOSSenseKitTests"
+            name: "OSSenseKitTests",
+            dependencies: ["OSSenseKit", "AXSupport"],
+            path: "Tests/OSSenseKitTests"
         ),
-        // AOSComputerUseKit — remaining app/window/snapshot/capture
+        // ComputerUseKit — remaining app/window/snapshot/capture
         // foundation. App operation layers were removed; this target depends
-        // only on AOSAXSupport for shared AX primitives.
+        // only on AXSupport for shared AX primitives.
         .target(
-            name: "AOSComputerUseKit",
-            dependencies: ["AOSAXSupport"],
-            path: "Sources/AOSComputerUseKit",
+            name: "ComputerUseKit",
+            dependencies: ["AXSupport"],
+            path: "Sources/ComputerUseKit",
             resources: [
                 .process("Resources")
             ]
         ),
         .testTarget(
-            name: "AOSComputerUseKitTests",
-            dependencies: ["AOSComputerUseKit", "AOSAXSupport"],
-            path: "Tests/AOSComputerUseKitTests"
+            name: "ComputerUseKitTests",
+            dependencies: ["ComputerUseKit", "AXSupport"],
+            path: "Tests/ComputerUseKitTests"
         ),
         // Terminal-only interface for calling the Computer Use core without
-        // launching AOSShell. CLI parsing, output formatting, and permission
+        // launching Shell. CLI parsing, output formatting, and permission
         // prompts live in the executable target; the reusable foundation stays
-        // in AOSComputerUseKit.
+        // in ComputerUseKit.
         .executableTarget(
-            name: "AOSComputerUseCLI",
-            dependencies: ["AOSComputerUseKit"],
-            path: "Sources/AOSComputerUseCLI"
+            name: "ComputerUseCLI",
+            dependencies: ["ComputerUseKit"],
+            path: "Sources/ComputerUseCLI"
         ),
         .executableTarget(
-            name: "AOSCoordinateTarget",
-            path: "Sources/AOSCoordinateTarget"
+            name: "CoordinateTarget",
+            path: "Sources/CoordinateTarget"
         ),
         .testTarget(
-            name: "AOSComputerUseCLITests",
-            dependencies: ["AOSComputerUseCLI", "AOSComputerUseKit"],
-            path: "Tests/AOSComputerUseCLITests"
+            name: "ComputerUseCLITests",
+            dependencies: ["ComputerUseCLI", "ComputerUseKit"],
+            path: "Tests/ComputerUseCLITests"
         ),
-        // AOSShell — the macOS Notch UI executable. Depends on both library
-        // targets; bundles Info.plist and AOS.entitlements as resources via
+        // Shell — the macOS Notch UI executable. Depends on both library
+        // targets; bundles Info.plist and NotchAgent.entitlements as resources via
         // `.copy(...)` so they're addressable from `Bundle.main.resourceURL`
         // when the .app bundle is assembled by Scripts/build-app.sh.
-        // AOSShell `swift build` emits a bare Mach-O; the .app bundle layout
-        // (including Info.plist and entitlements from Sources/AOSShellResources/)
+        // Shell `swift build` emits a bare Mach-O; the .app bundle layout
+        // (including Info.plist and entitlements from Sources/ShellResources/)
         // is assembled by Scripts/build-app.sh — see docs/plans/.../§B. Those
         // files are intentionally NOT declared as SwiftPM resources because
         // SwiftPM forbids `.copy(...)` paths outside the target directory and
@@ -141,22 +141,22 @@ let package = Package(
         // resource bundle rather than at Contents/Info.plist where macOS expects
         // them.
         .executableTarget(
-            name: "AOSShell",
+            name: "Shell",
             dependencies: [
-                "AOSRPCSchema",
-                "AOSOSSenseKit",
-                "AOSComputerUseKit",
+                "RPCSchema",
+                "OSSenseKit",
+                "ComputerUseKit",
                 .product(name: "MarkdownUI", package: "swift-markdown-ui")
             ],
-            path: "Sources/AOSShell",
+            path: "Sources/Shell",
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency=complete")
             ]
         ),
         .testTarget(
-            name: "AOSShellTests",
-            dependencies: ["AOSShell", "AOSRPCSchema", "AOSOSSenseKit", "AOSComputerUseKit"],
-            path: "Tests/AOSShellTests"
+            name: "ShellTests",
+            dependencies: ["Shell", "RPCSchema", "OSSenseKit", "ComputerUseKit"],
+            path: "Tests/ShellTests"
         )
     ]
 )

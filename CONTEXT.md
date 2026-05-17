@@ -1,4 +1,4 @@
-# AOS Context
+# Notch Agent Context
 
 ## Domain Terms
 
@@ -29,7 +29,7 @@ Turns.
 
 ### Computer Use Foundation
 
-The Swift-only `AOSComputerUseKit` foundation for app enumeration, window
+The Swift-only `ComputerUseKit` foundation for app enumeration, window
 enumeration, AX snapshot rendering, screenshot capture, and snapshot state.
 It is not exposed as an LLM-callable tool surface.
 

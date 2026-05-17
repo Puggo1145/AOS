@@ -13,13 +13,13 @@ import type { AssistantMessage } from "../src/llm";
 function fullCitedContext(): CitedContext {
   return {
     app: { bundleId: "com.apple.Safari", name: "Safari", pid: 4242 },
-    window: { title: "AOS — Notch agent", windowId: 987654 },
+    window: { title: "Notch Agent — Notch agent", windowId: 987654 },
     behaviors: [
       {
         kind: "browser.tab",
         citationKey: "browser.tab",
-        displaySummary: "AOS — Notch agent",
-        payload: { url: "https://example.com/aos", pageTitle: "AOS — Notch agent" },
+        displaySummary: "Notch Agent — Notch agent",
+        payload: { url: "https://example.com/notch", pageTitle: "Notch Agent — Notch agent" },
       },
       {
         kind: "general.currentInput",
@@ -56,12 +56,12 @@ test("buildUserMessage prepends an <os-context> block when CitedContext has data
   expect(content).toContain("Safari");
   expect(content).toContain("com.apple.Safari");
   // Window title.
-  expect(content).toContain("AOS — Notch agent");
+  expect(content).toContain("Notch Agent — Notch agent");
   // Behavior kind + summary.
   expect(content).toContain("browser.tab");
-  expect(content).toContain("AOS — Notch agent");
+  expect(content).toContain("Notch Agent — Notch agent");
   // Opaque payload is JSON-serialized through.
-  expect(content).toContain("https://example.com/aos");
+  expect(content).toContain("https://example.com/notch");
   expect(content).toContain("axloc_abc123");
   expect(content).toContain('"siblingOrdinal":1');
   // Clipboards are NOT listed inside <os-context> — they are inlined at

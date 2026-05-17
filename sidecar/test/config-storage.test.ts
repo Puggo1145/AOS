@@ -15,7 +15,7 @@ let tmpHome: string;
 
 beforeEach(() => {
   originalHome = process.env.HOME;
-  tmpHome = mkdtempSync(join(tmpdir(), "aos-config-test-"));
+  tmpHome = mkdtempSync(join(tmpdir(), "notch-agent-config-test-"));
   process.env.HOME = tmpHome;
 });
 
@@ -26,11 +26,11 @@ afterEach(() => {
 });
 
 function configPath(): string {
-  return join(tmpHome, ".aos", "config.json");
+  return join(tmpHome, ".notch-agent", "config.json");
 }
 
 function writeRaw(content: string): void {
-  mkdirSync(join(tmpHome, ".aos"), { recursive: true });
+  mkdirSync(join(tmpHome, ".notch-agent"), { recursive: true });
   writeFileSync(configPath(), content, "utf-8");
 }
 

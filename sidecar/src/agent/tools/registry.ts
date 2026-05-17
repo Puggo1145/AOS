@@ -4,7 +4,7 @@
 // tool name, plus a `sourceId` tag for batch unregister (used by tests and,
 // later, by skill packages that want to swap their tool set in/out).
 //
-// Single registry vs per-session: AOS Stage 0 has one global agent across
+// Single registry vs per-session: Notch Agent Stage 0 has one global agent across
 // all sessions, and every session gets the same tool surface. If per-session
 // scoping becomes necessary (e.g. workspace-restricted tools), add an
 // `availableTo(sessionId)` filter at this layer — the loop already calls

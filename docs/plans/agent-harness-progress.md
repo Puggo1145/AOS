@@ -27,7 +27,7 @@ s04 起的节（Subagent / Skills 等）现在都可以在 s03 落成的 session
 
 - `agent/tools/` 子模块：`ToolHandler` / `ToolExecContext` / `ToolExecResult` 三件套，全局 `toolRegistry` 提供 `register` / `unregisterBySource` / `list` / `get`，按注册源分组卸载。
 - `agent/tools/bash.ts`：`bash -lc` 执行，AbortSignal + timeout 共用同一控制器，输出尾部按行/字节双阈值截断。cwd 不固定，模型用 `cd` 自由切换。
-- `agent/workspace.ts` + `agent/system-prompt.ts`：在 `~/.aos/workspace/` 提供自有工作区并写入 system prompt，sidecar 启动时 `ensureWorkspace()` 幂等创建。
+- `agent/workspace.ts` + `agent/system-prompt.ts`：在 `~/.notch-agent/workspace/` 提供自有工作区并写入 system prompt，sidecar 启动时 `ensureWorkspace()` 幂等创建。
 - `agent/conversation.ts` 重构：从 `prompt + reply + finalAssistant` 三字段改成扁平 `_messages: Message[]` + 每个 turn 的 `[messageStart, messageEnd)` range。turn 元数据负责 wire/UI 分组，LLM 历史是真源。
 - `agent/loop.ts`：`runTurn` 加 tool 子循环，最多 `MAX_TOOL_ROUNDS = 25` 轮；每轮把 `assistant` / `toolResult` 追加进 conversation，`uiToolCall { phase: "called" | "result" }` 通知 Shell。错误（未知工具 / 参数校验失败 / handler 抛错）一律转成 isError 的 ToolResultMessage 让模型自纠，不打断 turn。
 - 新增 wire 方法 `ui.toolCall` 与对应 `UIToolCallParams`。
@@ -47,7 +47,7 @@ s04 起的节（Subagent / Skills 等）现在都可以在 s03 落成的 session
 
 ## s06 实现摘要
 
-- 设计选型只做参考实现的 Layer 2 + Layer 3 入口，**故意不做 Layer 1**（原文 `micro_compact` 那种边跑边替换 tool_result 的策略）：替换会破坏 prompt cache 的稳定前缀，且在 AOS 这套规模上收益有限——Claude Code 真实实现里这个策略也是默认关闭并仅在 60 分钟空档时才触发。
+- 设计选型只做参考实现的 Layer 2 + Layer 3 入口，**故意不做 Layer 1**（原文 `micro_compact` 那种边跑边替换 tool_result 的策略）：替换会破坏 prompt cache 的稳定前缀，且在 Notch Agent 这套规模上收益有限——Claude Code 真实实现里这个策略也是默认关闭并仅在 60 分钟空档时才触发。
 - `agent/compact/` 子模块：`prompt.ts` 给 summarization 单独的 system prompt（NO_TOOLS preamble + 4 段结构 Intent/Progress/Current/Anchors，对话场景导向，不是 coding-only）；`manager.ts` 暴露 `compactConversation(session, model)` 核心 + `autoCompactIfNeeded(session, model)` 自动路径包装；`breaker.ts` 维护按 sessionId 分桶的连续失败计数器（默认 3 次失败后本 session auto 路径熔断；手动入口不查熔断）。
 - `Conversation` 新增 `lastInputTokens` getter + `recordInputTokens()`，loop 在每个 LLM round 完成后从 `final.usage.input` 抽出写入；这是给 auto-compact 阈值检查的真相源。新增 `compact(activeTurnId, summaryText)`：把 `_messages` 重写为 `[boundary(<compactionBoundary turns=N at=ts/>), summary([Compressed]\n\n<text>), ...活跃 turn slice]`，prune `_turns` 到只剩活跃 turn 并把它的 range 扩展覆盖整个新 buffer（避免 boundary/summary 落在任何 range 之外被 `llmMessages()` 漏掉）。
 - `agent/loop.ts`：`runTurn` 入口（model 解析后、while 循环前）调 `autoCompactIfNeeded`，触发条件 `model.contextWindow - convo.lastInputTokens < AUTO_COMPACT_REMAINING_THRESHOLD = 20_000`。生命周期通过 `ui.compact { phase: "started" | "done" | "failed" }` 投到 wire；compact 失败不 fatal，turn 继续以原始（超尺寸）历史前进。`agent.reset` 内增加 `compactBreaker.forget(sessionId)` 钩。

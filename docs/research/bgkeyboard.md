@@ -1,12 +1,12 @@
 # Background Keyboard
 
-This document records AOS's current background keyboard event path. It builds
+This document records Notch Agent's current background keyboard event path. It builds
 on the same front-window preservation contract as `docs/research/bgclick.md`,
 but keyboard delivery is separate from mouse delivery.
 
 ## Goal
 
-Given a visible target window, AOS can deliver keyboard input to the target
+Given a visible target window, Notch Agent can deliver keyboard input to the target
 process while preserving the user's current front app/window:
 
 - Type Unicode text into the target's currently focused field.
@@ -19,7 +19,7 @@ process while preserving the user's current front app/window:
 
 File:
 
-- `Sources/AOSComputerUseKit/Input/BackgroundKeyboardEvent.swift`
+- `Sources/ComputerUseKit/Input/BackgroundKeyboardEvent.swift`
 
 The model is intentionally separate from the poster implementation:
 
@@ -38,16 +38,16 @@ Supported key names match the CUA driver vocabulary: `return`, `tab`,
 
 File:
 
-- `Sources/AOSComputerUseKit/Input/KeyboardEventPoster.swift`
+- `Sources/ComputerUseKit/Input/KeyboardEventPoster.swift`
 
-Keyboard events are pid-scoped. AOS creates `CGEvent` keyboard down/up events
+Keyboard events are pid-scoped. Notch Agent creates `CGEvent` keyboard down/up events
 and posts them to the target pid through:
 
 ```text
 SLEventPostToPid(pid, event)
 ```
 
-Before posting, AOS attaches a SkyLight authentication envelope:
+Before posting, Notch Agent attaches a SkyLight authentication envelope:
 
 ```text
 SLSEventAuthenticationMessage.messageWithEventRecord(eventRecord, pid, version: 0)
@@ -55,7 +55,7 @@ SLEventSetAuthenticationMessage(event, message)
 ```
 
 This mirrors the CUA keyboard route that reaches Chromium/Electron keyboard
-pipelines when public `CGEvent.postToPid` is insufficient. Unlike CUA, AOS
+pipelines when public `CGEvent.postToPid` is insufficient. Unlike CUA, Notch Agent
 does not silently fall back to the public route: missing private symbols,
 missing event records, or missing auth messages fail loudly as
 `ComputerUseError.keyboardEventUnavailable`.
@@ -93,7 +93,7 @@ Unknown key names fail before any event is posted.
 
 File:
 
-- `Sources/AOSComputerUseKit/ComputerUseCore.swift`
+- `Sources/ComputerUseKit/ComputerUseCore.swift`
 
 `ComputerUseCore.postKeyboardEvent` runs this chain:
 
@@ -117,7 +117,7 @@ target process's focused element rather than a point inside the window.
 
 ## CLI Surface
 
-启动 `.build/debug/AOSComputerUseCLI interactive` 后，在 palette 中执行：
+启动 `.build/debug/ComputerUseCLI interactive` 后，在 palette 中执行：
 
 1. 选择 `start-app-session`，按 App / Window prompt 选择目标。
 2. 选择 `type-text`，在 Window 菜单选择当前 session 的目标窗口，并按 prompt 输入 text 和可选 delay。
@@ -127,7 +127,7 @@ target process's focused element rather than a point inside the window.
 
 显式 session 命令也暴露在 CLI 中：
 
-在 CLI 中执行 `.build/debug/AOSComputerUseCLI interactive` 后，通过 Command 菜单选择
+在 CLI 中执行 `.build/debug/ComputerUseCLI interactive` 后，通过 Command 菜单选择
 `start-app-session` 和 `stop-app-session`。
 
 成对 start/stop 需要同一个 `ComputerUseCore` lifetime；当前 CLI 只保留 interactive
@@ -144,7 +144,7 @@ CLI modifier aliases:
 ## Known Limits
 
 - The target window must be visible and owned by the requested pid.
-- Keyboard input goes to the target process's current focused element; AOS does
+- Keyboard input goes to the target process's current focused element; Notch Agent does
   not yet provide element-index pre-focus for keyboard events.
 - Minimized windows are not supported for keyboard commit events.
 - Validation is unit-level. Live app validation should cover at least a native

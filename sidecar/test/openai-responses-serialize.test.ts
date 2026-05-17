@@ -46,7 +46,7 @@ function emptyUsage() {
 }
 
 function makeContext(messages: Context["messages"]): Context {
-  return { systemPrompt: "you are AOS", messages, tools: [] };
+  return { systemPrompt: "you are Notch Agent", messages, tools: [] };
 }
 
 test("assistant thinking + toolCall flatten to top-level reasoning + function_call items", () => {

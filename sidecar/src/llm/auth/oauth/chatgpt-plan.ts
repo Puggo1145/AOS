@@ -43,8 +43,8 @@ export const CHATGPT_PLAN_REDIRECT_PORT = 1455;
 export const CHATGPT_PLAN_REDIRECT_PATH = "/auth/callback";
 export const CHATGPT_PLAN_REDIRECT_URI = `http://localhost:${CHATGPT_PLAN_REDIRECT_PORT}${CHATGPT_PLAN_REDIRECT_PATH}`;
 /// `originator` identifies which client variant is initiating the flow.
-/// Codex CLI uses "codex_cli_rs"; pi-mono uses "pi". AOS uses its own.
-export const CHATGPT_PLAN_ORIGINATOR = "aos";
+/// Codex CLI uses "codex_cli_rs"; pi-mono uses "pi". Notch Agent uses its own.
+export const CHATGPT_PLAN_ORIGINATOR = "notch";
 /// JWT claim path that carries the `chatgpt_account_id`. Required for
 /// downstream API calls.
 const JWT_CLAIM_PATH = "https://api.openai.com/auth";

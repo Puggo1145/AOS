@@ -2,12 +2,12 @@
 
 ## 目标
 
-定义 AOS Shell 的 Notch UI 视觉与交互契约。这一层是用户与 agent 的唯一入口：
+定义 Notch Agent Shell 的 Notch UI 视觉与交互契约。这一层是用户与 agent 的唯一入口：
 
 - 提供 closed / popping / opened 三态视觉，绑定到屏幕物理刘海
 - 闭合态显示前台 app icon 与 agent 状态颜文字，作为「agent 在线感」的最小持续表达
 - 展开态作为 prompt 输入面板，承载 context chip 选取、流式 assistant 文本、工具调用、设置与会话历史入口
-- 与 `AOSOSSenseKit.SenseStore.context` 单向绑定（live mirror），与 `AgentService` 双向绑定（事件 + submit）
+- 与 `OSSenseKit.SenseStore.context` 单向绑定（live mirror），与 `AgentService` 双向绑定（事件 + submit）
 
 ## 非目标
 
@@ -17,7 +17,7 @@
 
 ## 状态机
 
-参考 `docs/guide/notch-dev-guide.md` §4 的 closed / popping / opened 三态范式，AOS 收敛如下：
+参考 `docs/guide/notch-dev-guide.md` §4 的 closed / popping / opened 三态范式，Notch Agent 收敛如下：
 
 ```
 closed ──hover into hot rect──▶ popping ──click in hot rect──▶ opened
@@ -232,7 +232,7 @@ chip 选中状态：本轮所有 chip **默认选中、不可取消**（degraded
 | 提交后行为 | 清空文本；`.focused` 保持 true |
 | ESC | 由 NotchViewModel 的 keyDown monitor 捕获，关闭 panel + `AgentService.cancel()`，TextField 不自定义处理 |
 
-`citedContext` 由 NotchViewModel 在 submit 时从 `SenseStore.context` 投影。投影发生在 Shell 进程内，`SenseContext` 的 live model 不直接序列化（参见 `docs/designs/os-sense.md` "与 AOS 主进程集成"）。
+`citedContext` 由 NotchViewModel 在 submit 时从 `SenseStore.context` 投影。投影发生在 Shell 进程内，`SenseContext` 的 live model 不直接序列化（参见 `docs/designs/os-sense.md` "与 Notch Agent 主进程集成"）。
 
 assistantText 渲染于输入框上方：`AgentService.assistantText` 由 `ui.token` notification 累加（参见 `docs/designs/rpc-protocol.md` §"流式语义"）。新 turn 开始时由 `AgentService` 重置为空。
 
@@ -308,19 +308,19 @@ ViewModel 不写 `SenseStore`、不写 RPCClient；`AgentService` / `ConfigServi
 
 ## 包边界
 
-所有 Notch UI 代码在 `Sources/AOSShell/Notch/` 下按 feature 分组：
+所有 Notch UI 代码在 `Sources/Shell/Notch/` 下按 feature 分组：
 `Composer/`、`Conversation/`、`Settings/`、`Onboarding/`、`Chrome/`、`Commands/`、`Theme/`。依赖方向：
 
 ```
-AOSShell/Notch/  ──depends on──▶  AOSOSSenseKit (SenseStore, SenseContext, BehaviorEnvelope)
-                 ──depends on──▶  AOSRPCSchema (CitedContext, ui.* params)
-                 ──depends on──▶  AOSShell/Agent (AgentService)
+Shell/Notch/  ──depends on──▶  OSSenseKit (SenseStore, SenseContext, BehaviorEnvelope)
+                 ──depends on──▶  RPCSchema (CitedContext, ui.* params)
+                 ──depends on──▶  Shell/Agent (AgentService)
 
-AOSOSSenseKit   ──must NOT import──▶ AOSShell/Notch/*
-AOSRPCSchema    ──must NOT import──▶ AOSShell/Notch/*  (also no SwiftUI)
+OSSenseKit   ──must NOT import──▶ Shell/Notch/*
+RPCSchema    ──must NOT import──▶ Shell/Notch/*  (also no SwiftUI)
 ```
 
-`AOSRPCSchema` 与 `AOSOSSenseKit` 都不应出现 SwiftUI / AppKit UI 类型。NotchViewModel 的 input（如 `BehaviorEnvelope`）来自 SenseKit 的 Codable 类型；不允许在 SenseKit 中定义 SwiftUI `View` / `Color`。
+`RPCSchema` 与 `OSSenseKit` 都不应出现 SwiftUI / AppKit UI 类型。NotchViewModel 的 input（如 `BehaviorEnvelope`）来自 SenseKit 的 Codable 类型；不允许在 SenseKit 中定义 SwiftUI `View` / `Color`。
 
 ## 风险 / 已知问题
 

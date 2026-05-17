@@ -1,6 +1,6 @@
-// AOS Shell ↔ Bun Sidecar JSON-RPC schema (TypeScript side).
+// Notch Agent Shell ↔ Bun Sidecar JSON-RPC schema (TypeScript side).
 //
-// This file is hand-maintained to mirror `Sources/AOSRPCSchema/*.swift` field
+// This file is hand-maintained to mirror `Sources/RPCSchema/*.swift` field
 // for field. Source of truth is the Swift Codable types per
 // docs/designs/rpc-protocol.md §"Schema 单一信源". Drift is caught by the
 // `tests/rpc-fixtures/*.json` byte-equal conformance tests on both sides.
@@ -11,7 +11,7 @@
 
 /// Bumped per docs/designs/rpc-protocol.md §"版本协商":
 /// MAJOR mismatch ⇒ Shell rejects handshake; MINOR/PATCH ⇒ warn + accept.
-export const AOS_PROTOCOL_VERSION = "2.0.0" as const;
+export const NOTCH_PROTOCOL_VERSION = "2.0.0" as const;
 
 // ---------------------------------------------------------------------------
 // JSON-RPC envelopes
@@ -61,7 +61,7 @@ export const RPCErrorCode = {
   methodNotFound: -32601,
   invalidParams: -32602,
   internalError: -32603,
-  // AOS application generic segment
+  // Notch Agent application generic segment
   unhandshaked: -32000,
   payloadTooLarge: -32001,
   timeout: -32002,
@@ -790,14 +790,14 @@ export interface ProviderLogoutResult {
 
 // ---------------------------------------------------------------------------
 // config.* — Shell → Bun. Global user config (selected provider/model, etc).
-// Backed by ~/.aos/config.json. Catalog snapshot is included in `config.get`
+// Backed by ~/.notch-agent/config.json. Catalog snapshot is included in `config.get`
 // so the Shell settings UI doesn't need a second RPC.
 // ---------------------------------------------------------------------------
 
 /// One picker row for a model's reasoning effort.
 ///   - `value`: the wire string the sidecar sends to the provider
 ///     (e.g. `"high"`, `"xhigh"`, `"max"`). Stored verbatim in
-///     `~/.aos/config.json` when the user picks it.
+///     `~/.notch-agent/config.json` when the user picks it.
 ///   - `label`: human-readable name shown in the picker.
 /// Each model declares its own list — there is no universal effort
 /// vocabulary across providers.

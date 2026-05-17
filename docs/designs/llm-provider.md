@@ -2,7 +2,7 @@
 
 ## 目标
 
-为 AOS sidecar 提供唯一一条 LLM 调用路径，让 agent loop 只看到：
+为 Notch Agent sidecar 提供唯一一条 LLM 调用路径，让 agent loop 只看到：
 
 ```ts
 stream(model, context, options): AssistantMessageEventStream
@@ -15,7 +15,7 @@ stream(model, context, options): AssistantMessageEventStream
 - 一份 Model catalog（首发 `gpt-5-2`）
 - 完整的 `transformMessages` / `isContextOverflow` / 事件流统一基础设施
 
-参见 `docs/guide/llm-providers-guide.md` §0–§13 作为通用参考。本文是 AOS 自身的具体落地契约。
+参见 `docs/guide/llm-providers-guide.md` §0–§13 作为通用参考。本文是 Notch Agent 自身的具体落地契约。
 
 ## 非目标
 
@@ -70,7 +70,7 @@ stream(model, context, options): AssistantMessageEventStream
 │                                    ▼                          │
 │                          ┌─────────────────────────────────┐  │
 │                          │ auth/oauth/chatgpt-plan.ts      │  │
-│                          │  storage: ~/.aos/auth/          │  │
+│                          │  storage: ~/.notch-agent/auth/          │  │
 │                          │           chatgpt.json (0600)   │  │
 │                          │  - PKCE login (CLI only)        │  │
 │                          │  - read at runtime              │  │
@@ -83,14 +83,14 @@ stream(model, context, options): AssistantMessageEventStream
 
 ## 两层抽象（Provider × Api）
 
-完全采用 `docs/guide/llm-providers-guide.md` §1.1 的两层切分。AOS 本轮落地的具体组合：
+完全采用 `docs/guide/llm-providers-guide.md` §1.1 的两层切分。Notch Agent 本轮落地的具体组合：
 
 | 维度 | 值 |
 |---|---|
 | `api` | `"openai-responses"` |
 | `provider` | `"chatgpt-plan"` |
 | baseUrl | `https://chatgpt.com/backend-api/codex`（待 OAuth 端点最终确认时按真实 endpoint 修订；本设计的边界是「baseUrl 是 model 字段，可在 catalog 与 OAuth provider 间统一」） |
-| 鉴权 | OAuth PKCE，token 持久化到 `~/.aos/auth/chatgpt.json` |
+| 鉴权 | OAuth PKCE，token 持久化到 `~/.notch-agent/auth/chatgpt.json` |
 
 `Model<TApi>.api` 把两者串起来；`stream()` 只看 `model.api` 来路由 ApiProvider。Provider 身份只参与鉴权与 baseUrl 决策。
 
@@ -98,7 +98,7 @@ stream(model, context, options): AssistantMessageEventStream
 
 完全采用 `docs/guide/llm-providers-guide.md` §2 的 Message / Content 与 §3 的 Event 协议，**字段名与 discriminated union variants 不变**。
 
-AOS 本轮的简化只发生在「实际产生 / 消费哪些 variant」上，不删任何类型字段：
+Notch Agent 本轮的简化只发生在「实际产生 / 消费哪些 variant」上，不删任何类型字段：
 
 | 类型 | 本轮使用情况 |
 |---|---|
@@ -160,7 +160,7 @@ if (apiKey === "<authenticated>") {
 3. 打印 / 自动打开 authorize URL：
      https://auth.openai.com/oauth/authorize
        ?response_type=code
-       &client_id=<aos client id>
+       &client_id=<notch client id>
        &redirect_uri=<encoded>
        &scope=<scope>
        &state=<random>
@@ -172,10 +172,10 @@ if (apiKey === "<authenticated>") {
      grant_type=authorization_code
      code=<code>
      redirect_uri=<same>
-     client_id=<aos client id>
+     client_id=<notch client id>
      code_verifier=<verifier>
    → { access_token, refresh_token, expires_in, account_id }
-6. 写入 ~/.aos/auth/chatgpt.json，文件模式 0600
+6. 写入 ~/.notch-agent/auth/chatgpt.json，文件模式 0600
 7. 关闭 loopback server，进程退出 0
 ```
 
@@ -183,7 +183,7 @@ if (apiKey === "<authenticated>") {
 
 ### Token 持久化
 
-`~/.aos/auth/chatgpt.json`：
+`~/.notch-agent/auth/chatgpt.json`：
 
 ```jsonc
 {
@@ -194,7 +194,7 @@ if (apiKey === "<authenticated>") {
 }
 ```
 
-文件权限：`fs.chmod(0o600)`，目录 `~/.aos/auth/` 创建时 `0o700`。
+文件权限：`fs.chmod(0o600)`，目录 `~/.notch-agent/auth/` 创建时 `0o700`。
 
 ### Refresh 策略
 
@@ -215,7 +215,7 @@ bun run sidecar/src/auth/oauth/chatgpt-plan.ts login
 
 - 完整跑 PKCE flow
 - 不通过 RPC、不依赖 sidecar 主进程
-- 用户首次使用 AOS 前手动跑一次
+- 用户首次使用 Notch Agent 前手动跑一次
 - 多次执行会覆盖现有 token 文件
 
 **修订（onboarding 设计）**：sidecar 运行时**允许**发起 OAuth login，承接来自 Shell 的 `provider.startLogin` 请求。原约束（"sidecar 运行时永不发起 login"，"避免与 stdio RPC 冲突"）不成立——loopback HTTP 是独立 socket，与 stdio NDJSON 物理隔离；浏览器由 Shell 通过 `NSWorkspace.open` 打开，sidecar 进程内只 `listen 127.0.0.1:0` 接 callback。
@@ -328,7 +328,7 @@ stream.result() →
 
 ## 包边界 / 模块结构
 
-完全采用 `docs/guide/llm-providers-guide.md` §13 的目录组织，AOS 实例化为：
+完全采用 `docs/guide/llm-providers-guide.md` §13 的目录组织，Notch Agent 实例化为：
 
 ```
 sidecar/src/llm/
@@ -364,7 +364,7 @@ sidecar/src/llm/
     oauth/
       types.ts                     # OAuthProviderInterface
       chatgpt-plan.ts              # PKCE + storage + refresh + login CLI
-      storage.ts                   # ~/.aos/auth/chatgpt.json 读写
+      storage.ts                   # ~/.notch-agent/auth/chatgpt.json 读写
 ```
 
 agent loop 的 import 边界（**强契约**）：
@@ -440,7 +440,7 @@ agent.submit(turnId, prompt, citedContext)
 | Stream 中途 401（token 过期且 refresh 失败 / 撤销） | 流被服务端切断，事件未能完整发出 | provider catch → `error` 事件 → agent loop 转 `ui.error { code: -32003 }`；下一次 submit 前用户必须重跑 login |
 | Bun 版本对 `fetch` body streaming 与 AbortSignal 的支持 | 异常 abort 可能延迟到下一个 chunk | abort handler 在 `stream()` 顶层主动 push `error { reason: "aborted" }` |
 | OAuth refresh token 撤销 / rotate | 老 refreshToken 失效 → refresh 失败 | refresh 失败时直接抛 "请重新登录"，不做静默 retry |
-| `~/.aos/auth/chatgpt.json` 同时被多个 sidecar 实例读写 | rare 但存在 | refresh 用 atomic rename 写出；多实例并发竞争属于已知小窗口，下一次读会拿最新 |
+| `~/.notch-agent/auth/chatgpt.json` 同时被多个 sidecar 实例读写 | rare 但存在 | refresh 用 atomic rename 写出；多实例并发竞争属于已知小窗口，下一次读会拿最新 |
 | OpenAI Responses 协议未来字段变更 | 事件类型新增导致未知 variant | provider 内部对未识别的 SSE event 仅记 stderr log，不抛错；新 variant 等显式实现 |
 
 ## 不做的事

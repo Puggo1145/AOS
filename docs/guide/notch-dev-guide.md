@@ -1,6 +1,6 @@
 # Notch App 开发指南
 
-基于对 NotchDrop 的通读整理，抽取 notch 类应用的通用设计模式与关键实现。不包含 AOS 业务逻辑，聚焦「如何把一个 SwiftUI 视图稳定地挂在刘海周围并响应悬停 / 点击 / 拖拽」。
+基于对 NotchDrop 的通读整理，抽取 notch 类应用的通用设计模式与关键实现。不包含 Notch Agent 业务逻辑，聚焦「如何把一个 SwiftUI 视图稳定地挂在刘海周围并响应悬停 / 点击 / 拖拽」。
 
 完整参考：playground/NotchDrop/
 

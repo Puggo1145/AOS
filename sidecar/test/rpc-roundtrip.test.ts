@@ -1,4 +1,4 @@
-// Byte-equal fixture roundtrip tests for the TS side of the AOS RPC schema.
+// Byte-equal fixture roundtrip tests for the TS side of the Notch Agent RPC schema.
 //
 // For every fixture in `tests/rpc-fixtures/*.json`:
 //   1. Read raw bytes
@@ -7,7 +7,7 @@
 //   4. Assert the canonical re-serialization is byte-equal to the original
 //
 // This guards `sidecar/src/rpc/rpc-types.ts` against schema drift. The Swift
-// side runs the same assertion in `Tests/AOSRPCSchemaTests/RoundtripTests.swift`.
+// side runs the same assertion in `Tests/RPCSchemaTests/RoundtripTests.swift`.
 
 import { test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import {
-  AOS_PROTOCOL_VERSION,
+  NOTCH_PROTOCOL_VERSION,
   RPCMethod,
   type RPCRequest,
   type RPCNotification,
@@ -102,8 +102,8 @@ test("rpc.hello fixture roundtrips byte-equal", () => {
   const { parsed } = loadFixture("rpc.hello.json");
   const req = parsed as RPCRequest<HelloParams>;
   expect(req.method).toBe(RPCMethod.rpcHello);
-  expect(req.params.protocolVersion).toBe(AOS_PROTOCOL_VERSION);
-  expect(req.params.clientInfo.name).toBe("aos-sidecar");
+  expect(req.params.protocolVersion).toBe(NOTCH_PROTOCOL_VERSION);
+  expect(req.params.clientInfo.name).toBe("notch-agent-sidecar");
 });
 
 test("rpc.ping fixture roundtrips byte-equal", () => {
@@ -456,6 +456,6 @@ test("session.listChanged fixture roundtrips byte-equal", () => {
   expect(note.method).toBe(RPCMethod.sessionListChanged);
 });
 
-test("AOS_PROTOCOL_VERSION equals 2.0.0", () => {
-  expect(AOS_PROTOCOL_VERSION).toBe("2.0.0");
+test("NOTCH_PROTOCOL_VERSION equals 2.0.0", () => {
+  expect(NOTCH_PROTOCOL_VERSION).toBe("2.0.0");
 });

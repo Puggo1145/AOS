@@ -8,8 +8,8 @@ import { createBashTool } from "../src/agent/tools/bash";
 import type { ToolExecContext } from "../src/agent/tools/types";
 import { getDefaultModel, PROVIDER_IDS } from "../src/llm";
 
-const testHome = realpathSync(mkdtempSync(join(tmpdir(), "aos-bash-tool-")));
-const testWorkspace = join(testHome, ".aos", "workspace");
+const testHome = realpathSync(mkdtempSync(join(tmpdir(), "notch-agent-bash-tool-")));
+const testWorkspace = join(testHome, ".notch-agent", "workspace");
 
 function ctxWith(signal: AbortSignal): ToolExecContext {
   return {
@@ -38,7 +38,7 @@ test("captures stdout on a successful command", async () => {
   expect(result.details?.exitCode).toBe(0);
 });
 
-test("starts commands in the AOS workspace", async () => {
+test("starts commands in the Notch Agent workspace", async () => {
   const tool = createTestBashTool();
   const result = await tool.execute({ command: "pwd" }, ctxWith(new AbortController().signal));
   expect(result.isError).toBe(false);
@@ -46,7 +46,7 @@ test("starts commands in the AOS workspace", async () => {
   expect(text).toBe(testWorkspace);
 });
 
-test("falls back to the process cwd when the AOS workspace was deleted while running", async () => {
+test("falls back to the process cwd when the Notch Agent workspace was deleted while running", async () => {
   rmSync(testWorkspace, { recursive: true, force: true });
   try {
     const tool = createTestBashTool();
@@ -54,7 +54,7 @@ test("falls back to the process cwd when the AOS workspace was deleted while run
     expect(result.isError).toBe(false);
     const text = (result.content[0] as { type: "text"; text: string }).text.trim();
     expect(text).toContain("cwd fallback");
-    expect(text).toContain(`AOS workspace ${testWorkspace} was unavailable`);
+    expect(text).toContain(`Notch Agent workspace ${testWorkspace} was unavailable`);
     expect(text.split("\n").at(-1)).toBe(process.cwd());
     expect(result.details?.cwdFallback?.requestedCwd).toBe(testWorkspace);
     expect(result.details?.cwdFallback?.actualCwd).toBe(process.cwd());
