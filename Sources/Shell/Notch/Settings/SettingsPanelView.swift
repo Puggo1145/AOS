@@ -33,6 +33,7 @@ struct SettingsPanelView: View {
     @State private var apiKeyDraft: String = ""
     @State private var apiKeySaveError: String? = nil
     @State private var apiKeySaving: Bool = false
+    @State private var permissionRequestError: String? = nil
     @AppStorage("notch-agent.conversationDisplayMode") private var displayModeRaw: String = ConversationDisplayMode.history.rawValue
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -338,9 +339,15 @@ struct SettingsPanelView: View {
                         permission: p,
                         status: permissionStatus(for: p),
                         onOpenSettings: {
-                            permissionsService.openSystemSettings(for: p)
+                            handlePermissionSettingsAction(p)
                         }
                     )
+                }
+                if let permissionRequestError {
+                    Text(permissionRequestError)
+                        .notchFont(size: 11)
+                        .foregroundStyle(.red.opacity(0.9))
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -351,7 +358,7 @@ struct SettingsPanelView: View {
             switch permission {
             case .screenRecording, .accessibility:
                 return denied.contains(permission)
-            case .automation:
+            case .localFiles, .automation:
                 return false
             }
         }
@@ -364,13 +371,39 @@ struct SettingsPanelView: View {
         switch permission {
         case .screenRecording, .accessibility:
             return denied.contains(permission) ? .disabled : .granted
-        case .automation:
+        case .localFiles, .automation:
             return .opensSettings
         }
     }
 
     private func permissionStatus(for permission: Permission) -> PermissionSettingsStatus {
-        Self.permissionStatus(for: permission, denied: permissionsService.state.denied)
+        switch permission {
+        case .localFiles:
+            return permissionsService.localFilesOnboardingAcknowledged ? .granted : .opensSettings
+        case .accessibility, .screenRecording, .automation:
+            return Self.permissionStatus(for: permission, denied: permissionsService.state.denied)
+        }
+    }
+
+    private func handlePermissionSettingsAction(_ permission: Permission) {
+        switch permission {
+        case .localFiles:
+            guard !permissionsService.localFilesOnboardingAcknowledged else {
+                permissionsService.openSystemSettings(for: permission)
+                return
+            }
+            Task {
+                do {
+                    permissionRequestError = nil
+                    try await permissionsService.request(.localFiles)
+                } catch {
+                    permissionRequestError = "Permission request failed: \(error)"
+                }
+            }
+        case .accessibility, .screenRecording, .automation:
+            permissionRequestError = nil
+            permissionsService.openSystemSettings(for: permission)
+        }
     }
 
     // MARK: - Conversation display mode

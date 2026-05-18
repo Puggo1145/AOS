@@ -123,6 +123,7 @@ public struct VisualMirror: @unchecked Sendable, Equatable {
 public enum Permission: Hashable, Sendable, CaseIterable {
     case accessibility
     case screenRecording
+    case localFiles
     case automation
 }
 

@@ -6,8 +6,9 @@ import OSSenseKit
 // First leg of the onboard flow: gate the user through the runtime
 // permissions OS Sense + Computer Use need before the provider sign-in
 // step. Screen Recording / Accessibility are live probes; Automation has
-// no safe preflight API, so its step runs a Finder AppleScript probe that
-// asks macOS to create the Notch Agent -> Finder Automation consent row.
+// no safe preflight API, and neither do Files & Folders domains, so those
+// steps run small read-only probes that ask macOS to create the relevant
+// TCC consent rows before tools run.
 //
 // One permission card at a time. Tapping "Grant Access" triggers the
 // system prompt + opens the matching Privacy pane in System Settings
@@ -40,6 +41,8 @@ struct PermissionOnboardPanelView: View {
         switch permission {
         case .screenRecording, .accessibility:
             return permissionsService.state.denied.contains(permission)
+        case .localFiles:
+            return !permissionsService.localFilesOnboardingAcknowledged
         case .automation:
             return !permissionsService.automationOnboardingAcknowledged
         }
@@ -207,6 +210,8 @@ private extension Permission {
             return "Lets Notch Agent read and operate app interfaces in the background, without stealing focus."
         case .screenRecording:
             return "Lets Notch Agent see what's on your screen so the agent stays grounded in your current task."
+        case .localFiles:
+            return "Lets Notch Agent read Desktop, Documents, and Downloads when you ask it to inspect files."
         case .automation:
             return "Lets Notch Agent use Finder AppleScript to read selected file URLs for precise OS Sense context."
         }

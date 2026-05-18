@@ -50,6 +50,7 @@ struct PermissionsServiceTests {
                     screenRecordingGranted: sr
                 )
                 #expect(!denied.contains(.automation))
+                #expect(!denied.contains(.localFiles))
             }
         }
     }
@@ -62,24 +63,29 @@ struct PermissionsServiceTests {
     }
 
     @MainActor
-    @Test("Automation onboarding acknowledgement is persisted separately from probed permissions")
-    func automationAcknowledgementPersistsSeparately() {
+    @Test("Non-preflight onboarding acknowledgements are persisted separately from probed permissions")
+    func nonPreflightAcknowledgementsPersistSeparately() {
         let suiteName = "notch-agent.permissions.tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
 
         let svc = PermissionsService(userDefaults: defaults)
         #expect(!svc.automationOnboardingAcknowledged)
+        #expect(!svc.localFilesOnboardingAcknowledged)
         #expect(svc.allGranted)
         #expect(!svc.onboardingPermissionsComplete)
 
         svc.acknowledgeAutomationOnboarding()
+        #expect(!svc.onboardingPermissionsComplete)
+        svc.acknowledgeLocalFilesOnboarding()
 
         #expect(svc.automationOnboardingAcknowledged)
+        #expect(svc.localFilesOnboardingAcknowledged)
         #expect(svc.allGranted)
         #expect(svc.onboardingPermissionsComplete)
         let restored = PermissionsService(userDefaults: defaults)
         #expect(restored.automationOnboardingAcknowledged)
+        #expect(restored.localFilesOnboardingAcknowledged)
     }
 
     @MainActor
@@ -95,6 +101,7 @@ struct PermissionsServiceTests {
             automationConsentProbe: {
                 await probeRecorder.record()
             },
+            localFilesConsentProbe: {},
             openSystemSettings: { _ in }
         )
 
@@ -104,6 +111,56 @@ struct PermissionsServiceTests {
         #expect(svc.automationOnboardingAcknowledged)
         let restored = PermissionsService(userDefaults: defaults)
         #expect(restored.automationOnboardingAcknowledged)
+    }
+
+    @MainActor
+    @Test("Local files request acknowledges only after user-folder probe succeeds")
+    func localFilesRequestAcknowledgesOnlyAfterUserFolderProbeSucceeds() async throws {
+        let suiteName = "notch-agent.permissions.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let probeRecorder = ProbeRecorder()
+
+        let svc = PermissionsService(
+            userDefaults: defaults,
+            automationConsentProbe: {},
+            localFilesConsentProbe: {
+                await probeRecorder.record()
+            },
+            openSystemSettings: { _ in }
+        )
+
+        try await svc.request(.localFiles)
+
+        #expect(await probeRecorder.count == 1)
+        #expect(svc.localFilesOnboardingAcknowledged)
+        let restored = PermissionsService(userDefaults: defaults)
+        #expect(restored.localFilesOnboardingAcknowledged)
+    }
+
+    @MainActor
+    @Test("Local files request does not acknowledge when user-folder probe fails")
+    func localFilesRequestDoesNotAcknowledgeWhenUserFolderProbeFails() async {
+        struct ProbeFailure: Error {}
+        let suiteName = "notch-agent.permissions.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+
+        let svc = PermissionsService(
+            userDefaults: defaults,
+            automationConsentProbe: {},
+            localFilesConsentProbe: {
+                throw ProbeFailure()
+            },
+            openSystemSettings: { _ in }
+        )
+
+        await #expect(throws: ProbeFailure.self) {
+            try await svc.request(.localFiles)
+        }
+        #expect(!svc.localFilesOnboardingAcknowledged)
+        let restored = PermissionsService(userDefaults: defaults)
+        #expect(!restored.localFilesOnboardingAcknowledged)
     }
 
     @MainActor
@@ -119,6 +176,7 @@ struct PermissionsServiceTests {
             automationConsentProbe: {
                 throw ProbeFailure()
             },
+            localFilesConsentProbe: {},
             openSystemSettings: { _ in }
         )
 

@@ -9,6 +9,7 @@
 #   - Keychain service com.notch-agent.apikey   (DeepSeek + future apiKey providers)
 #   - TCC ScreenCapture for com.notch-agent.shell + ad-hoc fallbacks
 #   - TCC Accessibility for com.notch-agent.shell + ad-hoc fallbacks
+#   - TCC Desktop/Documents/Downloads folder grants for com.notch-agent.shell + ad-hoc fallbacks
 #   - TCC AppleEvents for com.notch-agent.shell + ad-hoc fallbacks
 #
 # Not touched:
@@ -98,7 +99,13 @@ echo "==> Resetting Notch Agent's TCC grants"
 # both the canonical id and the ad-hoc identifier ("Shell") that
 # unsigned dev builds used to register under, in case stale records
 # linger from earlier sessions.
-for service in ScreenCapture Accessibility AppleEvents; do
+for service in \
+    ScreenCapture \
+    Accessibility \
+    SystemPolicyDesktopFolder \
+    SystemPolicyDocumentsFolder \
+    SystemPolicyDownloadsFolder \
+    AppleEvents; do
     reset_tcc_service "${service}" "${BUNDLE_ID}"
     reset_tcc_service "${service}" Shell
 done

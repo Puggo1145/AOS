@@ -59,17 +59,18 @@ struct PermissionGlyph: View {
 
 extension Permission {
     static var settingsDisplayOrder: [Permission] {
-        [.screenRecording, .accessibility, .automation]
+        [.screenRecording, .accessibility, .localFiles, .automation]
     }
 
     static var onboardingDisplayOrder: [Permission] {
-        [.screenRecording, .accessibility, .automation]
+        [.screenRecording, .accessibility, .localFiles, .automation]
     }
 
     var displayName: String {
         switch self {
         case .accessibility:    return "Accessibility"
         case .screenRecording:  return "Screen Recording"
+        case .localFiles:       return "Local Files"
         case .automation:       return "Automation"
         }
     }
@@ -81,6 +82,7 @@ extension Permission {
         switch self {
         case .screenRecording:  return .red
         case .accessibility:    return .blue
+        case .localFiles:       return .orange
         case .automation:       return .gray
         }
     }
@@ -106,6 +108,9 @@ extension Permission {
         case .accessibility:
             Image(systemName: "accessibility")
                 .font(.system(size: size * 0.58, weight: .regular))
+        case .localFiles:
+            Image(systemName: "folder")
+                .font(.system(size: size * 0.52, weight: .regular))
         case .automation:
             Image(systemName: "gearshape.2")
                 .font(.system(size: size * 0.50, weight: .regular))

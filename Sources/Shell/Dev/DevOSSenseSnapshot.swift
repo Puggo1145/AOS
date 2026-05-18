@@ -64,6 +64,7 @@ struct DevOSSenseSnapshot: Equatable {
         switch permission {
         case .accessibility: return "Accessibility"
         case .screenRecording: return "Screen Recording"
+        case .localFiles: return "Local Files"
         case .automation: return "Automation"
         }
     }

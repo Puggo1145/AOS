@@ -52,4 +52,32 @@ struct RunScriptTests {
         #expect(!script.contains(#"let rightLabel = "Applications""#))
         #expect(!script.contains("bless --folder"))
     }
+
+    @Test("reset-user-data.sh clears every onboarding TCC service")
+    func resetUserDataClearsEveryOnboardingTCCService() throws {
+        let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let scriptURL = root.appendingPathComponent("Scripts/reset-user-data.sh")
+        let script = try String(contentsOf: scriptURL, encoding: .utf8)
+        let loopStart = try #require(script.range(of: "for service in \\"))
+        let loopTail = script[loopStart.upperBound...]
+        let serviceListEnd = try #require(loopTail.range(of: "; do"))
+        let serviceList = loopTail[..<serviceListEnd.lowerBound]
+        let services = serviceList
+            .split(separator: "\n")
+            .map { line in
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                let withoutContinuation = trimmed.hasSuffix("\\") ? String(trimmed.dropLast()) : trimmed
+                return withoutContinuation.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            .filter { !$0.isEmpty }
+
+        #expect(services == [
+            "ScreenCapture",
+            "Accessibility",
+            "SystemPolicyDesktopFolder",
+            "SystemPolicyDocumentsFolder",
+            "SystemPolicyDownloadsFolder",
+            "AppleEvents",
+        ])
+    }
 }

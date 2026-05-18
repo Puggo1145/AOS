@@ -23,6 +23,9 @@ import ScreenCaptureKit
 //                       TCC fresh on every call; that's why Apple's
 //                       own "Quit & Reopen" prompt exists *for apps
 //                       that don't query the live API*.
+//   - Local Files:      No safe preflight API. Onboarding performs read-only
+//                       directory listings for Desktop, Documents, Downloads
+//                       to create Files & Folders TCC rows before tools run.
 //   - Automation:       No safe preflight API. Onboarding performs a small
 //                       Finder AppleScript read to trigger the TCC prompt,
 //                       then opens the Automation settings pane.
@@ -40,11 +43,14 @@ import ScreenCaptureKit
 @Observable
 public final class PermissionsService {
     private static let automationOnboardingAcknowledgedKey = "notch-agent.permissions.automationOnboardingAcknowledged"
+    private static let localFilesOnboardingAcknowledgedKey = "notch-agent.permissions.localFilesOnboardingAcknowledged"
 
     public private(set) var state: PermissionState = PermissionState(denied: [])
     public private(set) var automationOnboardingAcknowledged: Bool
+    public private(set) var localFilesOnboardingAcknowledged: Bool
 
     private let automationConsentProbe: @Sendable () async throws -> Void
+    private let localFilesConsentProbe: @Sendable () async throws -> Void
     private let openSystemSettingsHandler: @MainActor (Permission) -> Void
 
     /// Whether `SCShareableContent.current` is safe to call as a
@@ -71,15 +77,22 @@ public final class PermissionsService {
         automationConsentProbe: @escaping @Sendable () async throws -> Void = {
             try await PermissionsService.runAutomationConsentProbeScript()
         },
+        localFilesConsentProbe: @escaping @Sendable () async throws -> Void = {
+            try await PermissionsService.runLocalFilesConsentProbe()
+        },
         openSystemSettings: @escaping @MainActor (Permission) -> Void = { permission in
             PermissionsService.openSystemSettingsPane(for: permission)
         }
     ) {
         self.userDefaults = userDefaults
         self.automationConsentProbe = automationConsentProbe
+        self.localFilesConsentProbe = localFilesConsentProbe
         self.openSystemSettingsHandler = openSystemSettings
         self.automationOnboardingAcknowledged = userDefaults.bool(
             forKey: Self.automationOnboardingAcknowledgedKey
+        )
+        self.localFilesOnboardingAcknowledged = userDefaults.bool(
+            forKey: Self.localFilesOnboardingAcknowledgedKey
         )
         // Pre-arm the live probe if we already know a TCC record
         // exists (i.e. permission was previously granted). Avoids
@@ -135,12 +148,17 @@ public final class PermissionsService {
     /// preflight API, so this records that the consent probe has been
     /// presented, not that the grant exists.
     public var onboardingPermissionsComplete: Bool {
-        allGranted && automationOnboardingAcknowledged
+        allGranted && localFilesOnboardingAcknowledged && automationOnboardingAcknowledged
     }
 
     public func acknowledgeAutomationOnboarding() {
         automationOnboardingAcknowledged = true
         userDefaults.set(true, forKey: Self.automationOnboardingAcknowledgedKey)
+    }
+
+    public func acknowledgeLocalFilesOnboarding() {
+        localFilesOnboardingAcknowledged = true
+        userDefaults.set(true, forKey: Self.localFilesOnboardingAcknowledgedKey)
     }
 
     /// Trigger the macOS system prompt for `permission` AND open the
@@ -166,6 +184,9 @@ public final class PermissionsService {
             // poll loop switches to the live probe.
             _ = CGRequestScreenCaptureAccess()
             screenRecordingProbeIsSafe = true
+        case .localFiles:
+            try await localFilesConsentProbe()
+            acknowledgeLocalFilesOnboarding()
         case .automation:
             try await automationConsentProbe()
             acknowledgeAutomationOnboarding()
@@ -183,6 +204,39 @@ public final class PermissionsService {
         try await Task.detached(priority: .userInitiated) {
             try Self.executeAutomationConsentProbeScript()
         }.value
+    }
+
+    /// Performs read-only access to the common user file folders that bash
+    /// tools are likely to touch. macOS Files & Folders consent is scoped by
+    /// folder domain, so this intentionally probes Desktop, Documents, and
+    /// Downloads instead of pretending a single "all files" grant exists.
+    private nonisolated static func runLocalFilesConsentProbe() async throws {
+        try await Task.detached(priority: .userInitiated) {
+            try Self.executeLocalFilesConsentProbe()
+        }.value
+    }
+
+    private nonisolated static func executeLocalFilesConsentProbe() throws {
+        let fileManager = FileManager.default
+        let directories: [FileManager.SearchPathDirectory] = [
+            .desktopDirectory,
+            .documentDirectory,
+            .downloadsDirectory,
+        ]
+
+        for directory in directories {
+            let url = try fileManager.url(
+                for: directory,
+                in: .userDomainMask,
+                appropriateFor: nil,
+                create: false
+            )
+            _ = try fileManager.contentsOfDirectory(
+                at: url,
+                includingPropertiesForKeys: [],
+                options: []
+            )
+        }
     }
 
     private nonisolated static func executeAutomationConsentProbeScript() throws {
@@ -208,6 +262,8 @@ public final class PermissionsService {
             urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
         case .screenRecording:
             urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+        case .localFiles:
+            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders"
         case .automation:
             urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
         }

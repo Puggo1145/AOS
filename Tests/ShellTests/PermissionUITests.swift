@@ -11,6 +11,7 @@ struct PermissionUITests {
         #expect(Permission.settingsDisplayOrder == [
             .screenRecording,
             .accessibility,
+            .localFiles,
             .automation,
         ])
     }
@@ -20,6 +21,7 @@ struct PermissionUITests {
         #expect(Permission.onboardingDisplayOrder == [
             .screenRecording,
             .accessibility,
+            .localFiles,
             .automation,
         ])
     }
@@ -28,12 +30,14 @@ struct PermissionUITests {
     func settingsMissingPermissionsIgnoreAutomationAcknowledgementState() {
         #expect(SettingsPanelView.missingProbeablePermissions(denied: []) == [])
         #expect(SettingsPanelView.missingProbeablePermissions(denied: [.automation]) == [])
-        #expect(SettingsPanelView.missingProbeablePermissions(denied: [.accessibility, .automation]) == [.accessibility])
+        #expect(SettingsPanelView.missingProbeablePermissions(denied: [.localFiles]) == [])
+        #expect(SettingsPanelView.missingProbeablePermissions(denied: [.accessibility, .automation, .localFiles]) == [.accessibility])
     }
 
     @Test("Settings Automation row opens System Settings instead of using reviewed state")
     func settingsAutomationRowOpensSystemSettingsInsteadOfUsingReviewedState() {
         #expect(SettingsPanelView.permissionStatus(for: .automation, denied: []) == .opensSettings)
+        #expect(SettingsPanelView.permissionStatus(for: .localFiles, denied: []) == .opensSettings)
         #expect(SettingsPanelView.permissionStatus(for: .screenRecording, denied: []) == .granted)
         #expect(SettingsPanelView.permissionStatus(for: .screenRecording, denied: [.screenRecording]) == .disabled)
     }
@@ -42,6 +46,7 @@ struct PermissionUITests {
     func automationUsesFinderIconOnlyDuringOnboarding() {
         #expect(PermissionOnboardPanelView.automationIcon(for: .automation) == .finder)
         #expect(PermissionOnboardPanelView.automationIcon(for: .accessibility) == .gear)
+        #expect(PermissionOnboardPanelView.automationIcon(for: .localFiles) == .gear)
         #expect(PermissionGlyph.defaultAutomationIcon == .gear)
     }
 
