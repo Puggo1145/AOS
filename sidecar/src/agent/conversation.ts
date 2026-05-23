@@ -32,7 +32,6 @@
 import type { Message, AssistantMessage, ToolCall, ToolResultContent, ToolResultMessage } from "../llm/types";
 import type {
   CitedContext,
-  ConversationTurnWire,
   TurnStatus,
 } from "../rpc/rpc-types";
 import { buildUserMessage } from "./prompt";
@@ -466,23 +465,6 @@ export class Conversation {
       }
     }
     return stripConsumedToolResultImages(out);
-  }
-
-  /// Wire-format projection for `conversation.turnStarted` and the
-  /// `session.activate` snapshot. Shell only renders prompt + visible
-  /// reply per turn this round; tool-call detail flows over `ui.toolCall`
-  /// notifications and is not (yet) reconstructable from this shape.
-  static toWire(turn: ConversationTurn): ConversationTurnWire {
-    return {
-      id: turn.id,
-      prompt: turn.prompt,
-      citedContext: turn.citedContext,
-      reply: turn.reply,
-      status: turn.status,
-      errorMessage: turn.errorMessage,
-      errorCode: turn.errorCode,
-      startedAt: turn.startedAt,
-    };
   }
 
   private find(turnId: string): StoredConversationTurn | undefined {

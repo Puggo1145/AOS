@@ -10,7 +10,7 @@ import { TurnRegistry } from "../registry";
 import { TodoManager } from "../todos/manager";
 import type { CitedContext } from "../../rpc/rpc-types";
 import { ComputerUseStateCache } from "./computer-use-state-cache";
-import type { SessionId, SessionInfo, SessionListItem } from "./types";
+import type { SessionId, SessionInfo } from "./types";
 
 export interface PendingSteerPrompt {
   turnId: string;
@@ -120,24 +120,5 @@ export class Session {
   /// title changes are not auto-applied.
   setTitle(title: string): void {
     this._info = { ...this._info, title };
-  }
-
-  /// Wire-shape projection. `turnCount` and `lastActivityAt` are computed on
-  /// demand from the live Conversation — no caching, no drift.
-  toListItem(): SessionListItem {
-    const turns = this.conversation.turns;
-    let turnCount = 0;
-    let lastActivityAt = this._info.createdAt;
-    for (const t of turns) {
-      if (t.status === "done") turnCount += 1;
-      if (t.startedAt > lastActivityAt) lastActivityAt = t.startedAt;
-    }
-    return {
-      id: this.id,
-      title: this._info.title,
-      createdAt: this._info.createdAt,
-      turnCount,
-      lastActivityAt,
-    };
   }
 }

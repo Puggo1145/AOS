@@ -10,9 +10,9 @@
 // owned by `loop.ts` to avoid turning the manager into a notification proxy.
 
 import { Session } from "./session";
-import type { SessionEvent, SessionId, SessionInfo, SessionListItem } from "./types";
+import type { SessionEvent, SessionId, SessionInfo } from "./types";
 
-const DEFAULT_TITLE = "新对话";
+const DEFAULT_TITLE = "New Conversation";
 const TITLE_MAX = 32;
 
 export type SessionSink = (event: SessionEvent) => void;
@@ -69,7 +69,7 @@ export class SessionManager {
     const s = new Session(info);
     this.sessions.set(s.id, s);
     this._activeId = s.id;
-    this.sink({ kind: "created", session: s.toListItem() });
+    this.sink({ kind: "created", session: s });
     this.sink({ kind: "activated", sessionId: s.id });
     return s;
   }
@@ -85,9 +85,9 @@ export class SessionManager {
     return s;
   }
 
-  list(): SessionListItem[] {
+  list(): Session[] {
     // Stable order: insertion order is creation order; consumers can re-sort.
-    return Array.from(this.sessions.values(), (s) => s.toListItem());
+    return Array.from(this.sessions.values());
   }
 
   /// Title derivation hook. Manager applies the derived title once, on the

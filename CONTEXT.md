@@ -47,6 +47,13 @@ The Sidecar-local catalog of method routing metadata: namespace direction,
 request vs notification kind, inbound handler timeout, and dispatcher fast-path
 status. It complements the wire schema in `rpc-types.ts`.
 
+### Runtime Wire Projection
+
+The Sidecar Adapter that translates runtime Modules such as Session and
+Conversation Transcript into Shell-visible RPC schema shapes. Runtime Modules
+do not own wire field names; RPC handlers and notifications call this Adapter
+at the dispatch edge.
+
 ### Agent Test Harness
 
 The shared test utility layer for Agent Turn tests. It provides fake models,

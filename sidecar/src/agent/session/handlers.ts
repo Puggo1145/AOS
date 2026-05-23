@@ -6,7 +6,7 @@
 
 import { RPCErrorCode, RPCMethod, type SessionActivateParams, type SessionActivateResult, type SessionCreateParams, type SessionCreateResult, type SessionListResult } from "../../rpc/rpc-types";
 import { Dispatcher, RPCMethodError } from "../../rpc/dispatcher";
-import { Conversation } from "../conversation";
+import { conversationSnapshotToWire, sessionToListItem, sessionsToListItems } from "../rpc-projection";
 import type { SessionManager } from "./manager";
 
 export function registerSessionHandlers(dispatcher: Dispatcher, manager: SessionManager): void {
@@ -16,7 +16,7 @@ export function registerSessionHandlers(dispatcher: Dispatcher, manager: Session
   manager.setSink((event) => {
     switch (event.kind) {
       case "created":
-        dispatcher.notify(RPCMethod.sessionCreated, { session: event.session });
+        dispatcher.notify(RPCMethod.sessionCreated, { session: sessionToListItem(event.session) });
         return;
       case "activated":
         dispatcher.notify(RPCMethod.sessionActivated, { sessionId: event.sessionId });
@@ -30,13 +30,13 @@ export function registerSessionHandlers(dispatcher: Dispatcher, manager: Session
   dispatcher.registerRequest(RPCMethod.sessionCreate, async (raw): Promise<SessionCreateResult> => {
     const params = (raw ?? {}) as SessionCreateParams;
     const session = manager.create({ title: params.title });
-    return { session: session.toListItem() };
+    return { session: sessionToListItem(session) };
   });
 
   dispatcher.registerRequest(RPCMethod.sessionList, async (): Promise<SessionListResult> => {
     return {
       activeId: manager.activeId,
-      sessions: manager.list(),
+      sessions: sessionsToListItems(manager.list()),
     };
   });
 
@@ -50,7 +50,7 @@ export function registerSessionHandlers(dispatcher: Dispatcher, manager: Session
       throw new RPCMethodError(RPCErrorCode.unknownSession, `unknown sessionId: ${sessionId}`);
     }
     manager.activate(sessionId);
-    const snapshot = session.conversation.turns.map((t) => Conversation.toWire(t));
+    const snapshot = conversationSnapshotToWire(session.conversation);
     // s03: hydrate the Shell's todo panel for the freshly visible session.
     // Sent regardless of whether the list is empty — the Shell mirror uses
     // an empty list to clear any stale state from the previous session.

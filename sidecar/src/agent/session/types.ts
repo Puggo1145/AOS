@@ -1,8 +1,11 @@
-// Session-layer types.
+// Session-layer runtime types.
 //
 // Per docs/designs/session-management.md. Only types that need to be shared
 // across session/{session,manager,handlers}.ts and the loop live here. Wire
-// schema is owned by `rpc/rpc-types.ts`; this file mirrors the runtime shape.
+// schema is owned by `rpc/rpc-types.ts`; runtime-to-wire projection is owned
+// by `agent/rpc-projection.ts`.
+
+import type { Session } from "./session";
 
 export type SessionId = string;
 
@@ -16,24 +19,9 @@ export interface SessionInfo {
   title: string;
 }
 
-/// Wire-shape view of a session for `session.list` / `session.created`.
-/// `turnCount` and `lastActivityAt` are derived on demand from the session's
-/// Conversation — no caching to avoid drift.
-export interface SessionListItem {
-  id: SessionId;
-  title: string;
-  createdAt: number;
-  /// Only `status === "done"` turns count. In-flight / error / cancelled excluded.
-  turnCount: number;
-  /// Last turn's `startedAt`; equals `createdAt` for empty sessions.
-  lastActivityAt: number;
-}
-
-/// Manager → sink events. Wire mapping (Step 2):
-///   created      → session.created     { session: SessionListItem }
-///   activated    → session.activated   { sessionId }
-///   listChanged  → session.listChanged {}
+/// Manager → sink events. These are runtime events; RPC handlers perform the
+/// wire projection at the dispatch edge.
 export type SessionEvent =
-  | { kind: "created"; session: SessionListItem }
+  | { kind: "created"; session: Session }
   | { kind: "activated"; sessionId: SessionId }
   | { kind: "listChanged" };

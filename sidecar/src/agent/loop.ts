@@ -59,6 +59,7 @@ import {
 import { Dispatcher, RPCMethodError } from "../rpc/dispatcher";
 import { Conversation } from "./conversation";
 import { contextObserver as defaultContextObserver, ContextObserver } from "./context-observer";
+import { conversationTurnToWire } from "./rpc-projection";
 import { SessionManager } from "./session/manager";
 import { Session } from "./session/session";
 import { toolRegistry } from "./tools";
@@ -323,7 +324,7 @@ export function registerAgentHandlers(dispatcher: Dispatcher, opts: RegisterAgen
     const turn = convo.startTurn({ id: input.turnId, prompt: input.prompt, citedContext: input.citedContext });
     dispatcher.notify(RPCMethod.conversationTurnStarted, {
       sessionId: session.id,
-      turn: Conversation.toWire(turn),
+      turn: conversationTurnToWire(turn),
     });
 
     const titleChanged = manager.maybeDeriveTitle(session.id, input.prompt);
@@ -349,7 +350,7 @@ export function registerAgentHandlers(dispatcher: Dispatcher, opts: RegisterAgen
         });
         dispatcher.notify(RPCMethod.conversationTurnStarted, {
           sessionId: session.id,
-          turn: Conversation.toWire(next),
+          turn: conversationTurnToWire(next),
         });
         manager.notifyListChanged();
       },

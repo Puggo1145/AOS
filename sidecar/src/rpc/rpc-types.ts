@@ -931,8 +931,8 @@ export interface DevContextChangedParams {
 // ---------------------------------------------------------------------------
 // session.* — bidirectional namespace (Shell↔Bun)
 //
-// Per docs/designs/session-management.md. Wire shape mirrors `SessionListItem`
-// in `agent/session/types.ts`. `turnCount` and `lastActivityAt` are computed
+// Per docs/designs/session-management.md. Runtime-to-wire projection is owned
+// by `agent/rpc-projection.ts`. `turnCount` and `lastActivityAt` are computed
 // on demand by the Sidecar — no caching, no drift.
 // ---------------------------------------------------------------------------
 

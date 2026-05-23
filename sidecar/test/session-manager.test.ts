@@ -26,8 +26,8 @@ test("sink fires created + activated on create, activated on activate", () => {
   // Two events: created then activated, in that order.
   expect(events.map((e) => e.kind)).toEqual(["created", "activated"]);
   if (events[0].kind === "created") {
-    expect(events[0].session.id).toBe(a.id);
-    expect(events[0].session.title).toBe("first");
+    expect(events[0].session).toBe(a);
+    expect(events[0].session.info.title).toBe("first");
   }
 
   const b = m.create();
@@ -69,31 +69,12 @@ test("each session owns its own conversation + turn registry", () => {
   expect(b.conversation.turns).toHaveLength(0);
 });
 
-test("toListItem reflects current turnCount + lastActivityAt", () => {
+test("list returns runtime sessions in creation order", () => {
   const m = new SessionManager();
-  const s = m.create();
-  const initial = s.toListItem();
-  expect(initial.turnCount).toBe(0);
-  expect(initial.lastActivityAt).toBe(initial.createdAt);
+  const a = m.create({ title: "a" });
+  const b = m.create({ title: "b" });
 
-  // Spin up a turn and drive it to done — turnCount should pick up the +1.
-  const t = s.conversation.startTurn({ id: "t1", prompt: "hi", citedContext: {} });
-  expect(s.toListItem().turnCount).toBe(0); // still thinking
-  s.conversation.appendAssistant(t.id, {
-    role: "assistant",
-    content: [],
-    api: "openai-responses",
-    provider: "test",
-    model: "fake",
-    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-    stopReason: "stop",
-    timestamp: t.startedAt,
-  });
-  s.conversation.markDone(t.id);
-  const after = s.toListItem();
-  expect(after.turnCount).toBe(1);
-  expect(after.lastActivityAt).toBe(t.startedAt);
+  expect(m.list()).toEqual([a, b]);
 });
 
 test("maybeDeriveTitle only fires while title is the default", () => {
