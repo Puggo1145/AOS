@@ -6,6 +6,7 @@ import { ToolRegistry } from "../src/agent/tools/registry";
 import { registerComputerUseTools } from "../src/agent/tools/computer-use";
 import { ComputerUseStateCache } from "../src/agent/session/computer-use-state-cache";
 import { Session } from "../src/agent/session/session";
+import { runTool, toolDispatchContext, toolRuntimeEffects } from "../src/agent/turn/tool-dispatch";
 import { validateToolArguments } from "../src/llm/utils/validation";
 import { RPCMethod } from "../src/rpc/rpc-types";
 import type { Dispatcher } from "../src/rpc/dispatcher";
@@ -47,6 +48,16 @@ function execContext() {
   };
 }
 
+function computerUseRuntime(input: { stateCache?: ComputerUseStateCache | any } = {}) {
+  let appSession: { pid: number; windowId: number } | undefined;
+  return {
+    get appSession() {
+      return appSession;
+    },
+    stateCache: input.stateCache ?? new ComputerUseStateCache(),
+  };
+}
+
 test("registerComputerUseTools exposes exactly the approved tool names", () => {
   const registry = new ToolRegistry();
   const { dispatcher } = makeDispatcherSpy();
@@ -83,23 +94,25 @@ test("use_mouse forwards screenshot-local click coordinates and stateId for Shel
     },
     {
       ...execContext(),
-      computerUseStateCache: {
-        lookup: () => ({
-          kind: "found",
-          record: {
-            stateId: "state-1",
-            windowId: 77,
-            recordedAt: 1_000,
-            coordinateSpace: {
-              windowFrame: { x: 10, y: 20, width: 400, height: 300 },
-              windowBounds: { x: 10, y: 20, width: 400, height: 300 },
-              pixelSize: { width: 800, height: 600 },
+      computerUse: computerUseRuntime({
+        stateCache: {
+          lookup: () => ({
+            kind: "found",
+            record: {
+              stateId: "state-1",
+              windowId: 77,
+              recordedAt: 1_000,
+              coordinateSpace: {
+                windowFrame: { x: 10, y: 20, width: 400, height: 300 },
+                windowBounds: { x: 10, y: 20, width: 400, height: 300 },
+                pixelSize: { width: 800, height: 600 },
+              },
             },
-          },
-        }),
-        record: () => {},
-        clear: () => {},
-      },
+          }),
+          record: () => {},
+          clear: () => {},
+        },
+      }),
     } as any,
   );
 
@@ -153,11 +166,13 @@ test("get_app_state records screenshot coordinate space for later mouse conversi
     { windowId: 77, captureMode: "vision" },
     {
       ...execContext(),
-      computerUseStateCache: {
-        lookup: () => undefined,
-        record: (record: unknown) => records.push(record),
-        clear: () => {},
-      },
+      computerUse: computerUseRuntime({
+        stateCache: {
+          lookup: () => undefined,
+          record: (record: unknown) => records.push(record),
+          clear: () => {},
+        },
+      }),
     } as any,
   );
 
@@ -204,11 +219,13 @@ test("get_app_state does not expose or forward image dimension controls", async 
     { windowId: 77, captureMode: "vision" },
     {
       ...execContext(),
-      computerUseStateCache: {
-        lookup: () => undefined,
-        record: () => {},
-        clear: () => {},
-      },
+      computerUse: computerUseRuntime({
+        stateCache: {
+          lookup: () => undefined,
+          record: () => {},
+          clear: () => {},
+        },
+      }),
     } as any,
   );
 
@@ -251,7 +268,7 @@ test("use_mouse rejects expired screenshot coordinate state before RPC dispatch"
       },
       {
         ...execContext(),
-        computerUseStateCache: cache,
+        computerUse: computerUseRuntime({ stateCache: cache }),
       },
     );
   } catch (err) {
@@ -281,23 +298,25 @@ test("use_mouse rejects screenshot coordinates outside cached pixel bounds befor
       },
       {
         ...execContext(),
-        computerUseStateCache: {
-          lookup: () => ({
-            kind: "found",
-            record: {
-              stateId: "state-1",
-              windowId: 77,
-              recordedAt: 1_000,
-              coordinateSpace: {
-                windowFrame: { x: 10, y: 20, width: 400, height: 300 },
-                windowBounds: { x: 10, y: 20, width: 400, height: 300 },
-                pixelSize: { width: 800, height: 600 },
+        computerUse: computerUseRuntime({
+          stateCache: {
+            lookup: () => ({
+              kind: "found",
+              record: {
+                stateId: "state-1",
+                windowId: 77,
+                recordedAt: 1_000,
+                coordinateSpace: {
+                  windowFrame: { x: 10, y: 20, width: 400, height: 300 },
+                  windowBounds: { x: 10, y: 20, width: 400, height: 300 },
+                  pixelSize: { width: 800, height: 600 },
+                },
               },
-            },
-          }),
-          record: () => {},
-          clear: () => {},
-        },
+            }),
+            record: () => {},
+            clear: () => {},
+          },
+        }),
       } as any,
     );
   } catch (err) {
@@ -328,14 +347,55 @@ test("replacing the computer use app session clears screenshot coordinate state"
   expect(session.computerUseStateCache.lookup("state-1").kind).toBe("missing");
 });
 
+test("start_app_session records the active app session through the tool runtime", async () => {
+  const registry = new ToolRegistry();
+  const { dispatcher, calls } = makeDispatcherSpy();
+  registerComputerUseTools(registry, dispatcher);
+  const session = new Session({ id: "session-1", createdAt: 0, title: "Test" });
+
+  const result = await runTool(
+    registry.get("start_app_session")!,
+    { pid: 123, windowId: 456 },
+    "start_app_session",
+    toolDispatchContext({
+      session,
+      turnId: "turn-1",
+      toolCallId: "tool-1",
+      model: execContext().model,
+      signal: new AbortController().signal,
+    }),
+    toolRuntimeEffects(session),
+  );
+
+  expect(result.isError).toBe(false);
+  expect(calls).toEqual([
+    {
+      method: RPCMethod.computerUseStartAppSession,
+      params: { pid: 123, windowId: 456 },
+    },
+  ]);
+  expect(session.computerUseAppSession).toEqual({ pid: 123, windowId: 456 });
+});
+
 test("stop_app_session sends the agent session owned pid to computerUse.stopAppSession", async () => {
   const registry = new ToolRegistry();
   const { dispatcher, calls } = makeDispatcherSpy();
   registerComputerUseTools(registry, dispatcher);
+  const session = new Session({ id: "session-1", createdAt: 0, title: "Test" });
+  session.setComputerUseAppSession({ pid: 123, windowId: 456 });
 
-  const result = await registry.get("stop_app_session")!.execute(
+  const result = await runTool(
+    registry.get("stop_app_session")!,
     {},
-    { ...execContext(), computerUseAppSession: { pid: 123, windowId: 456 } },
+    "stop_app_session",
+    toolDispatchContext({
+      session,
+      turnId: "turn-1",
+      toolCallId: "tool-1",
+      model: execContext().model,
+      signal: new AbortController().signal,
+    }),
+    toolRuntimeEffects(session),
   );
 
   expect(result.isError).toBe(false);
@@ -345,6 +405,7 @@ test("stop_app_session sends the agent session owned pid to computerUse.stopAppS
       params: { pid: 123 },
     },
   ]);
+  expect(session.computerUseAppSession).toBeUndefined();
 });
 
 test("stop_app_session fails before RPC dispatch without a session owned app session", async () => {
@@ -419,7 +480,7 @@ test("get_app_state renders app state as a readable tagged text block", async ()
 
   const result = await registry.get("get_app_state")!.execute(
     { windowId: 77, captureMode: "vision" },
-    execContext(),
+    { ...execContext(), computerUse: computerUseRuntime() },
   );
 
   expect(result.content[0]).toEqual({
@@ -472,7 +533,7 @@ test("get_app_state deletes screenshot file even when the model cannot receive i
   context.model.input = ["text"];
   const result = await registry.get("get_app_state")!.execute(
     { windowId: 77, captureMode: "vision" },
-    context,
+    { ...context, computerUse: computerUseRuntime() },
   );
 
   expect(result.content).toHaveLength(1);

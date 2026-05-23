@@ -12,7 +12,13 @@ import {
   type ComputerUsePostMouseEventParams,
 } from "../../rpc/rpc-types";
 import type { Dispatcher } from "../../rpc/dispatcher";
-import { ToolUserError, type ToolExecContext, type ToolExecResult, type ToolHandler } from "./types";
+import {
+  ToolUserError,
+  type ToolExecContext,
+  type ToolExecResult,
+  type ToolHandler,
+  type ToolRuntimeEffects,
+} from "./types";
 import type { ToolRegistry } from "./registry";
 
 type ComputerUseArgs = Record<string, unknown>;
@@ -110,6 +116,7 @@ export function createComputerUseTools(dispatcher: Dispatcher): ToolHandler[] {
         additionalProperties: false,
       },
       dispatcher,
+      applyRuntimeEffects: recordStartedAppSession,
     }),
     rpcTool({
       name: "stop_app_session",
@@ -121,6 +128,7 @@ export function createComputerUseTools(dispatcher: Dispatcher): ToolHandler[] {
         additionalProperties: false,
       },
       dispatcher,
+      applyRuntimeEffects: clearStartedAppSession,
     }),
     rpcTool({
       name: "use_mouse",
@@ -254,6 +262,12 @@ function rpcTool(options: {
   prepare?: (args: ComputerUseArgs, ctx: ToolExecContext) => object;
   render?: (result: unknown, ctx: ToolExecContext) => ToolResultContent[];
   afterResult?: (result: unknown, args: ComputerUseArgs, ctx: ToolExecContext) => void;
+  applyRuntimeEffects?: (
+    result: ToolExecResult<unknown>,
+    args: ComputerUseArgs,
+    ctx: ToolExecContext,
+    effects: ToolRuntimeEffects,
+  ) => void;
 }): ToolHandler<ComputerUseArgs, unknown> {
   return {
     spec: {
@@ -279,14 +293,44 @@ function rpcTool(options: {
         isError: false,
       } satisfies ToolExecResult;
     },
+    applyRuntimeEffects: options.applyRuntimeEffects,
   };
 }
 
 function stopAppSessionParams(ctx: ToolExecContext): { pid: number } {
-  if (!ctx.computerUseAppSession) {
+  const appSession = ctx.computerUse?.appSession;
+  if (!appSession) {
     throw new ToolUserError("no app session was started by this agent session.");
   }
-  return { pid: ctx.computerUseAppSession.pid };
+  return { pid: appSession.pid };
+}
+
+function recordStartedAppSession(
+  _result: ToolExecResult<unknown>,
+  args: ComputerUseArgs,
+  _ctx: ToolExecContext,
+  effects: ToolRuntimeEffects,
+): void {
+  effects.computerUse.setAppSession({
+    pid: requireInteger(args, "pid"),
+    windowId: requireInteger(args, "windowId"),
+  });
+}
+
+function clearStartedAppSession(
+  _result: ToolExecResult<unknown>,
+  _args: ComputerUseArgs,
+  _ctx: ToolExecContext,
+  effects: ToolRuntimeEffects,
+): void {
+  effects.computerUse.clearAppSession();
+}
+
+function requireComputerUseRuntime(ctx: ToolExecContext): NonNullable<ToolExecContext["computerUse"]> {
+  if (!ctx.computerUse) {
+    throw new ToolUserError("computer use runtime is unavailable.");
+  }
+  return ctx.computerUse;
 }
 
 function getAppStateParams(args: ComputerUseArgs): ComputerUseGetAppStateParams {
@@ -306,10 +350,8 @@ function requireCaptureMode(args: ComputerUseArgs): ComputerUseCaptureMode {
 
 function mouseEventParams(args: ComputerUseArgs, ctx: ToolExecContext): ComputerUsePostMouseEventParams {
   const stateId = requireString(args, "stateId");
-  if (!ctx.computerUseStateCache) {
-    throw new ToolUserError("computer use screenshot state cache is unavailable.");
-  }
-  const lookup = ctx.computerUseStateCache.lookup(stateId);
+  const stateCache = requireComputerUseRuntime(ctx).stateCache;
+  const lookup = stateCache.lookup(stateId);
   if (lookup.kind === "expired") {
     throw new ToolUserError(`stale screenshot coordinate space for stateId ${stateId}. Call get_app_state with captureMode "vision" again.`);
   }
@@ -365,8 +407,8 @@ function requireMouseButton(event: Record<string, unknown>): "left" | "right" {
 
 function recordAppStateCoordinateSpace(result: unknown, args: ComputerUseArgs, ctx: ToolExecContext): void {
   const state = result as ComputerUseGetAppStateResult;
-  if (!state.screenshot || !ctx.computerUseStateCache) return;
-  ctx.computerUseStateCache.record({
+  if (!state.screenshot) return;
+  requireComputerUseRuntime(ctx).stateCache.record({
     stateId: state.stateId,
     windowId: requireInteger(args, "windowId"),
     coordinateSpace: state.screenshot.coordinateSpace,

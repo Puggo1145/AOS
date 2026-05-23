@@ -12,22 +12,22 @@ import type {
   ToolResultContent,
 } from "../../llm";
 import { validateToolArguments } from "../../llm";
-import type { ComputerUseStateCache } from "../session/computer-use-state-cache";
-import { ToolUserError, type ToolExecResult, type ToolHandler } from "../tools";
+import type { Dispatcher } from "../../rpc/dispatcher";
+import { RPCMethod } from "../../rpc/rpc-types";
+import type { Session } from "../session/session";
+import {
+  ToolUserError,
+  type ToolExecContext,
+  type ToolExecResult,
+  type ToolHandler,
+  type ToolRuntimeEffects,
+} from "../tools";
 
 export type ToolCallOutcome =
   | { kind: "ready"; args: Record<string, unknown>; handler: ToolHandler<any, any> }
   | { kind: "rejected"; errorMessage: string };
 
-export interface ToolDispatchCtx {
-  sessionId: string;
-  turnId: string;
-  toolCallId: string;
-  model: Model<Api>;
-  computerUseAppSession?: { pid: number; windowId: number };
-  computerUseStateCache?: ComputerUseStateCache;
-  signal: AbortSignal;
-}
+export type ToolDispatchCtx = ToolExecContext;
 
 export function extractToolCalls(msg: AssistantMessage): ToolCall[] {
   const out: ToolCall[] = [];
@@ -69,9 +69,14 @@ export async function runTool(
   args: Record<string, unknown>,
   toolName: string,
   ctx: ToolDispatchCtx,
+  effects: ToolRuntimeEffects,
 ): Promise<ToolExecResult> {
   try {
-    return await handler.execute(args, ctx);
+    const result = await handler.execute(args, ctx);
+    if (!result.isError) {
+      handler.applyRuntimeEffects?.(result, args, ctx, effects);
+    }
+    return result;
   } catch (err) {
     if (err instanceof ToolUserError) {
       return {
@@ -99,4 +104,49 @@ export function renderToolResultForWire(content: ToolResultContent[]): string {
     else if (c.type === "image") out.push(`[image ${c.mimeType}]`);
   }
   return out.join("\n");
+}
+
+export function toolDispatchContext(input: {
+  session: Session;
+  turnId: string;
+  toolCallId: string;
+  model: Model<Api>;
+  signal: AbortSignal;
+}): ToolDispatchCtx {
+  const { session } = input;
+  return {
+    sessionId: session.id,
+    turnId: input.turnId,
+    toolCallId: input.toolCallId,
+    model: input.model,
+    computerUse: {
+      get appSession() {
+        return session.computerUseAppSession;
+      },
+      stateCache: session.computerUseStateCache,
+    },
+    signal: input.signal,
+  };
+}
+
+export function toolRuntimeEffects(session: Session): ToolRuntimeEffects {
+  return {
+    computerUse: {
+      setAppSession: (info) => session.setComputerUseAppSession(info),
+      clearAppSession: () => session.clearComputerUseAppSession(),
+    },
+  };
+}
+
+export async function finishToolRuntimeAfterTerminalAssistantReply(input: {
+  dispatcher: Dispatcher;
+  session: Session;
+}): Promise<void> {
+  const appSession = input.session.computerUseAppSession;
+  if (!appSession) return;
+  await input.dispatcher.request(
+    RPCMethod.computerUseStopAppSession,
+    { pid: appSession.pid },
+  );
+  input.session.clearComputerUseAppSession();
 }

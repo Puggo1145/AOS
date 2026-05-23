@@ -27,9 +27,12 @@ import { buildOutboundMessages, publishTurnContext } from "./outbound";
 import {
   assistantSpoke,
   extractToolCalls,
+  finishToolRuntimeAfterTerminalAssistantReply,
   prepareToolCall,
   renderToolResultForWire,
   runTool,
+  toolDispatchContext,
+  toolRuntimeEffects,
   type ToolCallOutcome,
 } from "./tool-dispatch";
 
@@ -182,13 +185,7 @@ export class AgentRoundRunner {
     const toolCalls = extractToolCalls(final);
 
     if (toolCalls.length === 0) {
-      if (session.computerUseAppSession) {
-        await dispatcher.request(
-          RPCMethod.computerUseStopAppSession,
-          { pid: session.computerUseAppSession.pid },
-        );
-        session.clearComputerUseAppSession();
-      }
+      await finishToolRuntimeAfterTerminalAssistantReply({ dispatcher, session });
       const markedDone = convo.markDone(turnId);
       this.publishContext(turnId, buildOutboundMessages(convo, session));
       this.closeThinkingIfOpen(turnId);
@@ -226,15 +223,14 @@ export class AgentRoundRunner {
         };
       } else {
         try {
-          result = await runTool(outcome.handler, outcome.args, tc.name, {
-            sessionId,
+          const toolCtx = toolDispatchContext({
+            session,
             turnId,
             toolCallId: tc.id,
             model,
-            computerUseAppSession: session.computerUseAppSession,
-            computerUseStateCache: session.computerUseStateCache,
             signal: input.signal,
           });
+          result = await runTool(outcome.handler, outcome.args, tc.name, toolCtx, toolRuntimeEffects(session));
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           logger.error("tool execution threw", {
@@ -271,14 +267,6 @@ export class AgentRoundRunner {
           isError: result.isError,
           outputText: renderToolResultForWire(result.content),
         });
-        if (!result.isError && tc.name === "start_app_session") {
-          session.setComputerUseAppSession({
-            pid: outcome.args.pid as number,
-            windowId: outcome.args.windowId as number,
-          });
-        } else if (!result.isError && tc.name === "stop_app_session") {
-          session.clearComputerUseAppSession();
-        }
       }
     }
 

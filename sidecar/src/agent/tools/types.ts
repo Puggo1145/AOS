@@ -13,6 +13,19 @@
 
 import type { Api, Model, Tool, ToolResultContent } from "../../llm/types";
 import type { ComputerUseStateCache } from "../session/computer-use-state-cache";
+import type { ComputerUseAppSessionInfo } from "../session/session";
+
+export interface ComputerUseToolRuntime {
+  readonly appSession?: ComputerUseAppSessionInfo;
+  readonly stateCache: ComputerUseStateCache;
+}
+
+export interface ToolRuntimeEffects {
+  readonly computerUse: {
+    setAppSession(info: ComputerUseAppSessionInfo): void;
+    clearAppSession(): void;
+  };
+}
 
 /// Per-call context handed to a tool's `execute`. Carries the abort signal
 /// (shared with the parent turn — cancellation propagates), plus identity
@@ -31,8 +44,7 @@ export interface ToolExecContext {
   turnId: string;
   toolCallId: string;
   model: Model<Api>;
-  computerUseAppSession?: { pid: number; windowId: number };
-  computerUseStateCache?: ComputerUseStateCache;
+  computerUse?: ComputerUseToolRuntime;
   /// Aborted when the parent turn is cancelled or reset. Tools MUST honor
   /// it to avoid leaking subprocesses / file handles.
   signal: AbortSignal;
@@ -81,4 +93,10 @@ export class ToolUserError extends Error {
 export interface ToolHandler<TArgs = Record<string, unknown>, TDetails = unknown> {
   spec: Tool;
   execute(args: TArgs, ctx: ToolExecContext): Promise<ToolExecResult<TDetails>>;
+  applyRuntimeEffects?(
+    result: ToolExecResult<TDetails>,
+    args: TArgs,
+    ctx: ToolExecContext,
+    effects: ToolRuntimeEffects,
+  ): void;
 }

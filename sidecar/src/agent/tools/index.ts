@@ -3,5 +3,5 @@
 
 export { toolRegistry, ToolRegistry } from "./registry";
 export { registerBuiltinTools } from "./register-builtins";
-export type { ToolHandler, ToolExecContext, ToolExecResult } from "./types";
+export type { ToolHandler, ToolExecContext, ToolExecResult, ToolRuntimeEffects } from "./types";
 export { ToolUserError } from "./types";
