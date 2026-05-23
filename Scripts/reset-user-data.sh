@@ -1,16 +1,23 @@
 #!/usr/bin/env bash
-# Reset every piece of Notch Agent user state on this machine: kill the running
-# app, remove the on-disk config dir, and revoke the TCC grants. Useful
-# for re-running the onboarding flow end-to-end during development.
+# Reset Notch Agent user state on this machine for either the dev or release
+# app identity: kill the selected running app, remove shared on-disk state,
+# clear shared API keys, and revoke TCC grants for the selected bundle id.
+# Useful for re-running the onboarding flow end-to-end during development.
+#
+# Usage:
+#   Scripts/reset-user-data.sh dev
+#   Scripts/reset-user-data.sh release
+#
+# Default target: dev
 #
 # Wiped:
 #   - ~/.notch-agent/                          (config.json, auth/, workspaces, run/)
-#   - Notch Agent UserDefaults domain           (permission onboarding latches, UI prefs)
+#   - Selected app UserDefaults domain          (permission onboarding latches, UI prefs)
 #   - Keychain service com.notch-agent.apikey   (DeepSeek + future apiKey providers)
-#   - TCC ScreenCapture for com.notch-agent.shell + ad-hoc fallbacks
-#   - TCC Accessibility for com.notch-agent.shell + ad-hoc fallbacks
-#   - TCC Desktop/Documents/Downloads folder grants for com.notch-agent.shell + ad-hoc fallbacks
-#   - TCC AppleEvents for com.notch-agent.shell + ad-hoc fallbacks
+#   - TCC ScreenCapture for the selected bundle id + ad-hoc fallbacks
+#   - TCC Accessibility for the selected bundle id + ad-hoc fallbacks
+#   - TCC Desktop/Documents/Downloads folder grants for the selected bundle id + ad-hoc fallbacks
+#   - TCC AppleEvents for the selected bundle id + ad-hoc fallbacks
 #
 # Not touched:
 #   - The Notch Agent.app bundle itself
@@ -20,7 +27,27 @@
 #     re-launched and TCC re-creates the entry)
 set -euo pipefail
 
-BUNDLE_ID="com.notch-agent.shell"
+TARGET="${1:-dev}"
+case "${TARGET}" in
+    dev)
+        APP_LABEL="notch-agent-dev"
+        BUNDLE_ID="com.notch-agent.shell.dev"
+        ;;
+    release)
+        APP_LABEL="Notch Agent"
+        BUNDLE_ID="com.notch-agent.shell"
+        ;;
+    -h|--help|help)
+        echo "Usage: $0 [dev|release]" >&2
+        exit 0
+        ;;
+    *)
+        echo "error: unknown reset target '${TARGET}'" >&2
+        echo "Usage: $0 [dev|release]" >&2
+        exit 64
+        ;;
+esac
+
 NOTCH_HOME="${HOME}/.notch-agent"
 APIKEY_SERVICE="com.notch-agent.apikey"
 
@@ -68,8 +95,8 @@ reset_tcc_service() {
     return "${status}"
 }
 
-echo "==> Quitting Notch Agent if running"
-pkill -x "Notch Agent" 2>/dev/null || true
+echo "==> Quitting ${APP_LABEL} if running"
+pkill -x "${APP_LABEL}" 2>/dev/null || true
 pkill -x Shell 2>/dev/null || true
 # Give AppKit a beat to flush its state to disk before we nuke it.
 sleep 0.4
@@ -82,7 +109,7 @@ else
     echo "    (already gone)"
 fi
 
-echo "==> Clearing Notch Agent UserDefaults"
+echo "==> Clearing ${APP_LABEL} UserDefaults (${BUNDLE_ID})"
 defaults delete "${BUNDLE_ID}" >/dev/null 2>&1 || true
 defaults delete Shell       >/dev/null 2>&1 || true
 echo "    cleared"
@@ -93,7 +120,7 @@ echo "==> Clearing Keychain API keys (service=${APIKEY_SERVICE})"
 # Keychain errors instead of treating them as a successful reset.
 delete_keychain_items
 
-echo "==> Resetting Notch Agent's TCC grants"
+echo "==> Resetting ${APP_LABEL}'s TCC grants (${BUNDLE_ID})"
 # Targets ONLY Notch Agent — never call `tccutil reset SERVICE` without a
 # bundle id, that wipes every app's grant for the service. We list
 # both the canonical id and the ad-hoc identifier ("Shell") that
@@ -111,4 +138,8 @@ for service in \
 done
 
 echo
-echo "Done. Re-run ./Scripts/run.sh to re-enter onboarding from scratch."
+if [ "${TARGET}" = "dev" ]; then
+    echo "Done. Re-run ./Scripts/run.sh to re-enter dev onboarding from scratch."
+else
+    echo "Done. Re-launch Notch Agent.app to re-enter release onboarding from scratch."
+fi

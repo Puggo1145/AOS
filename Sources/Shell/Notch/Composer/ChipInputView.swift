@@ -177,11 +177,18 @@ struct ChipInputView: NSViewRepresentable {
         )
     }
 
-    func makeNSView(context: Context) -> _ChipTextView {
+    func makeNSView(context: Context) -> _ChipInputScrollView {
+        let scrollView = _ChipInputScrollView()
         let textView = _ChipTextView()
+        scrollView.documentView = textView
         textView.delegate = context.coordinator
         textView.isRichText = true
         textView.allowsUndo = true
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
         textView.drawsBackground = false
         textView.backgroundColor = .clear
         textView.textContainerInset = NSSize(width: 0, height: 4)
@@ -201,6 +208,10 @@ struct ChipInputView: NSViewRepresentable {
         textView.isAutomaticLinkDetectionEnabled = false
         textView.isContinuousSpellCheckingEnabled = false
         textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.containerSize = NSSize(
+            width: scrollView.contentSize.width,
+            height: CGFloat.greatestFiniteMagnitude
+        )
         textView.textContainer?.widthTracksTextView = true
         model.textView = textView
         // Restore prior content (notch may have closed and reopened).
@@ -225,10 +236,14 @@ struct ChipInputView: NSViewRepresentable {
             // they left off.
             textView.setSelectedRange(NSRange(location: storage.length, length: 0))
         }
-        return textView
+        scrollView.invalidateIntrinsicContentSize()
+        return scrollView
     }
 
-    func updateNSView(_ tv: _ChipTextView, context: Context) {
+    func updateNSView(_ scrollView: _ChipInputScrollView, context: Context) {
+        guard let tv = scrollView.textView else {
+            preconditionFailure("ChipInputView scroll view must own a _ChipTextView document view")
+        }
         if tv.font != font { tv.font = font }
         if tv.textColor != textColor { tv.textColor = textColor }
         // Refresh typingAttributes so subsequent insertion picks up any
@@ -243,6 +258,7 @@ struct ChipInputView: NSViewRepresentable {
         context.coordinator.paletteNavigate = paletteNavigate
         context.coordinator.paletteEnter = paletteEnter
         context.coordinator.paletteEscape = paletteEscape
+        scrollView.invalidateIntrinsicContentSize()
     }
 
     @MainActor
@@ -298,6 +314,13 @@ struct ChipInputView: NSViewRepresentable {
         }
 
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if ChipInputKeyboardCommand.shouldInsertLineBreak(
+                commandSelector: commandSelector,
+                modifierFlags: NSApp.currentEvent?.modifierFlags ?? []
+            ) {
+                return false
+            }
+
             // Palette routing: Up / Down / Enter / Escape are
             // intercepted ONLY while the palette gate is active. Outside
             // command mode the field behaves exactly as before — Up /
@@ -348,6 +371,87 @@ struct ChipInputView: NSViewRepresentable {
     }
 }
 
+enum ChipInputKeyboardCommand {
+    static func shouldInsertLineBreak(
+        commandSelector: Selector,
+        modifierFlags: NSEvent.ModifierFlags
+    ) -> Bool {
+        commandSelector == #selector(NSResponder.insertNewline(_:))
+            && modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.shift)
+    }
+}
+
+enum ChipInputLayout {
+    static let minVisibleHeight: CGFloat = 28
+    static let maxVisibleHeight: CGFloat = 112
+
+    static func visibleHeight(for contentHeight: CGFloat) -> CGFloat {
+        min(max(minVisibleHeight, contentHeight), maxVisibleHeight)
+    }
+}
+
+// MARK: - _ChipInputScrollView
+
+final class _ChipInputScrollView: NSScrollView {
+    private(set) var textView: _ChipTextView!
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        drawsBackground = false
+        borderType = .noBorder
+        hasVerticalScroller = true
+        autohidesScrollers = true
+        scrollerStyle = .overlay
+        verticalScrollElasticity = .allowed
+        horizontalScrollElasticity = .none
+        hasHorizontalScroller = false
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var documentView: NSView? {
+        didSet {
+            textView = documentView as? _ChipTextView
+        }
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(
+            width: NSView.noIntrinsicMetric,
+            height: ChipInputLayout.visibleHeight(for: measuredTextHeight)
+        )
+    }
+
+    override func layout() {
+        super.layout()
+        textView?.textContainer?.containerSize = NSSize(
+            width: contentSize.width,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        if let textView {
+            textView.frame.size = NSSize(
+                width: contentSize.width,
+                height: max(contentSize.height, measuredTextHeight)
+            )
+        }
+        invalidateIntrinsicContentSize()
+    }
+
+    private var measuredTextHeight: CGFloat {
+        guard let textView,
+              let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer else {
+            return ChipInputLayout.minVisibleHeight
+        }
+        layoutManager.ensureLayout(for: textContainer)
+        let used = layoutManager.usedRect(for: textContainer)
+        let inset = textView.textContainerInset
+        return ceil(used.height + inset.height * 2)
+    }
+}
+
 // MARK: - _ChipTextView
 
 /// NSTextView subclass that intercepts Cmd+V to insert a chip attachment
@@ -379,11 +483,13 @@ final class _ChipTextView: NSTextView {
     override func didChangeText() {
         super.didChangeText()
         invalidateIntrinsicContentSize()
+        enclosingScrollView?.invalidateIntrinsicContentSize()
     }
 
     override func layout() {
         super.layout()
         invalidateIntrinsicContentSize()
+        enclosingScrollView?.invalidateIntrinsicContentSize()
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {

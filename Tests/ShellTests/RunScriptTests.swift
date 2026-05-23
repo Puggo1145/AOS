@@ -4,8 +4,8 @@ import Foundation
 @Suite("Run script")
 struct RunScriptTests {
 
-    @Test("run.sh terminates an existing Notch Agent process before opening the rebuilt app")
-    func runScriptRelaunchesNotchAgent() throws {
+    @Test("run.sh builds and relaunches the separate dev app identity")
+    func runScriptRelaunchesDevNotchAgent() throws {
         let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let scriptURL = root.appendingPathComponent("Scripts/run.sh")
         let script = try String(contentsOf: scriptURL, encoding: .utf8)
@@ -15,8 +15,17 @@ struct RunScriptTests {
             .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("#") }
             .joined(separator: "\n")
 
-        let terminateRange = try #require(commandLines.range(of: #"pkill -x "Notch Agent""#))
-        let openRange = try #require(commandLines.range(of: #"open "Notch Agent.app""#))
+        #expect(commandLines.contains(#"DEV_APP_NAME="notch-agent-dev""#))
+        #expect(commandLines.contains(#"DEV_BUNDLE_ID="com.notch-agent.shell.dev""#))
+        #expect(commandLines.contains(#"LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister""#))
+        #expect(commandLines.contains(#"NOTCH_APP_NAME="$DEV_APP_NAME""#))
+        #expect(commandLines.contains(#"NOTCH_APP_EXECUTABLE="$DEV_APP_NAME""#))
+        #expect(commandLines.contains(#"NOTCH_BUNDLE_ID="$DEV_BUNDLE_ID""#))
+        let terminateRange = try #require(commandLines.range(of: #"pkill -x "$DEV_APP_NAME""#))
+        let registerRange = try #require(commandLines.range(of: #""$LSREGISTER" -f "$DEV_BUNDLE_PATH""#))
+        let openRange = try #require(commandLines.range(of: #"open "$DEV_BUNDLE_PATH""#))
+        #expect(terminateRange.lowerBound < registerRange.lowerBound)
+        #expect(registerRange.lowerBound < openRange.lowerBound)
         #expect(terminateRange.lowerBound < openRange.lowerBound)
     }
 
@@ -27,9 +36,16 @@ struct RunScriptTests {
         let script = try String(contentsOf: scriptURL, encoding: .utf8)
 
         #expect(script.contains(#"APP_BUNDLE="${NOTCH_APP_BUNDLE_PATH:-Notch Agent.app}""#))
+        #expect(script.contains(#"APP_NAME="${NOTCH_APP_NAME:-Notch Agent}""#))
+        #expect(script.contains(#"APP_EXECUTABLE="${NOTCH_APP_EXECUTABLE:-$APP_NAME}""#))
+        #expect(script.contains(#"APP_BUNDLE_ID="${NOTCH_BUNDLE_ID:-com.notch-agent.shell}""#))
+        #expect(script.contains(#"plutil -replace CFBundleIdentifier -string "$APP_BUNDLE_ID""#))
+        #expect(script.contains(#"--identifier "$APP_BUNDLE_ID""#))
         #expect(script.contains(#"CODESIGN_IDENTITY="${NOTCH_CODESIGN_IDENTITY:--}""#))
+        #expect(script.contains(#"APP_REQUIREMENTS_ARGS=()"#))
         #expect(script.contains(#"if [ "$CODESIGN_IDENTITY" = "-" ]"#))
         #expect(script.contains(#"Signing ad-hoc for local friend testing"#))
+        #expect(script.contains(#"APP_REQUIREMENTS_ARGS=(--requirements "=designated => identifier \"$APP_BUNDLE_ID\"")"#))
         #expect(script.contains(#"grep -Fq -- "$CODESIGN_IDENTITY""#))
     }
 
@@ -79,5 +95,45 @@ struct RunScriptTests {
             "SystemPolicyDownloadsFolder",
             "AppleEvents",
         ])
+    }
+
+    @Test("reset-user-data.sh can target dev or release identities")
+    func resetUserDataTargetsDevOrReleaseIdentities() throws {
+        let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let scriptURL = root.appendingPathComponent("Scripts/reset-user-data.sh")
+        let script = try String(contentsOf: scriptURL, encoding: .utf8)
+
+        #expect(script.contains(#"TARGET="${1:-dev}""#))
+        #expect(script.contains(#"dev)"#))
+        #expect(script.contains(#"APP_LABEL="notch-agent-dev""#))
+        #expect(script.contains(#"BUNDLE_ID="com.notch-agent.shell.dev""#))
+        #expect(script.contains(#"release)"#))
+        #expect(script.contains(#"APP_LABEL="Notch Agent""#))
+        #expect(script.contains(#"BUNDLE_ID="com.notch-agent.shell""#))
+        #expect(script.contains(#"Usage: $0 [dev|release]"#))
+        #expect(script.contains(#"exit 64"#))
+        #expect(script.contains(#"pkill -x "${APP_LABEL}""#))
+        #expect(script.contains(#"defaults delete "${BUNDLE_ID}""#))
+        #expect(script.contains(#"reset_tcc_service "${service}" "${BUNDLE_ID}""#))
+    }
+
+    @Test("reset-model-config.sh can target dev or release identities")
+    func resetModelConfigTargetsDevOrReleaseIdentities() throws {
+        let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let scriptURL = root.appendingPathComponent("Scripts/reset-model-config.sh")
+        let script = try String(contentsOf: scriptURL, encoding: .utf8)
+
+        #expect(script.contains(#"TARGET="${1:-dev}""#))
+        #expect(script.contains(#"dev)"#))
+        #expect(script.contains(#"APP_LABEL="notch-agent-dev""#))
+        #expect(script.contains(#"BUNDLE_ID="com.notch-agent.shell.dev""#))
+        #expect(script.contains(#"release)"#))
+        #expect(script.contains(#"APP_LABEL="Notch Agent""#))
+        #expect(script.contains(#"BUNDLE_ID="com.notch-agent.shell""#))
+        #expect(script.contains(#"Usage: $0 [dev|release]"#))
+        #expect(script.contains(#"exit 64"#))
+        #expect(script.contains(#"pkill -x "${APP_LABEL}""#))
+        #expect(script.contains("Re-run Scripts/run.sh to land directly in the dev provider picker."))
+        #expect(script.contains("Re-launch Notch Agent.app to land directly in the release provider picker."))
     }
 }

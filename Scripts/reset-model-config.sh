@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
-# Reset only model/provider state — leaves TCC grants intact so onboarding
-# jumps straight past the permission cards into the model picker. Useful
-# when iterating on the provider/onboard UI without re-granting Screen
-# Recording + Accessibility every loop.
+# Reset only model/provider state for either the dev or release app identity.
+# Leaves TCC grants intact so onboarding jumps straight past the permission
+# cards into the model picker. Useful when iterating on the provider/onboard UI
+# without re-granting Screen Recording + Accessibility every loop.
+#
+# Usage:
+#   Scripts/reset-model-config.sh dev
+#   Scripts/reset-model-config.sh release
+#
+# Default target: dev
 #
 # Wiped:
 #   - ~/.notch-agent/config.json              (selection, effort, hasCompletedOnboarding)
@@ -12,15 +18,35 @@
 # Not touched:
 #   - TCC ScreenCapture / Accessibility grants
 #   - ~/.notch-agent/run/ and any workspaces
-#   - The Notch Agent.app bundle, signing identity, anything else
+#   - The selected .app bundle, signing identity, anything else
 set -euo pipefail
 
-BUNDLE_ID="com.notch-agent.shell"
+TARGET="${1:-dev}"
+case "${TARGET}" in
+    dev)
+        APP_LABEL="notch-agent-dev"
+        BUNDLE_ID="com.notch-agent.shell.dev"
+        ;;
+    release)
+        APP_LABEL="Notch Agent"
+        BUNDLE_ID="com.notch-agent.shell"
+        ;;
+    -h|--help|help)
+        echo "Usage: $0 [dev|release]" >&2
+        exit 0
+        ;;
+    *)
+        echo "error: unknown reset target '${TARGET}'" >&2
+        echo "Usage: $0 [dev|release]" >&2
+        exit 64
+        ;;
+esac
+
 NOTCH_HOME="${HOME}/.notch-agent"
 APIKEY_SERVICE="com.notch-agent.apikey"
 
-echo "==> Quitting Notch Agent if running"
-pkill -x "Notch Agent" 2>/dev/null || true
+echo "==> Quitting ${APP_LABEL} if running"
+pkill -x "${APP_LABEL}" 2>/dev/null || true
 sleep 0.4
 
 echo "==> Removing ${NOTCH_HOME}/config.json"
@@ -40,4 +66,8 @@ echo "    done"
 
 echo
 echo "Done. TCC grants for ${BUNDLE_ID} were left in place."
-echo "Re-run Scripts/run.sh to land directly in the provider picker."
+if [ "${TARGET}" = "dev" ]; then
+    echo "Re-run Scripts/run.sh to land directly in the dev provider picker."
+else
+    echo "Re-launch Notch Agent.app to land directly in the release provider picker."
+fi

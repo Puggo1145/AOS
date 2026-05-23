@@ -7,8 +7,10 @@
 # Contents/Resources/sidecar.
 #
 # Output: Notch Agent.app at the repo root by default. Set
-# NOTCH_APP_BUNDLE_PATH to write the bundle elsewhere. Bundle is signed with
-# hardened runtime + entitlements that allow Bun's JIT to run.
+# NOTCH_APP_BUNDLE_PATH to write the bundle elsewhere. NOTCH_APP_NAME,
+# NOTCH_APP_EXECUTABLE, and NOTCH_BUNDLE_ID let dev builds use a separate
+# LaunchServices/TCC identity from packaged release builds. Bundle is signed
+# with hardened runtime + entitlements that allow Bun's JIT to run.
 set -euo pipefail
 
 # ──────────────────────────────────────────────────────────────────────
@@ -21,7 +23,9 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 APP_BUNDLE="${NOTCH_APP_BUNDLE_PATH:-Notch Agent.app}"
-APP_EXECUTABLE="Notch Agent"
+APP_NAME="${NOTCH_APP_NAME:-Notch Agent}"
+APP_EXECUTABLE="${NOTCH_APP_EXECUTABLE:-$APP_NAME}"
+APP_BUNDLE_ID="${NOTCH_BUNDLE_ID:-com.notch-agent.shell}"
 
 BUILD_CONFIG="${NOTCH_BUILD_CONFIG:-debug}"
 BUILD_DIR="$(swift build -c "$BUILD_CONFIG" --show-bin-path)"
@@ -48,6 +52,10 @@ APP_VERSION="$(node -e "console.log(require('./sidecar/package.json').version)" 
 BUILD_NUMBER="$(git rev-parse --short HEAD 2>/dev/null || echo "0")"
 plutil -replace CFBundleShortVersionString -string "$APP_VERSION" "$APP_BUNDLE/Contents/Info.plist"
 plutil -replace CFBundleVersion -string "$BUILD_NUMBER" "$APP_BUNDLE/Contents/Info.plist"
+plutil -replace CFBundleDisplayName -string "$APP_NAME" "$APP_BUNDLE/Contents/Info.plist"
+plutil -replace CFBundleName -string "$APP_NAME" "$APP_BUNDLE/Contents/Info.plist"
+plutil -replace CFBundleExecutable -string "$APP_EXECUTABLE" "$APP_BUNDLE/Contents/Info.plist"
+plutil -replace CFBundleIdentifier -string "$APP_BUNDLE_ID" "$APP_BUNDLE/Contents/Info.plist"
 
 # ----- Sidecar source ---------------------------------------------------
 rm -rf "$APP_BUNDLE/Contents/Resources/sidecar"
@@ -113,8 +121,16 @@ chmod +x "$APP_BUNDLE/Contents/Resources/sidecar/bin/bun"
 # package can be produced before enrolling in the Apple Developer Program.
 # It will still trigger Gatekeeper warnings when shared with other Macs.
 CODESIGN_IDENTITY="${NOTCH_CODESIGN_IDENTITY:--}"
+APP_REQUIREMENTS_ARGS=()
 if [ "$CODESIGN_IDENTITY" = "-" ]; then
   echo "Signing ad-hoc for local friend testing."
+  # TCC is much less stable when an ad-hoc app has no designated
+  # requirement: source-changing rebuilds can be matched by cdhash instead
+  # of the bundle identity. Embed an identifier-only requirement for local
+  # dev/friend builds so Accessibility and Screen Recording grants survive
+  # normal rebuilds. Certificate-signed builds keep the system-generated
+  # requirement with their signing anchor/team.
+  APP_REQUIREMENTS_ARGS=(--requirements "=designated => identifier \"$APP_BUNDLE_ID\"")
 else
   if ! security find-identity -v -p codesigning | grep -Fq -- "$CODESIGN_IDENTITY"; then
     echo "error: signing identity $CODESIGN_IDENTITY not found in keychain." >&2
@@ -140,7 +156,8 @@ codesign --force --options runtime \
 codesign --force --options runtime \
   --sign "$CODESIGN_IDENTITY" \
   --entitlements "$ENTITLEMENTS" \
-  --identifier com.notch-agent.shell \
+  --identifier "$APP_BUNDLE_ID" \
+  "${APP_REQUIREMENTS_ARGS[@]}" \
   "$APP_BUNDLE"
 
 if [[ "$APP_BUNDLE" = /* ]]; then
@@ -148,4 +165,4 @@ if [[ "$APP_BUNDLE" = /* ]]; then
 else
   APP_BUNDLE_PATH="$REPO_ROOT/$APP_BUNDLE"
 fi
-echo "Built $APP_BUNDLE at $APP_BUNDLE_PATH (version $APP_VERSION build $BUILD_NUMBER)"
+echo "Built $APP_BUNDLE at $APP_BUNDLE_PATH (bundle id $APP_BUNDLE_ID, version $APP_VERSION build $BUILD_NUMBER)"
