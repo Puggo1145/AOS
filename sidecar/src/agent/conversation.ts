@@ -4,11 +4,11 @@
 //   - `_messages` is the single flat LLM history — `Message[]` exactly as
 //     the model sees it. user / assistant / toolResult interleave naturally
 //     (one turn may contribute many messages once tool calls land).
-//   - `_turns` carries wire/UI metadata: id, citedContext, status, the live
-//     `reply` mirror for `ui.token`, and a `[messageStart, messageEnd)`
-//     range pointing back into `_messages`. The range is the only link
-//     between the two views, and it grows append-only as the loop pushes
-//     messages during a turn.
+//   - `_turns` carries internal turn metadata: id, citedContext, status,
+//     the live `reply` mirror for `ui.token`, and a `[messageStart,
+//     messageEnd)` range pointing back into `_messages`. Public callers get
+//     a projected `ConversationTurn` view without the range; transcript
+//     layout is a Conversation implementation detail.
 //
 // This was previously stored as `prompt + reply + finalAssistant` per turn —
 // fine for one user/assistant pair but it falls apart once a turn produces
@@ -61,15 +61,23 @@ export interface ConversationTurn {
   errorCode?: number;
   /// Milliseconds since epoch.
   startedAt: number;
+}
+
+interface StoredConversationTurn extends ConversationTurn {
   /// Half-open range into the parent Conversation's `_messages` array
-  /// covering every message this turn produced (its user message and
-  /// every assistant / toolResult appended during the loop).
+  /// covering every message this turn produced. Private storage detail:
+  /// callers must use Conversation's transcript-oriented methods instead.
   messageStart: number;
   messageEnd: number;
 }
 
+export interface ActiveTurnCompactionInput {
+  activeTurnId: string;
+  priorMessages: Message[];
+}
+
 export class Conversation {
-  private _turns: ConversationTurn[] = [];
+  private _turns: StoredConversationTurn[] = [];
   private _messages: Message[] = [];
   /// Pre-history messages produced by a manual `compactAll`. When the user
   /// folds every turn into a summary, `_turns` becomes empty but the
@@ -98,7 +106,7 @@ export class Conversation {
   private _lastTotalTokens = 0;
 
   get turns(): ReadonlyArray<ConversationTurn> {
-    return this._turns;
+    return this._turns.map(toPublicTurn);
   }
 
   /// Test / observability accessor — the raw flat history. Loop callers
@@ -138,7 +146,7 @@ export class Conversation {
         startedAt,
       }),
     );
-    const turn: ConversationTurn = {
+    const turn: StoredConversationTurn = {
       id: input.id,
       prompt: input.prompt,
       citedContext: input.citedContext,
@@ -149,7 +157,7 @@ export class Conversation {
       messageEnd: this._messages.length,
     };
     this._turns.push(turn);
-    return turn;
+    return toPublicTurn(turn);
   }
 
   /// Append streamed assistant text to the visible reply mirror. Returns
@@ -283,7 +291,7 @@ export class Conversation {
     return true;
   }
 
-  private hasInterruptMarker(t: ConversationTurn): boolean {
+  private hasInterruptMarker(t: StoredConversationTurn): boolean {
     if (t.messageEnd <= t.messageStart) return false;
     const last = this._messages[t.messageEnd - 1]!;
     return (
@@ -293,7 +301,29 @@ export class Conversation {
     );
   }
 
-/// Compact-replace history. Called after the LLM has produced a summary
+  /// LLM-visible history strictly before the active turn. Compaction
+  /// orchestration uses this instead of reading turn message ranges, so
+  /// the flat transcript layout stays private to Conversation.
+  activeTurnCompactionInput(): ActiveTurnCompactionInput | null {
+    if (this._turns.length === 0) return null;
+
+    const activeTurn = this._turns[this._turns.length - 1]!;
+    const activeSliceLength = activeTurn.messageEnd - activeTurn.messageStart;
+    const priorMessages = this.llmMessages().slice(0, -activeSliceLength);
+    if (priorMessages.length === 0) return null;
+
+    return { activeTurnId: activeTurn.id, priorMessages };
+  }
+
+  hasActiveTurn(): boolean {
+    return this._turns.length > 0;
+  }
+
+  hasActiveTurnCompactionInput(): boolean {
+    return this.activeTurnCompactionInput() !== null;
+  }
+
+  /// Compact-replace history. Called after the LLM has produced a summary
   /// of all messages strictly preceding the current (last) turn.
   ///
   /// Result shape — `_messages = [boundary, summary, ...currentSlice]`:
@@ -455,9 +485,22 @@ export class Conversation {
     };
   }
 
-  private find(turnId: string): ConversationTurn | undefined {
+  private find(turnId: string): StoredConversationTurn | undefined {
     return this._turns.find((x) => x.id === turnId);
   }
+}
+
+function toPublicTurn(t: StoredConversationTurn): ConversationTurn {
+  return {
+    id: t.id,
+    prompt: t.prompt,
+    citedContext: t.citedContext,
+    reply: t.reply,
+    status: t.status,
+    errorMessage: t.errorMessage,
+    errorCode: t.errorCode,
+    startedAt: t.startedAt,
+  };
 }
 
 function stripConsumedToolResultImages(messages: Message[]): Message[] {

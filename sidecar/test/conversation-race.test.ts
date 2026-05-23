@@ -41,6 +41,17 @@ test("appendDelta returns true while the turn is alive, false after reset", () =
   expect(c.appendDelta("T1", " world")).toBe(false);
 });
 
+test("turns accessor hides transcript storage ranges", () => {
+  const c = new Conversation();
+  c.startTurn({ id: "T1", prompt: "hi", citedContext: {} });
+
+  const turn = c.turns[0] as any;
+
+  expect(turn.id).toBe("T1");
+  expect("messageStart" in turn).toBe(false);
+  expect("messageEnd" in turn).toBe(false);
+});
+
 test("setStatus returns false for an unknown turnId without throwing", () => {
   const c = new Conversation();
   // No startTurn — turn never registered.

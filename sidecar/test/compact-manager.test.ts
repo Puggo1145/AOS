@@ -192,14 +192,50 @@ test("compactConversation: only sends prior history (not the active turn) to the
   expect(batch[batch.length - 1].role).toBe("user");
 });
 
+test("Conversation exposes active-turn compaction input without leaking message ranges", () => {
+  const { session, activeTurnId } = seedSessionWithHistory(2);
+
+  const input = session.conversation.activeTurnCompactionInput();
+
+  expect(input).not.toBeNull();
+  expect(input!.activeTurnId).toBe(activeTurnId);
+  expect(input!.priorMessages.map((m) => m.role)).toEqual([
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+  ]);
+  for (const message of input!.priorMessages) {
+    if (typeof message.content === "string") {
+      expect(message.content).not.toContain("active");
+    }
+  }
+});
+
+test("Conversation treats a manual compact preface as active-turn compaction input", () => {
+  const manager = new SessionManager();
+  const session = manager.create();
+
+  session.conversation.startTurn({ id: "T1", prompt: "older request", citedContext: {} });
+  session.conversation.appendAssistant("T1", fakeAssistant(makeFakeModel(100_000), "older reply"));
+  session.conversation.markDone("T1");
+  session.conversation.compactAll("manual summary");
+  session.conversation.startTurn({ id: "T2", prompt: "fresh request", citedContext: {} });
+
+  const input = session.conversation.activeTurnCompactionInput();
+
+  expect(input).not.toBeNull();
+  expect(input!.activeTurnId).toBe("T2");
+  expect(input!.priorMessages).toHaveLength(2);
+  expect(input!.priorMessages[0]!.role).toBe("user");
+  expect((input!.priorMessages[0] as any).content).toContain("<compactionBoundary");
+  expect((input!.priorMessages[1] as any).content).toContain("[Compressed]");
+  expect((input!.priorMessages[1] as any).content).toContain("manual summary");
+});
+
 test("compactConversation: result lays out [boundary, summary, ...activeSlice] and re-anchors the active turn", async () => {
   const { session, activeTurnId } = seedSessionWithHistory(3);
   const model = makeFakeModel(100_000);
-
-  // Snapshot the active turn's slice before compact.
-  const preTurns = session.conversation.turns;
-  const activeBefore = preTurns[preTurns.length - 1]!;
-  const activeSliceLength = activeBefore.messageEnd - activeBefore.messageStart;
 
   const result = await compactConversation(session, model);
   if (typeof result === "symbol") throw new Error("expected CompactResult, got noop sentinel");
@@ -207,7 +243,7 @@ test("compactConversation: result lays out [boundary, summary, ...activeSlice] a
   expect(result.summary.length).toBeGreaterThan(0);
 
   const msgs = session.conversation.messages;
-  expect(msgs).toHaveLength(2 + activeSliceLength);
+  expect(msgs).toHaveLength(3);
   expect(msgs[0].role).toBe("user");
   expect(typeof (msgs[0] as any).content).toBe("string");
   expect((msgs[0] as any).content).toContain("<compactionBoundary");
@@ -218,11 +254,12 @@ test("compactConversation: result lays out [boundary, summary, ...activeSlice] a
   const turns = session.conversation.turns;
   expect(turns).toHaveLength(1);
   expect(turns[0]!.id).toBe(activeTurnId);
-  // The active turn extends to cover the synthetic boundary + summary
-  // messages so `llmMessages()` continues to yield them — see the
-  // comment on `Conversation.compact`.
-  expect(turns[0]!.messageStart).toBe(0);
-  expect(turns[0]!.messageEnd).toBe(2 + activeSliceLength);
+  expect(session.conversation.llmMessages().map((m) => m.role)).toEqual([
+    "user",
+    "user",
+    "user",
+  ]);
+  expect((session.conversation.llmMessages()[2] as any).content).toContain("active");
 });
 
 test("compactConversation: throws when there is no prior history to summarize", async () => {

@@ -9,7 +9,7 @@
 //
 // The shape of work:
 //
-//   1. Snapshot every message strictly preceding the active turn.
+//   1. Ask Conversation for the messages strictly preceding the active turn.
 //      The active turn (the user's just-submitted prompt + anything the
 //      agent has produced for it so far) is preserved verbatim and
 //      re-anchored on top of the summary. Compacting INTO the active
@@ -75,7 +75,6 @@ export async function compactConversation(
   options?: { signal?: AbortSignal; mode?: "auto" | "manual" },
 ): Promise<CompactResult | CompactNoop> {
   const convo = session.conversation;
-  const turns = convo.turns;
   const mode = options?.mode ?? "auto";
 
   // Source the history through `llmMessages()` rather than the raw
@@ -92,10 +91,10 @@ export async function compactConversation(
   //     completed history that the user explicitly asked us to fold —
   //     preserving the last turn would mean "compact" silently leaves
   //     the most recent exchange untouched, which surprised the user.
-  const allFiltered = convo.llmMessages();
   let priorMessages: Message[];
   let activeTurnId: string | null;
   if (mode === "manual") {
+    const allFiltered = convo.llmMessages();
     if (allFiltered.length === 0) {
       // Documented no-op: `/compact` on an empty session shouldn't fail.
       // Caller (RPC handler) translates this to `AgentCompactResult`
@@ -105,18 +104,17 @@ export async function compactConversation(
     priorMessages = allFiltered;
     activeTurnId = null;
   } else {
-    if (turns.length === 0) {
-      throw new Error("compactConversation: no active turn to compact around");
-    }
-    const activeTurn = turns[turns.length - 1]!;
-    const activeSliceLen = activeTurn.messageEnd - activeTurn.messageStart;
-    priorMessages = allFiltered.slice(0, allFiltered.length - activeSliceLen);
-    if (priorMessages.length === 0) {
+    const compactionInput = convo.activeTurnCompactionInput();
+    if (!compactionInput) {
+      if (!convo.hasActiveTurn()) {
+        throw new Error("compactConversation: no active turn to compact around");
+      }
       // No prior history (active turn is first) — nothing meaningful to
       // summarize.
       throw new Error("compactConversation: no prior history to compact");
     }
-    activeTurnId = activeTurn.id;
+    priorMessages = compactionInput.priorMessages;
+    activeTurnId = compactionInput.activeTurnId;
   }
   const summarizationInput: Message[] = [
     ...priorMessages,
@@ -166,9 +164,8 @@ export async function compactConversation(
     result = convo.compact(activeTurnId, summary);
     if (!result) {
       // `Conversation.compact` only returns null when the active turn
-      // disappeared mid-flight (race with reset) or is already at idx 0
-      // (caller bug, since we checked above). Surface as an error rather
-      // than swallow.
+      // disappeared mid-flight (race with reset) or has no prior
+      // history. Surface as an error rather than swallow.
       throw new Error("compactConversation: Conversation.compact rejected the apply");
     }
   }
@@ -197,20 +194,10 @@ export async function autoCompactIfNeeded(
   const remaining = model.contextWindow - session.conversation.lastTotalTokens;
   if (remaining > AUTO_COMPACT_REMAINING_THRESHOLD) return null;
 
-  // No prior history → don't try (would throw). This can happen on the
-  // very first turn of a session whose model has a tiny `contextWindow`
-  // configured (test fakes, mostly). After a previous manual compactAll
-  // the active turn's `messageStart` is 0 too, but the conversation's
-  // preface still carries a summary — that IS prior history, so don't
-  // skip in that case.
-  const convo = session.conversation;
-  const turns = convo.turns;
-  if (turns.length === 0) return null;
-  const lastTurn = turns[turns.length - 1]!;
-  if (lastTurn.messageStart === 0 && convo.llmMessages().length === lastTurn.messageEnd) {
-    // No preface, no prior turns visible to the model.
-    return null;
-  }
+  // No prior history → don't try (would throw). Conversation owns the
+  // distinction between "first turn" and "manual compact preface plus
+  // fresh active turn"; the auto wrapper only needs the yes/no.
+  if (!session.conversation.hasActiveTurnCompactionInput()) return null;
 
   options?.onStart?.();
   try {
