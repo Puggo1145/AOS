@@ -33,6 +33,14 @@ The Swift-only `ComputerUseKit` foundation for app enumeration, window
 enumeration, AX snapshot rendering, screenshot capture, and snapshot state.
 It is not exposed as an LLM-callable tool surface.
 
+### Computer Use Tool Surface
+
+The Sidecar-owned LLM tool surface that exposes approved Computer Use
+Foundation capabilities to the Agent Turn runtime. Its public registration
+interface is stable, while its internal Modules own catalog definitions, Shell
+RPC adapter calls, event validation, result rendering, and screenshot
+coordinate state.
+
 ### RPC Method Catalog
 
 The Sidecar-local catalog of method routing metadata: namespace direction,
