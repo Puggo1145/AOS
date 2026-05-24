@@ -14,9 +14,11 @@
 //   - Timeout and turn-cancellation share one AbortController: whichever
 //     fires first kills the subprocess.
 
-import type { ToolHandler, ToolExecContext, ToolExecResult } from "./types";
-import { workspaceDir } from "../workspace";
+import type { ToolHandler, ToolExecContext, ToolExecResult } from "../core/types";
+import { defineTool } from "../core/schema";
+import { workspaceDir } from "../../workspace";
 import { accessSync, constants, statSync } from "node:fs";
+import { z } from "zod";
 
 const MAX_OUTPUT_BYTES = 50_000;
 const MAX_OUTPUT_LINES = 500;
@@ -57,32 +59,24 @@ interface BashToolOptions {
   workspace?: string;
 }
 
+const bashParameterSchema = z.object({
+  command: z.string().describe("Bash command to execute."),
+  timeout: z.number()
+    .describe(`Hard timeout in seconds. Omit for the default (${DEFAULT_TIMEOUT_SECONDS}s). Clamped to [1, ${MAX_TIMEOUT_SECONDS}].`)
+    .optional(),
+}).strict();
+
 export function createBashTool(options: BashToolOptions = {}): ToolHandler<BashArgs, BashDetails> {
   const workspace = options.workspace ?? workspaceDir();
-  return {
-    spec: {
-      name: "bash",
-      description:
-        `Execute a bash command via \`bash -lc\`. Returns combined stdout+stderr. ` +
-        `Output is tail-truncated to the last ${MAX_OUTPUT_LINES} lines or ${MAX_OUTPUT_BYTES / 1000}KB (whichever hits first).` +
-        `Commands start in the workspace when available. `,
-      parameters: {
-        type: "object",
-        properties: {
-          command: {
-            type: "string",
-            description: "Bash command to execute.",
-          },
-          timeout: {
-            type: "number",
-            description: `Hard timeout in seconds. Omit for the default (${DEFAULT_TIMEOUT_SECONDS}s). Clamped to [1, ${MAX_TIMEOUT_SECONDS}].`,
-          },
-        },
-        required: ["command"],
-      },
-    },
+  return defineTool({
+    name: "bash",
+    description:
+      `Execute a bash command via \`bash -lc\`. Returns combined stdout+stderr. ` +
+      `Output is tail-truncated to the last ${MAX_OUTPUT_LINES} lines or ${MAX_OUTPUT_BYTES / 1000}KB (whichever hits first).` +
+      `Commands start in the workspace when available. `,
+    parameters: bashParameterSchema,
     execute: (args, ctx) => runBash(args, ctx, workspace),
-  };
+  });
 }
 
 async function runBash(

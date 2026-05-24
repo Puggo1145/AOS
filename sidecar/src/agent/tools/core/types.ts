@@ -11,13 +11,12 @@
 // harness can attach handler-only concerns (signal, sessionId, structured
 // details) without polluting the model's view.
 
-import type { Api, Model, Tool, ToolResultContent } from "../../llm/types";
-import type { ComputerUseStateCache } from "../session/computer-use-state-cache";
-import type { ComputerUseAppSessionInfo } from "../session/session";
+import type { z } from "zod";
+import type { Api, Model, Tool, ToolResultContent } from "../../../llm/types";
+import type { ComputerUseAppSessionInfo } from "../../session/session";
 
 export interface ComputerUseToolRuntime {
   readonly appSession?: ComputerUseAppSessionInfo;
-  readonly stateCache: ComputerUseStateCache;
 }
 
 export interface ToolRuntimeEffects {
@@ -91,6 +90,10 @@ export class ToolUserError extends Error {
 /// implementation. The registry stores these; the loop picks them by
 /// `spec.name` when an assistant emits a `toolCall`.
 export interface ToolHandler<TArgs = Record<string, unknown>, TDetails = unknown> {
+  /// Sidecar-facing argument schema. This is the single source of truth for
+  /// tool-call parameter validation; `spec.parameters` is generated from it
+  /// for the model-facing JSON Schema contract.
+  parameterSchema: z.ZodType<any, any, any>;
   spec: Tool;
   execute(args: TArgs, ctx: ToolExecContext): Promise<ToolExecResult<TDetails>>;
   applyRuntimeEffects?(

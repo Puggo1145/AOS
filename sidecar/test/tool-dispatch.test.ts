@@ -1,4 +1,5 @@
 import { test, expect } from "bun:test";
+import { z } from "zod";
 import { Session } from "../src/agent/session/session";
 import {
   finishToolRuntimeAfterTerminalAssistantReply,
@@ -7,6 +8,7 @@ import {
   toolRuntimeEffects,
 } from "../src/agent/turn/tool-dispatch";
 import { RPCMethod } from "../src/rpc/rpc-types";
+import { defineTool } from "../src/agent/tools/core/schema";
 import type { ToolHandler } from "../src/agent/tools";
 import type { Dispatcher } from "../src/rpc/dispatcher";
 
@@ -54,21 +56,18 @@ test("terminal tool runtime cleanup is not cancelled by the completed turn signa
 test("tool execution context exposes Computer Use state without mutation authority", async () => {
   const session = new Session({ id: "session-1", createdAt: 0, title: "Test" });
   session.setComputerUseAppSession({ pid: 123, windowId: 456 });
-  const handler: ToolHandler = {
-    spec: {
-      name: "inspect_context",
-      description: "inspect context",
-      parameters: { type: "object", properties: {}, additionalProperties: false },
-    },
+  const handler: ToolHandler = defineTool({
+    name: "inspect_context",
+    description: "inspect context",
+    parameters: z.object({}).strict(),
     execute: async (_args, ctx) => {
       const computerUse = ctx.computerUse as any;
       expect(computerUse.appSession).toEqual({ pid: 123, windowId: 456 });
-      expect(computerUse.stateCache).toBe(session.computerUseStateCache);
       expect(computerUse.setAppSession).toBeUndefined();
       expect(computerUse.clearAppSession).toBeUndefined();
       return { content: [{ type: "text", text: "ok" }], isError: false };
     },
-  };
+  });
 
   const result = await runTool(
     handler,

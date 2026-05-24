@@ -18,7 +18,7 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
 import { registerAgentHandlers, setModelResolver, resetModelResolver } from "../src/agent/loop";
 import { SessionManager } from "../src/agent/session/manager";
-import { toolRegistry } from "../src/agent/tools/registry";
+import { toolRegistry } from "../src/agent/tools/core/registry";
 import { ambientRegistry } from "../src/agent/ambient/registry";
 import { todosAmbientProvider } from "../src/agent/ambient/providers/todos";
 import { compactBreaker } from "../src/agent/compact";

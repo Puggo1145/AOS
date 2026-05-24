@@ -24,6 +24,9 @@ class ToolRegistry {
 
   register(handler: ToolHandler<any, any>, sourceId: string = DEFAULT_SOURCE_ID): void {
     const name = handler.spec.name;
+    if (!handler.parameterSchema) {
+      throw new Error(`tool "${name}" is missing a zod parameter schema`);
+    }
     if (this.entries.has(name)) {
       // Re-registration is a programmer error (overlapping plugins, double
       // boot). Fail loud — silently overwriting would mask whichever copy

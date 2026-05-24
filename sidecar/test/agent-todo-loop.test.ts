@@ -18,8 +18,8 @@ import { Dispatcher } from "../src/rpc/dispatcher";
 import { StdioTransport, type ByteSink, type ByteSource } from "../src/rpc/transport";
 import { registerAgentHandlers, setModelResolver, resetModelResolver } from "../src/agent/loop";
 import { SessionManager } from "../src/agent/session/manager";
-import { toolRegistry } from "../src/agent/tools/registry";
-import { registerTodoTool } from "../src/agent/tools/todo";
+import { toolRegistry } from "../src/agent/tools/core/registry";
+import { registerTodoTool } from "../src/agent/tools/builtins/todo";
 import { ambientRegistry } from "../src/agent/ambient/registry";
 import {
   registerApiProvider,

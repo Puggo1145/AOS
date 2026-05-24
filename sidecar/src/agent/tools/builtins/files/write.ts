@@ -15,8 +15,10 @@ import {
   FILE_TOOL_PATH_PARAMETER_DESCRIPTION,
   FILE_TOOL_PATH_POLICY_TEXT,
   resolveFileToolPath,
-} from "./file-path-policy";
-import { ToolUserError, type ToolHandler, type ToolExecContext, type ToolExecResult } from "./types";
+} from "./path-policy";
+import { defineTool } from "../../core/schema";
+import { ToolUserError, type ToolHandler, type ToolExecContext, type ToolExecResult } from "../../core/types";
+import { z } from "zod";
 
 interface WriteArgs {
   path: string;
@@ -29,31 +31,21 @@ interface WriteDetails {
   created: boolean;
 }
 
+const writeParameterSchema = z.object({
+  path: z.string().describe(FILE_TOOL_PATH_PARAMETER_DESCRIPTION),
+  content: z.string().describe("Full file contents (UTF-8). The previous file, if any, is overwritten."),
+}).strict();
+
 export function createWriteTool(): ToolHandler<WriteArgs, WriteDetails> {
-  return {
-    spec: {
-      name: "write",
-      description:
-        `Write \`content\` to \`path\` as UTF-8, creating parent directories as needed and ` +
-        `overwriting any existing file. ${FILE_TOOL_PATH_POLICY_TEXT} Use \`update\` instead ` +
-        `when you need to change part of an existing file.`,
-      parameters: {
-        type: "object",
-        properties: {
-          path: {
-            type: "string",
-            description: FILE_TOOL_PATH_PARAMETER_DESCRIPTION,
-          },
-          content: {
-            type: "string",
-            description: "Full file contents (UTF-8). The previous file, if any, is overwritten.",
-          },
-        },
-        required: ["path", "content"],
-      },
-    },
+  return defineTool({
+    name: "write",
+    description:
+      `Write \`content\` to \`path\` as UTF-8, creating parent directories as needed and ` +
+      `overwriting any existing file. ${FILE_TOOL_PATH_POLICY_TEXT} Use \`update\` instead ` +
+      `when you need to change part of an existing file.`,
+    parameters: writeParameterSchema,
     execute: (args, ctx) => runWrite(args, ctx),
-  };
+  });
 }
 
 async function runWrite(args: WriteArgs, ctx: ToolExecContext): Promise<ToolExecResult<WriteDetails>> {

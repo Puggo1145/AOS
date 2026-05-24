@@ -12,7 +12,6 @@ export type { KnownProvider, KnownModelId, EffortLevel } from "./models/catalog"
 export { supportsThinking, supportsVision, supportsEffort, supportedEfforts, defaultEffort } from "./models/capabilities";
 export { effectiveEffort } from "./models/effort";
 export { isContextOverflow } from "./utils/overflow";
-export { validateToolCall, validateToolArguments } from "./utils/validation";
 export { calculateCost } from "./models/cost";
 export { transformMessages } from "./providers/transform-messages";
 export { registerApiProvider, unregisterApiProviders } from "./api-registry";

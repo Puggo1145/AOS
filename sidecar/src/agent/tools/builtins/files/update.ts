@@ -16,8 +16,10 @@ import {
   FILE_TOOL_PATH_PARAMETER_DESCRIPTION,
   FILE_TOOL_PATH_POLICY_TEXT,
   resolveFileToolPath,
-} from "./file-path-policy";
-import { ToolUserError, type ToolHandler, type ToolExecContext, type ToolExecResult } from "./types";
+} from "./path-policy";
+import { defineTool } from "../../core/schema";
+import { ToolUserError, type ToolHandler, type ToolExecContext, type ToolExecResult } from "../../core/types";
+import { z } from "zod";
 
 interface UpdateArgs {
   path: string;
@@ -31,36 +33,23 @@ interface UpdateDetails {
   bytesAfter: number;
 }
 
+const updateParameterSchema = z.object({
+  path: z.string().describe(FILE_TOOL_PATH_PARAMETER_DESCRIPTION),
+  old_text: z.string().describe("Exact substring to find. Must match verbatim and exactly once."),
+  new_text: z.string().describe("Replacement text. May be empty to delete `old_text`."),
+}).strict();
+
 export function createUpdateTool(): ToolHandler<UpdateArgs, UpdateDetails> {
-  return {
-    spec: {
-      name: "update",
-      description:
-        `Replace \`old_text\` with \`new_text\` in the file at \`path\`. \`old_text\` must ` +
-        `match exactly once (whitespace and indentation included); zero or multiple matches are ` +
-        `errors. Make \`old_text\` long enough to uniquely identify the edit site. ` +
-        FILE_TOOL_PATH_POLICY_TEXT,
-      parameters: {
-        type: "object",
-        properties: {
-          path: {
-            type: "string",
-            description: FILE_TOOL_PATH_PARAMETER_DESCRIPTION,
-          },
-          old_text: {
-            type: "string",
-            description: "Exact substring to find. Must match verbatim and exactly once.",
-          },
-          new_text: {
-            type: "string",
-            description: "Replacement text. May be empty to delete `old_text`.",
-          },
-        },
-        required: ["path", "old_text", "new_text"],
-      },
-    },
+  return defineTool({
+    name: "update",
+    description:
+      `Replace \`old_text\` with \`new_text\` in the file at \`path\`. \`old_text\` must ` +
+      `match exactly once (whitespace and indentation included); zero or multiple matches are ` +
+      `errors. Make \`old_text\` long enough to uniquely identify the edit site. ` +
+      FILE_TOOL_PATH_POLICY_TEXT,
+    parameters: updateParameterSchema,
     execute: (args, ctx) => runUpdate(args, ctx),
-  };
+  });
 }
 
 async function runUpdate(args: UpdateArgs, ctx: ToolExecContext): Promise<ToolExecResult<UpdateDetails>> {

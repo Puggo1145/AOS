@@ -5,7 +5,7 @@ import {
   FILE_TOOL_PATH_PARAMETER_DESCRIPTION,
   FILE_TOOL_PATH_POLICY_TEXT,
   resolveFileToolPath,
-} from "../src/agent/tools/file-path-policy";
+} from "../src/agent/tools/builtins/files/path-policy";
 
 test("file tool path policy resolves absolute paths without changing their root", () => {
   expect(resolveFileToolPath("/tmp/notch-agent/../path-policy.txt")).toBe(

@@ -4,10 +4,10 @@ import { test, expect } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { createReadTool } from "../src/agent/tools/read";
-import { createWriteTool } from "../src/agent/tools/write";
-import { createUpdateTool } from "../src/agent/tools/update";
-import { ToolUserError, type ToolExecContext } from "../src/agent/tools/types";
+import { createReadTool } from "../src/agent/tools/builtins/files/read";
+import { createWriteTool } from "../src/agent/tools/builtins/files/write";
+import { createUpdateTool } from "../src/agent/tools/builtins/files/update";
+import { ToolUserError, type ToolExecContext } from "../src/agent/tools/core/types";
 import { getDefaultModel, PROVIDER_IDS } from "../src/llm";
 
 function ctx(signal?: AbortSignal): ToolExecContext {

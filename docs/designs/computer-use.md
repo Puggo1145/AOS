@@ -141,7 +141,7 @@ Shell owns the live `ComputerUseCore` instance and registers `computerUse.*`
 request handlers on the stdio JSON-RPC channel. `Sources/RPCSchema/ComputerUse.swift`
 defines the wire DTOs; `Sources/Shell/Agent/ComputerUseRPCService.swift` maps
 those DTOs into Kit value types. Sidecar registers the eight tools in
-`sidecar/src/agent/tools/computer-use.ts` after the live `Dispatcher` is available.
+`sidecar/src/agent/tools/builtins/computer-use.ts` after the live `Dispatcher` is available.
 
 Not exposed as agent business tools:
 

@@ -11,10 +11,10 @@ import type {
   ToolCall,
   ToolResultContent,
 } from "../../llm";
-import { validateToolArguments } from "../../llm";
 import type { Dispatcher } from "../../rpc/dispatcher";
 import { RPCMethod } from "../../rpc/rpc-types";
 import type { Session } from "../session/session";
+import { validateToolArguments } from "../tools/core/schema";
 import {
   ToolUserError,
   type ToolExecContext,
@@ -54,7 +54,7 @@ export function prepareToolCall(
     };
   }
   try {
-    const args = validateToolArguments(handler.spec, call) as Record<string, unknown>;
+    const args = validateToolArguments(handler, call) as Record<string, unknown>;
     return { kind: "ready", args, handler };
   } catch (err) {
     return {
@@ -123,7 +123,6 @@ export function toolDispatchContext(input: {
       get appSession() {
         return session.computerUseAppSession;
       },
-      stateCache: session.computerUseStateCache,
     },
     signal: input.signal,
   };

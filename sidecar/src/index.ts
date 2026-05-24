@@ -16,10 +16,12 @@ import { SessionManager } from "./agent/session/manager";
 import { registerSessionHandlers } from "./agent/session/handlers";
 import { registerProviderHandlers } from "./auth/register";
 import { registerConfigHandlers } from "./config/handlers";
-import { registerBuiltinTools } from "./agent/tools";
-import { toolRegistry } from "./agent/tools";
-import { registerTodoTool } from "./agent/tools/todo";
-import { registerComputerUseTools } from "./agent/tools/computer-use";
+import {
+  registerBuiltinTools,
+  registerComputerUseTools,
+  registerTodoTool,
+  toolRegistry,
+} from "./agent/tools";
 import { registerBuiltinAmbient } from "./agent/ambient";
 import { ensureWorkspace } from "./agent/workspace";
 import { logger } from "./log";

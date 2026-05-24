@@ -218,7 +218,7 @@ interface Context {
 interface Tool<TParameters extends TSchema = TSchema> {
   name: string;
   description: string;
-  parameters: TParameters;    // TypeBox schema（编译期也是 JSON Schema）
+  parameters: TParameters;    // model-facing JSON Schema generated from zod
 }
 ```
 
@@ -369,17 +369,21 @@ export function parseStreamingJson<T = Record<string, unknown>>(partial: string 
 
 ### 4.1 Tool 定义格式
 
-框架统一用 **JSON Schema**（经由 TypeBox 声明），每个 provider 自己改写成本家格式：
+工具实现统一用 **zod** 声明参数 schema，并通过 `defineTool()` 保留 zod schema 给 dispatch-time 校验，同时生成 model-facing **JSON Schema**。每个 provider 再把 JSON Schema 改写成本家格式：
 
 ```typescript
-// 统一：
-const tool: Tool = {
+// Tool implementation:
+const readFileTool = defineTool({
   name: "read_file",
   description: "Read a file from disk.",
-  parameters: Type.Object({
-    path: Type.String({ description: "Absolute path." }),
+  parameters: z.object({
+    path: z.string().describe("Absolute path."),
   }),
-};
+  execute: async (args, ctx) => { /* ... */ },
+});
+
+// Provider-facing unified shape:
+const { name, description, parameters: jsonSchema } = readFileTool.spec;
 
 // Anthropic:
 { name, description, input_schema: { type: "object", properties, required } }
@@ -455,23 +459,22 @@ for (const tc of pendingToolCalls) {
 
 ### 4.5 Tool 参数校验
 
-模型经常给出不完全符合 schema 的参数（类型混淆、字段缺失、枚举值错位）。提供 `validateToolArguments(tool, toolCall)`：
+模型经常给出不完全符合 schema 的参数（类型混淆、字段缺失、枚举值错位）。工具层使用每个 tool 定义时保留的 zod 参数 schema 做集中校验，并从同一个 zod schema 生成给模型使用的 JSON Schema：
 
 ```typescript
-export function validateToolArguments(tool: Tool, toolCall: ToolCall): any {
-  const args = structuredClone(toolCall.arguments);
-  Value.Convert(tool.parameters, args);  // TypeBox: 最宽松的类型转换
-  // 对非 TypeBox 的 JSON Schema 做一轮 coerce（string→number、string→bool、null→default）
-  const validator = getValidator(tool.parameters);
-  // ...
-  if (validator.Check(args)) return args;
-  const errors = validator.Errors(args).map((e) => `  - ${path(e)}: ${e.message}`).join("\n");
+export function validateToolArguments<TArgs>(
+  handler: ToolHandler<TArgs>,
+  toolCall: ToolCall,
+): TArgs {
+  const result = handler.parameterSchema.safeParse(structuredClone(toolCall.arguments));
+  if (result.success) return result.data;
+  const errors = result.error.issues.map((e) => `  - ${path(e)}: ${e.message}`).join("\n");
   throw new Error(`Validation failed for tool "${toolCall.name}":\n${errors}\n\nReceived arguments:\n${JSON.stringify(toolCall.arguments, null, 2)}`);
 }
 ```
 
 原则：
-- 尝试一次轻量 coerce，再校验
+- 不做隐式 coerce；`"77"` 不是 `77`，让模型在下一轮显式修正
 - 校验失败要给 LLM 回一条机器可读的错误（`role: toolResult, isError: true`），让它下一轮自我修正
 - 绝不 silent 通过
 
@@ -888,11 +891,9 @@ llm/
   utils/
     event-stream.ts                # EventStream / AssistantMessageEventStream
     json-parse.ts                  # parseStreamingJson / repairJson
-    validation.ts                  # validateToolCall / validateToolArguments
     overflow.ts                    # isContextOverflow
     sanitize-unicode.ts            # surrogate / BOM cleanup
     headers.ts                     # header 合并 / 转 Record
-    typebox-helpers.ts             # Tool schema 构造糖
 
   auth/
     env-api-keys.ts                # env 查找 + <authenticated> 哨兵
@@ -904,7 +905,7 @@ llm/
 ```
 
 agent runtime 只需要：
-- `import { stream, completeSimple, isContextOverflow, validateToolCall } from "llm"`
+- `import { stream, completeSimple, isContextOverflow } from "llm"`
 - `import { getModel } from "llm"`
 
 ---

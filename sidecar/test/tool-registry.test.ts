@@ -2,18 +2,18 @@
 // "no double registration" failure mode.
 
 import { test, expect, beforeEach } from "bun:test";
-import { ToolRegistry } from "../src/agent/tools/registry";
-import type { ToolHandler } from "../src/agent/tools/types";
+import { z } from "zod";
+import { ToolRegistry } from "../src/agent/tools/core/registry";
+import { defineTool } from "../src/agent/tools/core/schema";
+import type { ToolHandler } from "../src/agent/tools/core/types";
 
 function fakeHandler(name: string): ToolHandler {
-  return {
-    spec: {
-      name,
-      description: `${name} test handler`,
-      parameters: { type: "object", properties: {} },
-    },
+  return defineTool({
+    name,
+    description: `${name} test handler`,
+    parameters: z.object({}).strict(),
     execute: async () => ({ content: [{ type: "text", text: name }], isError: false }),
-  };
+  });
 }
 
 let reg: ToolRegistry;

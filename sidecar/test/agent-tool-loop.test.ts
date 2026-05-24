@@ -13,11 +13,12 @@
 //     instead of killing the turn.
 
 import { test, expect, beforeEach, afterEach } from "bun:test";
+import { z } from "zod";
 import { registerAgentHandlers, setModelResolver, resetModelResolver } from "../src/agent/loop";
 import { SessionManager } from "../src/agent/session/manager";
-import { toolRegistry } from "../src/agent/tools/registry";
-import { ToolUserError } from "../src/agent/tools";
-import { registerComputerUseTools } from "../src/agent/tools/computer-use";
+import { toolRegistry } from "../src/agent/tools/core/registry";
+import { defineTool, ToolUserError } from "../src/agent/tools";
+import { registerComputerUseTools } from "../src/agent/tools/builtins/computer-use";
 import { RPCMethod } from "../src/rpc/rpc-types";
 import {
   registerApiProvider,
@@ -103,21 +104,15 @@ test("two-round tool-use: assistant calls a tool, then produces a final reply", 
 
   // Echo tool: returns its `text` argument verbatim.
   let receivedArgs: unknown = null;
-  toolRegistry.register({
-    spec: {
-      name: "echo",
-      description: "Echo a string",
-      parameters: {
-        type: "object",
-        properties: { text: { type: "string" } },
-        required: ["text"],
-      },
-    },
+  toolRegistry.register(defineTool({
+    name: "echo",
+    description: "Echo a string",
+    parameters: z.object({ text: z.string() }).strict(),
     execute: async (args) => {
       receivedArgs = args;
-      return { content: [{ type: "text", text: `echoed: ${(args as any).text}` }], isError: false };
+      return { content: [{ type: "text", text: `echoed: ${args.text}` }], isError: false };
     },
-  });
+  }));
 
   // Round 1: assistant emits a single toolCall, stopReason "toolUse".
   scriptedRounds.push((model) => {
@@ -408,16 +403,14 @@ test("handler ToolUserError surfaces as isError result without aborting the turn
   const { manager, convo, sessionId } = setupSession();
   registerAgentHandlers(dispatcher, { manager });
 
-  toolRegistry.register({
-    spec: {
-      name: "soft_fail",
-      description: "Throws ToolUserError",
-      parameters: { type: "object", properties: {} },
-    },
+  toolRegistry.register(defineTool({
+    name: "soft_fail",
+    description: "Throws ToolUserError",
+    parameters: z.object({}).strict(),
     execute: async () => {
       throw new ToolUserError("file not found");
     },
-  });
+  }));
 
   scriptedRounds.push((model) => {
     const tc: ToolCall = { type: "toolCall", id: "tc_s", name: "soft_fail", arguments: {} };
@@ -467,16 +460,14 @@ test("unexpected handler exception is surfaced as an isError tool result and the
   const { manager, convo, sessionId } = setupSession();
   registerAgentHandlers(dispatcher, { manager });
 
-  toolRegistry.register({
-    spec: {
-      name: "boom",
-      description: "Always throws plain Error",
-      parameters: { type: "object", properties: {} },
-    },
+  toolRegistry.register(defineTool({
+    name: "boom",
+    description: "Always throws plain Error",
+    parameters: z.object({}).strict(),
     execute: async () => {
       throw new Error("kaboom");
     },
-  });
+  }));
 
   scriptedRounds.push((model) => {
     const tc: ToolCall = { type: "toolCall", id: "tc_b", name: "boom", arguments: {} };
@@ -550,12 +541,10 @@ test("cancellation mid-tool closes the turn quietly — no ui.error", async () =
   // Tool blocks on a 5s sleep, racing the abort signal. When the test
   // sends `agent.cancel` mid-call, the abort listener rejects — same
   // shape as Dispatcher.request rejecting on signal.aborted.
-  toolRegistry.register({
-    spec: {
-      name: "slow",
-      description: "Sleeps until cancelled",
-      parameters: { type: "object", properties: {} },
-    },
+  toolRegistry.register(defineTool({
+    name: "slow",
+    description: "Sleeps until cancelled",
+    parameters: z.object({}).strict(),
     execute: async (_args, ctx) => {
       await new Promise<void>((resolve, reject) => {
         if (ctx.signal.aborted) {
@@ -574,7 +563,7 @@ test("cancellation mid-tool closes the turn quietly — no ui.error", async () =
       });
       return { content: [{ type: "text", text: "should not reach" }], isError: false };
     },
-  });
+  }));
 
   scriptedRounds.push((model) => {
     const tc: ToolCall = { type: "toolCall", id: "tc_slow", name: "slow", arguments: {} };
@@ -630,18 +619,12 @@ test("invalid tool arguments produce an isError result with the validator's mess
   const { manager, convo, sessionId } = setupSession();
   registerAgentHandlers(dispatcher, { manager });
 
-  toolRegistry.register({
-    spec: {
-      name: "needs_text",
-      description: "Requires text",
-      parameters: {
-        type: "object",
-        properties: { text: { type: "string" } },
-        required: ["text"],
-      },
-    },
+  toolRegistry.register(defineTool({
+    name: "needs_text",
+    description: "Requires text",
+    parameters: z.object({ text: z.string() }).strict(),
     execute: async () => ({ content: [{ type: "text", text: "ok" }], isError: false }),
-  });
+  }));
 
   scriptedRounds.push((model) => {
     // Missing required `text` field.

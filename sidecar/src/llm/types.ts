@@ -33,9 +33,9 @@ export type Provider = string;
 // Tool / JSON Schema
 // ---------------------------------------------------------------------------
 
-/// Minimal JSON Schema description used by the in-house validator
-/// (`utils/validation.ts`). We do not pull in TypeBox / AJV; the validator
-/// only needs to traverse a plain JSON Schema object.
+/// Minimal JSON Schema description exposed to model providers. Tool handlers
+/// define zod parameter schemas in `agent/tools/core/schema.ts`; the model-facing
+/// JSON Schema is generated from those zod schemas.
 export interface JSONSchema {
   type?: "string" | "number" | "integer" | "boolean" | "object" | "array" | "null";
   description?: string;

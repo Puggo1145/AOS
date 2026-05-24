@@ -11,8 +11,10 @@
 import { promises as fs } from "node:fs";
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline/promises";
-import { FILE_TOOL_PATH_PARAMETER_DESCRIPTION, resolveFileToolPath } from "./file-path-policy";
-import { ToolUserError, type ToolHandler, type ToolExecContext, type ToolExecResult } from "./types";
+import { FILE_TOOL_PATH_PARAMETER_DESCRIPTION, resolveFileToolPath } from "./path-policy";
+import { defineTool } from "../../core/schema";
+import { ToolUserError, type ToolHandler, type ToolExecContext, type ToolExecResult } from "../../core/types";
+import { z } from "zod";
 
 const DEFAULT_LINE_COUNT = 500;
 
@@ -33,34 +35,21 @@ interface ReadDetails {
   remainingLines: number;
 }
 
+const readParameterSchema = z.object({
+  path: z.string().describe(FILE_TOOL_PATH_PARAMETER_DESCRIPTION),
+  start: z.number().describe("Optional. 1-based first line to return. Defaults to 1.").optional(),
+  end: z.number().describe("Optional. 1-based inclusive final line to return. Defaults to start + 499.").optional(),
+}).strict();
+
 export function createReadTool(): ToolHandler<ReadArgs, ReadDetails> {
-  return {
-    spec: {
-      name: "read",
-      description:
-        `Read a UTF-8 text file. Returns a 1-based inclusive line range as plain text. ` +
-        `Defaults to 500 lines from \`start\` (default: 1). `,
-      parameters: {
-        type: "object",
-        properties: {
-          path: {
-            type: "string",
-            description: FILE_TOOL_PATH_PARAMETER_DESCRIPTION,
-          },
-          start: {
-            type: "number",
-            description: "Optional. 1-based first line to return. Defaults to 1.",
-          },
-          end: {
-            type: "number",
-            description: "Optional. 1-based inclusive final line to return. Defaults to start + 499.",
-          },
-        },
-        required: ["path"],
-      },
-    },
+  return defineTool({
+    name: "read",
+    description:
+      `Read a UTF-8 text file. Returns a 1-based inclusive line range as plain text. ` +
+      `Defaults to 500 lines from \`start\` (default: 1). `,
+    parameters: readParameterSchema,
     execute: (args, ctx) => runRead(args, ctx),
-  };
+  });
 }
 
 async function runRead(args: ReadArgs, ctx: ToolExecContext): Promise<ToolExecResult<ReadDetails>> {

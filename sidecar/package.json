@@ -11,7 +11,8 @@
   },
   "dependencies": {
     "eventsource-parser": "^3.0.0",
-    "partial-json": "^0.1.7"
+    "partial-json": "^0.1.7",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/bun": "latest",

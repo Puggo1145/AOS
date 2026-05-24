@@ -14,8 +14,8 @@
 
 **Files:**
 - Create: `sidecar/test/computer-use-tools.test.ts`
-- Modify: `sidecar/src/agent/tools/register-builtins.ts`
-- Create: `sidecar/src/agent/tools/computer-use.ts`
+- Modify: `sidecar/src/agent/tools/builtins/register.ts`
+- Create: `sidecar/src/agent/tools/builtins/computer-use.ts`
 
 - [ ] **Step 1: Write failing tests**
 
@@ -44,7 +44,7 @@ Expected: FAIL because `computer-use.ts` does not exist.
 
 - [ ] **Step 3: Implement minimal TS tool registration**
 
-Create `sidecar/src/agent/tools/computer-use.ts` with `createComputerUseTools(dispatcher)` and `registerComputerUseTools(registry, dispatcher)`. Each tool validates through JSON Schema and calls one `RPCMethod.computerUse*` constant.
+Create `sidecar/src/agent/tools/builtins/computer-use.ts` with `createComputerUseTools(dispatcher)` and `registerComputerUseTools(registry, dispatcher)`. Each tool validates through the shared zod tool schema layer and calls one `RPCMethod.computerUse*` constant.
 
 - [ ] **Step 4: Register builtins**
 

@@ -1,6 +1,6 @@
 // Process-wide ambient-provider registry.
 //
-// Mirrors `agent/tools/registry.ts`: a single in-memory map keyed by
+// Mirrors `agent/tools/core/registry.ts`: a single in-memory map keyed by
 // provider name, plus a `sourceId` tag for batch unregister (mirrors the
 // tool registry's plugin-unload pattern — a future skill pack adding
 // ambient blocks can swap them in/out as a group).
@@ -26,7 +26,7 @@ class AmbientRegistry {
     const name = provider.name;
     if (this.entries.has(name)) {
       // Re-registration is a programmer error (overlapping plugins, double
-      // boot). Match `tools/registry.ts`: fail loud rather than silently
+      // boot). Match `tools/core/registry.ts`: fail loud rather than silently
       // overwrite — the renderer would otherwise pick whichever copy won
       // the race and downstream debugging gets murky.
       throw new Error(`ambient provider already registered: "${name}"`);

@@ -4,8 +4,8 @@ import { beforeAll, test, expect } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createBashTool } from "../src/agent/tools/bash";
-import type { ToolExecContext } from "../src/agent/tools/types";
+import { createBashTool } from "../src/agent/tools/builtins/bash";
+import type { ToolExecContext } from "../src/agent/tools/core/types";
 import { getDefaultModel, PROVIDER_IDS } from "../src/llm";
 
 const testHome = realpathSync(mkdtempSync(join(tmpdir(), "notch-agent-bash-tool-")));
@@ -107,15 +107,12 @@ test("parent signal abort cancels the command", async () => {
   expect(text).toContain("cancelled by user");
 });
 
-test("rejects non-finite timeout as an isError without spawning", async () => {
+test("rejects non-finite timeout at the shared schema validation layer", async () => {
   const tool = createTestBashTool();
-  const result = await tool.execute(
-    { command: "echo nope", timeout: Number.NaN },
+  await expect(tool.execute(
+    { command: "echo nope", timeout: Number.NaN } as any,
     ctxWith(new AbortController().signal),
-  );
-  expect(result.isError).toBe(true);
-  const text = (result.content[0] as { type: "text"; text: string }).text;
-  expect(text).toContain("invalid timeout");
+  )).rejects.toThrow(/Validation failed.*timeout/s);
 });
 
 test("rejects non-positive timeout as an isError without spawning", async () => {

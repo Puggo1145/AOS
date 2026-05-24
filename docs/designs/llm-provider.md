@@ -333,7 +333,7 @@ stream.result() →
 ```
 sidecar/src/llm/
   index.ts                         # 仅 re-export：stream / streamSimple / getModel
-                                   #               isContextOverflow / validateToolCall
+                                   #               isContextOverflow
                                    #               types
   types.ts                         # Message / Content / Event / Model / Options / Capability
   api-registry.ts                  # registerApiProvider / getApiProvider / sourceId
@@ -354,7 +354,6 @@ sidecar/src/llm/
   utils/
     event-stream.ts                # EventStream / AssistantMessageEventStream
     json-parse.ts                  # parseStreamingJson + repair
-    validation.ts                  # validateToolCall / validateToolArguments
     overflow.ts                    # isContextOverflow + 文案 patterns
     sanitize-unicode.ts
     headers.ts
@@ -371,7 +370,7 @@ agent loop 的 import 边界（**强契约**）：
 
 ```ts
 // 唯一允许的 imports：
-import { stream, getModel, isContextOverflow, validateToolCall } from "./llm";
+import { stream, getModel, isContextOverflow } from "./llm";
 import type { Model, Context, AssistantMessage, AssistantMessageEvent } from "./llm";
 ```
 
@@ -445,7 +444,7 @@ agent.submit(turnId, prompt, citedContext)
 
 ## 不做的事
 
-- 不做 tool use（无 tool 注册、`Context.tools` 始终 undefined；`validateToolCall` / `validateToolArguments` 实现但本轮无 caller）
+- 不做 tool use（无 tool 注册、`Context.tools` 始终 undefined）
 - 不做 thinking content 渲染（事件流忽略 thinking_*）
 - 不做 vision input（`Context.messages` 仅 text）
 - 不做多 provider 接入（Anthropic / Google / OpenRouter / vLLM / Bedrock / Mistral / faux）

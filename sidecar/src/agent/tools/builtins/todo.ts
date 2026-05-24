@@ -9,10 +9,12 @@
 // the model rewrites the list every time it changes status, the harness
 // simply renders the new state, and the user always sees one coherent plan.
 
-import type { SessionManager } from "../session/manager";
-import { TodoManager, type TodoItem } from "../todos/manager";
-import { toolRegistry } from "./registry";
-import { ToolUserError, type ToolHandler, type ToolExecResult } from "./types";
+import type { SessionManager } from "../../session/manager";
+import { TodoManager, type TodoItem } from "../../todos/manager";
+import { toolRegistry } from "../core/registry";
+import { defineTool } from "../core/schema";
+import { ToolUserError, type ToolHandler, type ToolExecResult } from "../core/types";
+import { z } from "zod";
 
 export const TODO_WRITE_TOOL_NAME = "todo_write";
 
@@ -24,6 +26,17 @@ interface TodoWriteDetails {
   items: TodoItem[];
 }
 
+const todoWriteParameterSchema = z.object({
+  items: z.array(
+    z.object({
+      id: z.string().describe("Stable identifier for this item. Reuse the same id across updates so the UI can track per-item state."),
+      text: z.string().describe("One-line description of the step."),
+      status: z.enum(["pending", "in_progress", "completed"])
+        .describe("Current state. Only one item across the whole list may be in_progress."),
+    }).strict(),
+  ).describe("Full replacement list. Order is the rendering order shown to the user."),
+}).strict();
+
 /// Build the tool handler. The factory closes over `getManager` so the
 /// handler can resolve the session-scoped `TodoManager` at call time —
 /// `ToolExecContext` carries `sessionId` but not the SessionManager itself
@@ -34,49 +47,15 @@ interface TodoWriteDetails {
 export function createTodoWriteTool(opts: {
   getManager: (sessionId: string) => TodoManager | null;
 }): ToolHandler<TodoWriteArgs, TodoWriteDetails> {
-  return {
-    spec: {
-      name: TODO_WRITE_TOOL_NAME,
-      description:
-        `Plan and track multi-step tasks. Replaces the entire to-do list with the supplied ` +
-        `items. Use this BEFORE starting non-trivial work so the user can see the plan, then ` +
-        `update item statuses as you progress. Constraints: at most one item may be ` +
-        `in_progress at a time; max 20 items; status is one of pending | in_progress | ` +
-        `completed. Returns the rendered list so you can verify the new state.`,
-      parameters: {
-        type: "object",
-        properties: {
-          items: {
-            type: "array",
-            description:
-              `Full replacement list. Order is the rendering order shown to the user.`,
-            items: {
-              type: "object",
-              properties: {
-                id: {
-                  type: "string",
-                  description:
-                    `Stable identifier for this item. Reuse the same id across updates so ` +
-                    `the UI can track per-item state.`,
-                },
-                text: {
-                  type: "string",
-                  description: `One-line description of the step.`,
-                },
-                status: {
-                  type: "string",
-                  enum: ["pending", "in_progress", "completed"],
-                  description:
-                    `Current state. Only one item across the whole list may be in_progress.`,
-                },
-              },
-              required: ["id", "text", "status"],
-            },
-          },
-        },
-        required: ["items"],
-      },
-    },
+  return defineTool({
+    name: TODO_WRITE_TOOL_NAME,
+    description:
+      `Plan and track multi-step tasks. Replaces the entire to-do list with the supplied ` +
+      `items. Use this BEFORE starting non-trivial work so the user can see the plan, then ` +
+      `update item statuses as you progress. Constraints: at most one item may be ` +
+      `in_progress at a time; max 20 items; status is one of pending | in_progress | ` +
+      `completed. Returns the rendered list so you can verify the new state.`,
+    parameters: todoWriteParameterSchema,
     execute: async (args, ctx): Promise<ToolExecResult<TodoWriteDetails>> => {
       const manager = opts.getManager(ctx.sessionId);
       if (!manager) {
@@ -102,7 +81,7 @@ export function createTodoWriteTool(opts: {
         isError: false,
       };
     },
-  };
+  });
 }
 
 /// Register the todo tool against the global `toolRegistry`. Kept separate

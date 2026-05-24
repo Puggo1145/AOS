@@ -9,13 +9,15 @@
 // stream, capturing dispatcher, real SessionManager + TodoManager.
 
 import { test, expect, beforeEach, afterEach } from "bun:test";
+import { z } from "zod";
 import { Dispatcher } from "../src/rpc/dispatcher";
 import { StdioTransport, type ByteSink, type ByteSource } from "../src/rpc/transport";
 import { registerAgentHandlers, setModelResolver, resetModelResolver } from "../src/agent/loop";
 import { ContextObserver } from "../src/agent/context-observer";
 import { SessionManager } from "../src/agent/session/manager";
-import { toolRegistry } from "../src/agent/tools/registry";
-import { registerTodoTool } from "../src/agent/tools/todo";
+import { toolRegistry } from "../src/agent/tools/core/registry";
+import { defineTool } from "../src/agent/tools/core/schema";
+import { registerTodoTool } from "../src/agent/tools/builtins/todo";
 import { ambientRegistry } from "../src/agent/ambient/registry";
 import { todosAmbientProvider } from "../src/agent/ambient/providers/todos";
 import {
@@ -312,14 +314,12 @@ test("multi-round tool flow re-injects a fresh ambient on every round", async ()
   });
 
   // A no-op tool the model can call across multiple rounds.
-  toolRegistry.register({
-    spec: {
-      name: "noop",
-      description: "Noop",
-      parameters: { type: "object", properties: {} },
-    },
+  toolRegistry.register(defineTool({
+    name: "noop",
+    description: "Noop",
+    parameters: z.object({}).strict(),
     execute: async () => ({ content: [{ type: "text", text: "ok" }], isError: false }),
-  });
+  }));
 
   // Rounds 2 & 3: the model uses noop. Both rounds must see ambient.
   for (let i = 0; i < 2; i++) {

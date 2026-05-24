@@ -5,10 +5,10 @@
 // want exercised, so they do NOT call this function.
 
 import { createBashTool } from "./bash";
-import { createReadTool } from "./read";
-import { createUpdateTool } from "./update";
-import { createWriteTool } from "./write";
-import { toolRegistry } from "./registry";
+import { toolRegistry } from "../core/registry";
+import { createReadTool } from "./files/read";
+import { createUpdateTool } from "./files/update";
+import { createWriteTool } from "./files/write";
 
 let registered = false;
 
