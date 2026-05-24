@@ -43,9 +43,9 @@ coordinate state.
 
 ### RPC Method Catalog
 
-The Sidecar-local catalog of method routing metadata: namespace direction,
-request vs notification kind, inbound handler timeout, and dispatcher fast-path
-status. It complements the wire schema in `rpc-types.ts`.
+The Sidecar-local Method Semantics catalog: one entry per RPC method covering
+method direction, request vs notification kind, inbound handler timeout, and
+dispatcher fast-path status. It complements the wire schema in `rpc-types.ts`.
 
 ### Runtime Wire Projection
 

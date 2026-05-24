@@ -13,7 +13,7 @@
 import { test, expect } from "bun:test";
 import { StdioTransport, type ByteSink, type ByteSource } from "../src/rpc/transport";
 import { Dispatcher, RPCMethodError, DispatcherStopped } from "../src/rpc/dispatcher";
-import { RPCErrorCode } from "../src/rpc/rpc-types";
+import { RPCErrorCode, RPCMethod } from "../src/rpc/rpc-types";
 import { directionOf } from "../src/rpc/method-catalog";
 
 // ---------------------------------------------------------------------------
@@ -78,7 +78,7 @@ function makePair(): Pair {
   const ta = new StdioTransport(ba.asSource(), ab.asSink());
   const tb = new StdioTransport(ab.asSource(), ba.asSink());
   const a = new Dispatcher(ta);
-  const b = new Dispatcher(tb);
+  const b = new Dispatcher(tb, { endpoint: "shell" });
   void a.start();
   void b.start();
   return {
@@ -135,6 +135,38 @@ test("outbound direction enforcement: Bun cannot initiate agent.*", async () => 
   close();
 });
 
+test("outbound method direction enforcement rejects Shell-owned mixed namespace requests", async () => {
+  const { a, close } = makePair();
+  for (const method of [RPCMethod.providerStatus, RPCMethod.devContextGet, RPCMethod.sessionCreate]) {
+    let caught: unknown;
+    try {
+      await a.request(method, {});
+    } catch (e) {
+      caught = e;
+    }
+    expect(String(caught)).toContain("Bun cannot initiate");
+  }
+  close();
+});
+
+test("outbound method direction enforcement allows Bun-owned Shell requests", async () => {
+  const input = new Pipe();
+  const output = new Pipe();
+  const dispatcher = new Dispatcher(new StdioTransport(input.asSource(), output.asSink()));
+
+  const pending = dispatcher.request(RPCMethod.computerUseListApps, { mode: "running" }).catch((err) => err);
+  await new Promise((r) => setTimeout(r, 10));
+  const frame = JSON.parse(output.buf.shift()!);
+
+  expect(frame.method).toBe(RPCMethod.computerUseListApps);
+  expect(frame.params).toEqual({ mode: "running" });
+
+  dispatcher.stop();
+  await pending;
+  input.close();
+  output.close();
+});
+
 test("method catalog marks computerUse.* as Bun to Shell", () => {
   expect(directionOf("computerUse.listApps")).toBe("bunToShell");
 });
@@ -167,22 +199,32 @@ test("inbound ui.* request triggers MethodNotFound (low-level)", async () => {
 test("notification dispatch with no response", async () => {
   const { a, b, close } = makePair();
   let received: any = undefined;
-  b.registerNotification("rpc.ping", async (params) => {
+  b.registerNotification(RPCMethod.devContextChanged, async (params) => {
     received = params;
   });
-  a.notify("rpc.ping", { hello: "world" });
+  a.notify(RPCMethod.devContextChanged, { hello: "world" });
   // Allow the microtask + I/O to flush.
   await new Promise((r) => setTimeout(r, 50));
   expect(received).toEqual({ hello: "world" });
   close();
 });
 
+test("registration validates request and notification method semantics", () => {
+  const { a, close } = makePair();
+
+  expect(() => a.registerRequest(RPCMethod.providerStatusChanged, async () => ({}))).toThrow(/notification method/);
+  expect(() => a.registerNotification(RPCMethod.providerStatus, async () => {})).toThrow(/request method/);
+  expect(() => a.registerRequest("unknown.method", async () => ({}))).toThrow(/unknown RPC method/);
+  expect(() => a.registerNotification("unknown.method", async () => {})).toThrow(/unknown RPC method/);
+
+  close();
+});
+
 // ---------------------------------------------------------------------------
 // dev.* split-direction enforcement (P2.1 fix).
 //
-// Namespace-level direction is `both` so request methods (`dev.context.get`)
-// and notification methods (`dev.context.changed`) can coexist; the per-method
-// `DEV_METHOD_KINDS` table inside the dispatcher is what catches "wrong shape"
+// Mixed namespaces contain request methods (`dev.context.get`) and notification
+// methods (`dev.context.changed`). The RPC Method Catalog catches "wrong shape"
 // misuse at the boundary instead of letting it fail silently downstream.
 // ---------------------------------------------------------------------------
 

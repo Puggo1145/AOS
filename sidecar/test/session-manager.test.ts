@@ -96,7 +96,7 @@ test("title default falls back when first prompt has no non-empty line", () => {
   const m = new SessionManager();
   const s = m.create();
   m.maybeDeriveTitle(s.id, "   \n\n   "); // pure whitespace
-  // Per design: "新对话" stays as the title — derivation only matters when
+  // Per design: "New Conversation" stays as the title — derivation only matters when
   // there is signal to derive from.
-  expect(s.info.title).toBe("新对话");
+  expect(s.info.title).toBe("New Conversation");
 });

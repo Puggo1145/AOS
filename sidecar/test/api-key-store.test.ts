@@ -68,7 +68,7 @@ class Pipe {
 function makePair() {
   const ab = new Pipe();
   const ba = new Pipe();
-  const aDispatcher = new Dispatcher(new StdioTransport(ba.asSource(), ab.asSink()));
+  const aDispatcher = new Dispatcher(new StdioTransport(ba.asSource(), ab.asSink()), { endpoint: "shell" });
   const bDispatcher = new Dispatcher(new StdioTransport(ab.asSource(), ba.asSink()));
   void aDispatcher.start();
   void bDispatcher.start();

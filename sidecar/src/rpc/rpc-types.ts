@@ -100,6 +100,9 @@ export type JSONValue =
 // ---------------------------------------------------------------------------
 // Method name constants
 // ---------------------------------------------------------------------------
+//
+// Keep this file limited to wire schema names and payload shapes. Sidecar-local
+// routing semantics for these names live in `rpc/method-catalog.ts`.
 
 export const RPCMethod = {
   rpcHello: "rpc.hello",
@@ -948,7 +951,7 @@ export interface SessionListItem {
 }
 
 export interface SessionCreateParams {
-  /// Optional initial title; defaults to "新对话". Auto-derivation from the
+  /// Optional initial title; defaults to "New Conversation". Auto-derivation from the
   /// first user prompt happens on submit, only if title is still default.
   title?: string;
 }

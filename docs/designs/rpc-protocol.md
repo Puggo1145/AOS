@@ -125,7 +125,7 @@ Method 级方向：
 ```ts
 interface SessionListItem {
   id: string;            // "sess_<16hex>"
-  title: string;         // 用户首条 prompt 派生（≤ 32 cps），默认 "新对话"
+  title: string;         // 用户首条 prompt 派生（≤ 32 cps），默认 "New Conversation"
   createdAt: number;     // ms since epoch
   turnCount: number;     // 仅计 status === "done" 的 turn
   lastActivityAt: number; // 最近 turn.startedAt；空 session 等于 createdAt

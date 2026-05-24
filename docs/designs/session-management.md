@@ -96,7 +96,7 @@ sidecar/src/agent/
 interface SessionInfo {
   id: SessionId;        // 形如 "sess_<8-byte hex>"，进程内唯一
   createdAt: number;    // ms since epoch
-  title: string;        // 默认 "新对话"；首条 user prompt 提交后自动派生（取首行 ≤32 字符）
+  title: string;        // 默认 "New Conversation"；首条 user prompt 提交后自动派生（取首行 ≤32 字符）
 }
 ```
 

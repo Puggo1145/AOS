@@ -1,10 +1,10 @@
 // session.* dispatcher tests — direction enforcement + handler smoke tests.
 //
-// The dispatcher's namespace direction table treats `session.*` as bidirectional,
-// with per-method kinds enforced via SESSION_METHOD_KINDS. This file proves
-// both halves: (a) sidecar emits `session.created` etc. as notifications and
-// the dispatcher accepts that path, (b) sending a session.* request method as
-// a notification (or vice versa) throws programmer errors.
+// The RPC Method Catalog gives each `session.*` method explicit direction and
+// request/notification semantics. This file proves both halves: (a) sidecar
+// emits `session.created` etc. as notifications and the dispatcher accepts
+// that path, (b) sending a session.* request method as a notification (or vice
+// versa) throws programmer errors.
 
 import { test, expect } from "bun:test";
 import { Dispatcher } from "../src/rpc/dispatcher";

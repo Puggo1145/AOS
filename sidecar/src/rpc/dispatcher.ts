@@ -11,12 +11,13 @@
 //     background task — but the bypass is implemented for design correctness.)
 //   - Per-method ack timeout. agent.submit and agent.cancel ack within 1s;
 //     rpc.ping within 1s. Timeout reply is ErrTimeout (-32002).
-//   - Direction enforcement per Namespace table:
+//   - Direction enforcement per RPC Method Catalog direction:
 //       agent.*, settings.* — Shell→Bun only. Bun calling request("agent.*")
 //         is a programmer error.
 //       ui.*  — Bun→Shell only. Inbound Request from Shell on this namespace
 //         is rejected with MethodNotFound.
-//       rpc.*               — bidirectional.
+//       provider.* / dev.* / session.* mixed namespaces are enforced per
+//         method direction and request vs notification kind.
 //   - Outbound `request` keeps a pending map keyed by RPCId; resolved on
 //     response. `stop()` rejects all pending with DispatcherStopped.
 
@@ -31,7 +32,7 @@ import {
 } from "./rpc-types";
 import { StdioTransport } from "./transport";
 import { logger } from "../log";
-import { directionOf, inboundTimeoutMs, isFastPathMethod, splitKindOf } from "./method-catalog";
+import { rpcMethodSemantics } from "./method-catalog";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -46,6 +47,14 @@ export interface RequestOptions {
   /// (per spec: Shell→Bun requests don't have client-side timeouts; the
   /// caller decides). For Bun→Shell handshake we pass an explicit signal.
   timeoutMs?: number;
+}
+
+export type DispatcherEndpoint = "bun" | "shell";
+
+export interface DispatcherOptions {
+  /// The production Sidecar dispatcher runs as the Bun endpoint. Tests may
+  /// instantiate a Shell endpoint when using this TS dispatcher as a peer.
+  endpoint?: DispatcherEndpoint;
 }
 
 export class RPCMethodError extends Error {
@@ -81,14 +90,24 @@ export class Dispatcher {
   private started = false;
   private stopped = false;
   private readerPromise?: Promise<void>;
+  private readonly endpoint: DispatcherEndpoint;
 
-  constructor(private readonly transport: StdioTransport) {}
+  constructor(private readonly transport: StdioTransport, opts: DispatcherOptions = {}) {
+    this.endpoint = opts.endpoint ?? "bun";
+  }
 
   // -------------------------------------------------------------------------
   // Registration
   // -------------------------------------------------------------------------
 
   registerRequest(method: string, handler: RequestHandler): void {
+    const semantics = this.requireRegisteredMethod(method);
+    if (semantics.kind === "notification") {
+      throw new Error(`programmer error: '${method}' is a notification method, cannot register request handler`);
+    }
+    if (!this.canReceive(semantics.direction)) {
+      throw new Error(`programmer error: ${this.endpoint} endpoint cannot receive request '${method}'`);
+    }
     if (this.requestHandlers.has(method)) {
       throw new Error(`request handler already registered: ${method}`);
     }
@@ -96,6 +115,13 @@ export class Dispatcher {
   }
 
   registerNotification(method: string, handler: NotificationHandler): void {
+    const semantics = this.requireRegisteredMethod(method);
+    if (semantics.kind === "request") {
+      throw new Error(`programmer error: '${method}' is a request method, cannot register notification handler`);
+    }
+    if (!this.canReceive(semantics.direction)) {
+      throw new Error(`programmer error: ${this.endpoint} endpoint cannot receive notification '${method}'`);
+    }
     if (this.notificationHandlers.has(method)) {
       throw new Error(`notification handler already registered: ${method}`);
     }
@@ -108,18 +134,20 @@ export class Dispatcher {
 
   request<R>(method: string, params: object, opts?: RequestOptions): Promise<R> {
     if (this.stopped) return Promise.reject(new DispatcherStopped());
-    const dir = directionOf(method);
-    if (dir === "shellToBun") {
+    const semantics = rpcMethodSemantics(method);
+    if (!semantics) {
+      return Promise.reject(new Error(`programmer error: unknown RPC method '${method}'`));
+    }
+    if (!this.canSend(semantics.direction)) {
       // Bun is initiating a method whose contract is Shell→Bun-only.
       return Promise.reject(
-        new Error(`programmer error: Bun cannot initiate '${method}' (namespace direction shellToBun)`),
+        new Error(`programmer error: Bun cannot initiate '${method}' (method direction shellToBun)`),
       );
     }
     // Within `both`-direction namespaces (provider.*, dev.*) some methods are
     // notifications, not requests. Initiating one as a request is a
     // programmer error and must fail loudly — same shape as `notify` below.
-    const kind = splitKindOf(method);
-    if (kind === "notification") {
+    if (semantics.kind === "notification") {
       return Promise.reject(
         new Error(`programmer error: '${method}' is a notification method, cannot be sent as request`),
       );
@@ -166,15 +194,17 @@ export class Dispatcher {
 
   notify(method: string, params: object): void {
     if (this.stopped) return;
-    const dir = directionOf(method);
-    if (dir === "shellToBun") {
-      throw new Error(`programmer error: Bun cannot send notification '${method}' (direction shellToBun)`);
+    const semantics = rpcMethodSemantics(method);
+    if (!semantics) {
+      throw new Error(`programmer error: unknown RPC method '${method}'`);
     }
     // provider.* / dev.* are `both` at namespace level, but request methods
     // must not be sent as notifications (and vice versa).
-    const kind = splitKindOf(method);
-    if (kind === "request") {
+    if (semantics.kind === "request") {
       throw new Error(`programmer error: '${method}' is a request method, cannot be sent as notification`);
+    }
+    if (!this.canSend(semantics.direction)) {
+      throw new Error(`programmer error: Bun cannot send notification '${method}' (direction shellToBun)`);
     }
     const frame: RPCNotification<object> = { jsonrpc: "2.0", method, params };
     this.transport.writeLine(JSON.stringify(frame)).catch((err) => {
@@ -257,9 +287,17 @@ export class Dispatcher {
 
     // Direction enforcement: ui.* is Bun→Shell only; receiving it as inbound
     // Request is a misuse — reply MethodNotFound.
-    const dir = directionOf(method);
-    if (dir === "bunToShell") {
+    const semantics = rpcMethodSemantics(method);
+    if (!semantics) {
+      this.replyError(id, RPCErrorCode.methodNotFound, `unknown method '${method}'`);
+      return;
+    }
+    if (!this.canReceive(semantics.direction)) {
       this.replyError(id, RPCErrorCode.methodNotFound, `method '${method}' is Bun→Shell only`);
+      return;
+    }
+    if (semantics.kind === "notification") {
+      this.replyError(id, RPCErrorCode.methodNotFound, `method '${method}' is a notification method`);
       return;
     }
 
@@ -269,12 +307,12 @@ export class Dispatcher {
       return;
     }
 
-    const timeoutMs = inboundTimeoutMs(method);
+    const timeoutMs = semantics.inboundTimeoutMs;
 
     // Fast path is currently equivalent to spawning a microtask, since this
     // round has no long-running queued handlers. The branch is preserved so a
     // future scheduler with a queued worker can short-circuit ping/cancel.
-    const isFastPath = isFastPathMethod(method);
+    const isFastPath = semantics.fastPath;
     const launch = () => this.runHandler(handler, params, id, method, timeoutMs);
     if (isFastPath) {
       // Run inline (still async, but not deferred behind any queue).
@@ -317,6 +355,10 @@ export class Dispatcher {
   }
 
   private dispatchNotification(note: RPCNotification<unknown>): void {
+    const semantics = rpcMethodSemantics(note.method);
+    if (!semantics || semantics.kind !== "notification" || !this.canReceive(semantics.direction)) {
+      return;
+    }
     const handler = this.notificationHandlers.get(note.method);
     if (!handler) {
       // Unknown notifications are silently ignored per JSON-RPC 2.0.
@@ -362,5 +404,21 @@ export class Dispatcher {
     this.transport.writeLine(JSON.stringify(frame)).catch((err) => {
       logger.error("reply error write failed", { id: String(id), err: String(err) });
     });
+  }
+
+  private requireRegisteredMethod(method: string): NonNullable<ReturnType<typeof rpcMethodSemantics>> {
+    const semantics = rpcMethodSemantics(method);
+    if (!semantics) throw new Error(`programmer error: unknown RPC method '${method}'`);
+    return semantics;
+  }
+
+  private canSend(direction: "shellToBun" | "bunToShell" | "both"): boolean {
+    if (direction === "both") return true;
+    return this.endpoint === "bun" ? direction === "bunToShell" : direction === "shellToBun";
+  }
+
+  private canReceive(direction: "shellToBun" | "bunToShell" | "both"): boolean {
+    if (direction === "both") return true;
+    return this.endpoint === "bun" ? direction === "shellToBun" : direction === "bunToShell";
   }
 }

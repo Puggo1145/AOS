@@ -14,7 +14,7 @@ export interface SessionInfo {
   id: SessionId;
   /// ms since epoch.
   createdAt: number;
-  /// Default "新对话"; auto-derived from first user prompt (≤32 chars, first
+  /// Default "New Conversation"; auto-derived from first user prompt (≤32 chars, first
   /// non-empty line). Derivation runs once on first submit; not auto-overwritten.
   title: string;
 }
