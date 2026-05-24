@@ -36,6 +36,7 @@ public enum AgentStatus: Sendable, Equatable {
         switch uiStatus {
         case .working:  return .working
         case .waiting:  return .waiting
+        case .awaitingPermission: return .waiting
         case .done:     return .done
         }
     }

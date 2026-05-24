@@ -21,6 +21,7 @@ import { Dispatcher } from "../../rpc/dispatcher";
 import { RPCErrorCode, RPCMethod, type JSONValue } from "../../rpc/rpc-types";
 import { Conversation } from "../conversation";
 import { ContextObserver } from "../context-observer";
+import { PermissionApprovalError, PermissionPolicyConfigurationError, type PermissionAuthorizer } from "../permissions";
 import { Session } from "../session/session";
 import type { ToolExecResult, ToolHandler } from "../tools";
 import { buildOutboundMessages, publishTurnContext } from "./outbound";
@@ -51,6 +52,7 @@ export interface AgentRoundRunnerOptions {
   observer: ContextObserver;
   toolSpecs: Tool[];
   toolByName: ReadonlyMap<string, ToolHandler<any, any>>;
+  permissionGateway: PermissionAuthorizer;
   maxConsecutiveSilentToolRounds: number;
 }
 
@@ -216,6 +218,7 @@ export class AgentRoundRunner {
         errorMessage: `internal: missing call outcome for ${tc.id}`,
       };
       let result: ToolExecResult;
+      let notifyResult = outcome.kind === "ready";
       if (outcome.kind === "rejected") {
         result = {
           content: [{ type: "text", text: outcome.errorMessage }],
@@ -223,15 +226,50 @@ export class AgentRoundRunner {
         };
       } else {
         try {
-          const toolCtx = toolDispatchContext({
-            session,
+          const permission = await this.options.permissionGateway.authorize({
+            sessionId,
             turnId,
             toolCallId: tc.id,
-            model,
+            toolName: tc.name,
+            args: outcome.args,
             signal: input.signal,
+            onApprovalStart: () => {
+              dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId, status: "awaitingPermission" });
+            },
+            onApprovalEnd: () => {
+              dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId, status: "waiting" });
+            },
           });
-          result = await runTool(outcome.handler, outcome.args, tc.name, toolCtx, toolRuntimeEffects(session));
+          if (permission.kind === "aborted" || input.signal.aborted) break;
+          if (permission.kind !== "allowed") {
+            result = {
+              content: [{ type: "text", text: permission.message }],
+              isError: permission.isError,
+            };
+            notifyResult = false;
+            dispatcher.notify(RPCMethod.uiToolCall, {
+              sessionId,
+              turnId,
+              phase: "permissionDenied",
+              toolCallId: tc.id,
+              toolName: tc.name,
+              args: outcome.args as JSONValue,
+              errorMessage: permission.message,
+            });
+          } else {
+            const toolCtx = toolDispatchContext({
+              session,
+              turnId,
+              toolCallId: tc.id,
+              model,
+              signal: input.signal,
+            });
+            result = await runTool(outcome.handler, outcome.args, tc.name, toolCtx, toolRuntimeEffects(session));
+          }
         } catch (err) {
+          if (err instanceof PermissionPolicyConfigurationError || err instanceof PermissionApprovalError) {
+            throw err;
+          }
           const message = err instanceof Error ? err.message : String(err);
           logger.error("tool execution threw", {
             sessionId,
@@ -257,7 +295,7 @@ export class AgentRoundRunner {
       if (!convo.appendToolResult(turnId, toolResultMsg)) {
         return { kind: "terminal", dropQueuedSteer: true, consecutiveSilentToolRounds };
       }
-      if (outcome.kind === "ready") {
+      if (notifyResult) {
         dispatcher.notify(RPCMethod.uiToolCall, {
           sessionId,
           turnId,

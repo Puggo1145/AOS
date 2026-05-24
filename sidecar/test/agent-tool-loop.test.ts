@@ -13,13 +13,21 @@
 //     instead of killing the turn.
 
 import { test, expect, beforeEach, afterEach } from "bun:test";
+import { join } from "node:path";
+import { mkdirSync } from "node:fs";
 import { z } from "zod";
 import { registerAgentHandlers, setModelResolver, resetModelResolver } from "../src/agent/loop";
 import { SessionManager } from "../src/agent/session/manager";
 import { toolRegistry } from "../src/agent/tools/core/registry";
 import { defineTool, ToolUserError } from "../src/agent/tools";
 import { registerComputerUseTools } from "../src/agent/tools/builtins/computer-use";
+import { workspaceDir } from "../src/agent/workspace";
 import { RPCMethod } from "../src/rpc/rpc-types";
+import {
+  PermissionGateway,
+  PermissionPolicyConfigurationError,
+  builtinPermissionPolicyCatalog,
+} from "../src/agent/permissions";
 import {
   registerApiProvider,
   unregisterApiProviders,
@@ -31,6 +39,7 @@ import {
 import { AssistantMessageEventStream } from "../src/llm/utils/event-stream";
 import {
   flush,
+  allowAllPermissionGateway,
   makeCapturingDispatcher,
   makeFakeModel as baseFakeModel,
   setupSession,
@@ -62,6 +71,7 @@ let scriptedRounds: ((model: Model<Api>, signal?: AbortSignal) => AssistantMessa
 let observedContexts: { messages: any[] }[] = [];
 
 beforeEach(() => {
+  mkdirSync(workspaceDir(), { recursive: true });
   registerApiProvider({
     api: "openai-responses",
     sourceId: FAKE_SOURCE_ID,
@@ -100,7 +110,7 @@ function emitStream(events: (s: AssistantMessageEventStream) => void): Assistant
 test("two-round tool-use: assistant calls a tool, then produces a final reply", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, convo, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   // Echo tool: returns its `text` argument verbatim.
   let receivedArgs: unknown = null;
@@ -194,7 +204,7 @@ test("computer-use app session is stopped after the terminal assistant reply", a
   };
   const { manager, convo, sessionId } = setupSession();
   registerComputerUseTools(toolRegistry, dispatcher);
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   scriptedRounds.push((model) => {
     const tc: ToolCall = {
@@ -245,7 +255,7 @@ test("computer-use stop is not requested after terminal assistant reply without 
     return { stopped: false };
   };
   const { manager, convo, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   scriptedRounds.push((model) => {
     return emitStream((s) => {
@@ -280,7 +290,7 @@ test("terminal reply in another agent session does not stop this session's app s
   const sessionA = manager.create();
   const sessionB = manager.create();
   registerComputerUseTools(toolRegistry, dispatcher);
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   scriptedRounds.push((model) => {
     const tc: ToolCall = {
@@ -349,7 +359,7 @@ test("terminal reply in another agent session does not stop this session's app s
 test("unknown tool surfaces as isError result, loop continues to terminal reply", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, convo, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   // Registry left empty — no tools at all.
   scriptedRounds.push((model) => {
@@ -401,7 +411,7 @@ test("handler ToolUserError surfaces as isError result without aborting the turn
   // harness fault and terminates the turn (see next test).
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, convo, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   toolRegistry.register(defineTool({
     name: "soft_fail",
@@ -458,7 +468,7 @@ test("unexpected handler exception is surfaced as an isError tool result and the
   // the next request's context for retry.
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, convo, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   toolRegistry.register(defineTool({
     name: "boom",
@@ -536,7 +546,7 @@ test("cancellation mid-tool closes the turn quietly — no ui.error", async () =
   // `if (signal.aborted)` branch closes the turn via `ui.status: done`.
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, convo, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   // Tool blocks on a 5s sleep, racing the abort signal. When the test
   // sends `agent.cancel` mid-call, the abort listener rejects — same
@@ -617,7 +627,7 @@ test("cancellation mid-tool closes the turn quietly — no ui.error", async () =
 test("invalid tool arguments produce an isError result with the validator's message", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, convo, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   toolRegistry.register(defineTool({
     name: "needs_text",
@@ -665,4 +675,509 @@ test("invalid tool arguments produce an isError result with the validator's mess
   );
   expect(toolResults).toHaveLength(0);
   expect(convo.turns[0].status).toBe("done");
+});
+
+test("permission denial does not execute the tool and records a non-error tool result", async () => {
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const { manager, convo, sessionId } = setupSession();
+  const permissionGateway = new PermissionGateway(dispatcher, builtinPermissionPolicyCatalog);
+  registerAgentHandlers(dispatcher, { manager, permissionGateway });
+
+  let executed = false;
+  toolRegistry.register(defineTool({
+    name: "write",
+    description: "Write outside workspace",
+    parameters: z.object({ path: z.string(), content: z.string() }).strict(),
+    execute: async () => {
+      executed = true;
+      return { content: [{ type: "text", text: "wrote" }], isError: false };
+    },
+  }));
+
+  const path = `/tmp/notch-permission-${crypto.randomUUID()}.txt`;
+  scriptedRounds.push((model) => {
+    const tc: ToolCall = { type: "toolCall", id: "tc_perm_write", name: "write", arguments: { path, content: "hello" } };
+    return emitStream((s) => {
+      const partial = fakeAssistant(model, [tc], "toolUse");
+      s.push({ type: "toolcall_end", contentIndex: 0, toolCall: tc, partial });
+      s.push({ type: "done", reason: "toolUse", message: partial });
+    });
+  });
+  scriptedRounds.push((model) => emitStream((s) => {
+    const partial = fakeAssistant(model, [{ type: "text", text: "permission denied noted" }], "stop");
+    s.push({ type: "text_delta", contentIndex: 0, delta: "permission denied noted", partial });
+    s.push({ type: "done", reason: "stop", message: partial });
+  }));
+
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "agent.submit",
+    params: { sessionId, turnId: "T1", prompt: "write file", citedContext: {} },
+  });
+  await flush(60);
+
+  const approval = captured.requests.find((r) => r.method === RPCMethod.permissionRequestApproval);
+  expect(approval).toBeDefined();
+  expect(captured.notifications.some((n) => n.method === "ui.status" && n.params.status === "awaitingPermission")).toBe(true);
+  pushInbound({ jsonrpc: "2.0", id: approval!.id, result: { decision: "deny" } });
+  await flush();
+
+  expect(executed).toBe(false);
+  const denied = captured.notifications.filter(
+    (n) => n.method === "ui.toolCall" && n.params.phase === "permissionDenied",
+  );
+  expect(denied).toHaveLength(1);
+  expect(denied[0].params.toolName).toBe("write");
+  const resultFrames = captured.notifications.filter(
+    (n) => n.method === "ui.toolCall" && n.params.phase === "result" && n.params.toolCallId === "tc_perm_write",
+  );
+  expect(resultFrames).toHaveLength(0);
+
+  const toolResult = convo.messages.find((m) => m.role === "toolResult" && m.toolCallId === "tc_perm_write");
+  expect(toolResult).toMatchObject({
+    role: "toolResult",
+    toolName: "write",
+    isError: false,
+  });
+});
+
+test("workspace write is allowed without approval", async () => {
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const { manager, convo, sessionId } = setupSession();
+  const permissionGateway = new PermissionGateway(dispatcher, builtinPermissionPolicyCatalog);
+  registerAgentHandlers(dispatcher, { manager, permissionGateway });
+
+  const path = join(workspaceDir(), `agent-write-${crypto.randomUUID()}.txt`);
+  let executed = false;
+  toolRegistry.register(defineTool({
+    name: "write",
+    description: "Write workspace file",
+    parameters: z.object({ path: z.string(), content: z.string() }).strict(),
+    execute: async () => {
+      executed = true;
+      return { content: [{ type: "text", text: "wrote workspace file" }], isError: false };
+    },
+  }));
+
+  scriptedRounds.push((model) => {
+    const tc: ToolCall = { type: "toolCall", id: "tc_workspace_write", name: "write", arguments: { path, content: "hello" } };
+    return emitStream((s) => {
+      const partial = fakeAssistant(model, [tc], "toolUse");
+      s.push({ type: "toolcall_end", contentIndex: 0, toolCall: tc, partial });
+      s.push({ type: "done", reason: "toolUse", message: partial });
+    });
+  });
+  scriptedRounds.push((model) => emitStream((s) => {
+    const partial = fakeAssistant(model, [{ type: "text", text: "done" }], "stop");
+    s.push({ type: "text_delta", contentIndex: 0, delta: "done", partial });
+    s.push({ type: "done", reason: "stop", message: partial });
+  }));
+
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "agent.submit",
+    params: { sessionId, turnId: "T1", prompt: "write workspace file", citedContext: {} },
+  });
+  await flush();
+
+  expect(executed).toBe(true);
+  expect(captured.requests.filter((r) => r.method === RPCMethod.permissionRequestApproval)).toHaveLength(0);
+  expect(convo.messages.find((m) => m.role === "toolResult" && m.toolCallId === "tc_workspace_write")).toMatchObject({
+    isError: false,
+  });
+});
+
+test("bash asks for approval before execution", async () => {
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const { manager, sessionId } = setupSession();
+  const permissionGateway = new PermissionGateway(dispatcher, builtinPermissionPolicyCatalog);
+  registerAgentHandlers(dispatcher, { manager, permissionGateway });
+
+  let executed = false;
+  const command = `echo ${crypto.randomUUID()}`;
+  toolRegistry.register(defineTool({
+    name: "bash",
+    description: "Run command",
+    parameters: z.object({ command: z.string(), timeout: z.number().optional() }).strict(),
+    execute: async () => {
+      executed = true;
+      return { content: [{ type: "text", text: "command ran" }], isError: false };
+    },
+  }));
+
+  scriptedRounds.push((model) => {
+    const tc: ToolCall = { type: "toolCall", id: "tc_bash", name: "bash", arguments: { command, timeout: 5 } };
+    return emitStream((s) => {
+      const partial = fakeAssistant(model, [tc], "toolUse");
+      s.push({ type: "toolcall_end", contentIndex: 0, toolCall: tc, partial });
+      s.push({ type: "done", reason: "toolUse", message: partial });
+    });
+  });
+  scriptedRounds.push((model) => emitStream((s) => {
+    const partial = fakeAssistant(model, [{ type: "text", text: "done" }], "stop");
+    s.push({ type: "text_delta", contentIndex: 0, delta: "done", partial });
+    s.push({ type: "done", reason: "stop", message: partial });
+  }));
+
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "agent.submit",
+    params: { sessionId, turnId: "T1", prompt: "run command", citedContext: {} },
+  });
+  await flush(60);
+
+  const approval = captured.requests.find((r) => r.method === RPCMethod.permissionRequestApproval);
+  expect(approval).toBeDefined();
+  expect(approval!.params).toMatchObject({
+    toolName: "bash",
+    title: "Allow command?",
+    capabilities: [{ capability: "process.spawn", target: command }],
+  });
+  expect(executed).toBe(false);
+
+  pushInbound({ jsonrpc: "2.0", id: approval!.id, result: { decision: "allow" } });
+  await flush();
+
+  expect(executed).toBe(true);
+});
+
+test("approval RPC failure is a turn-level failure instead of a model-visible tool result", async () => {
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const { manager, convo, sessionId } = setupSession();
+  const permissionGateway = new PermissionGateway(dispatcher, builtinPermissionPolicyCatalog);
+  registerAgentHandlers(dispatcher, { manager, permissionGateway });
+
+  let executed = false;
+  const path = `/tmp/notch-approval-failure-${crypto.randomUUID()}.txt`;
+  toolRegistry.register(defineTool({
+    name: "write",
+    description: "Write outside workspace",
+    parameters: z.object({ path: z.string(), content: z.string() }).strict(),
+    execute: async () => {
+      executed = true;
+      return { content: [{ type: "text", text: "wrote" }], isError: false };
+    },
+  }));
+
+  scriptedRounds.push((model) => {
+    const tc: ToolCall = { type: "toolCall", id: "tc_approval_failure", name: "write", arguments: { path, content: "hello" } };
+    return emitStream((s) => {
+      const partial = fakeAssistant(model, [tc], "toolUse");
+      s.push({ type: "toolcall_end", contentIndex: 0, toolCall: tc, partial });
+      s.push({ type: "done", reason: "toolUse", message: partial });
+    });
+  });
+  scriptedRounds.push((model) => emitStream((s) => {
+    const partial = fakeAssistant(model, [{ type: "text", text: "noted" }], "stop");
+    s.push({ type: "text_delta", contentIndex: 0, delta: "noted", partial });
+    s.push({ type: "done", reason: "stop", message: partial });
+  }));
+
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "agent.submit",
+    params: { sessionId, turnId: "T1", prompt: "write outside", citedContext: {} },
+  });
+  await flush(60);
+
+  const approval = captured.requests.find((r) => r.method === RPCMethod.permissionRequestApproval);
+  expect(approval).toBeDefined();
+  pushInbound({
+    jsonrpc: "2.0",
+    id: approval!.id,
+    error: { code: -32000, message: "approval UI failed" },
+  });
+  await flush();
+
+  expect(executed).toBe(false);
+  const toolResult = convo.messages.find((m) => m.role === "toolResult" && m.toolCallId === "tc_approval_failure");
+  expect(toolResult).toBeUndefined();
+  expect(captured.notifications).toContainEqual({
+    method: RPCMethod.uiError,
+    params: {
+      sessionId,
+      turnId: "T1",
+      code: -32603,
+      message: "Permission approval failed: approval UI failed",
+    },
+  });
+});
+
+test("permission configuration errors are turn-level failures instead of model-visible tool results", async () => {
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const { manager, convo, sessionId } = setupSession();
+  registerAgentHandlers(dispatcher, {
+    manager,
+    permissionGateway: {
+      async authorize() {
+        throw new PermissionPolicyConfigurationError("missing permission policy for tool \"echo\"");
+      },
+      clearTurnGrants() {},
+    },
+  });
+
+  let executed = false;
+  toolRegistry.register(defineTool({
+    name: "echo",
+    description: "Echo",
+    parameters: z.object({ text: z.string() }).strict(),
+    execute: async () => {
+      executed = true;
+      return { content: [{ type: "text", text: "echoed" }], isError: false };
+    },
+  }));
+
+  scriptedRounds.push((model) => {
+    const tc: ToolCall = { type: "toolCall", id: "tc_missing_permission", name: "echo", arguments: { text: "hi" } };
+    return emitStream((s) => {
+      const partial = fakeAssistant(model, [tc], "toolUse");
+      s.push({ type: "toolcall_end", contentIndex: 0, toolCall: tc, partial });
+      s.push({ type: "done", reason: "toolUse", message: partial });
+    });
+  });
+
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "agent.submit",
+    params: { sessionId, turnId: "T1", prompt: "echo", citedContext: {} },
+  });
+  await flush();
+
+  expect(executed).toBe(false);
+  expect(convo.messages.find((m) => m.role === "toolResult" && m.toolCallId === "tc_missing_permission")).toBeUndefined();
+  expect(captured.notifications).toContainEqual({
+    method: RPCMethod.uiError,
+    params: {
+      sessionId,
+      turnId: "T1",
+      code: -32603,
+      message: "missing permission policy for tool \"echo\"",
+    },
+  });
+});
+
+test("permission policy callback errors are turn-level failures instead of model-visible tool results", async () => {
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const { manager, convo, sessionId } = setupSession();
+  const permissionGateway = new PermissionGateway(dispatcher, builtinPermissionPolicyCatalog);
+  registerAgentHandlers(dispatcher, { manager, permissionGateway });
+
+  let executed = false;
+  toolRegistry.register(defineTool({
+    name: "write",
+    description: "Write with a deliberately mismatched schema",
+    parameters: z.object({ path: z.string() }).strict(),
+    execute: async () => {
+      executed = true;
+      return { content: [{ type: "text", text: "wrote" }], isError: false };
+    },
+  }));
+
+  scriptedRounds.push((model) => {
+    const tc: ToolCall = {
+      type: "toolCall",
+      id: "tc_policy_callback_error",
+      name: "write",
+      arguments: { path: `/tmp/notch-policy-callback-${crypto.randomUUID()}.txt` },
+    };
+    return emitStream((s) => {
+      const partial = fakeAssistant(model, [tc], "toolUse");
+      s.push({ type: "toolcall_end", contentIndex: 0, toolCall: tc, partial });
+      s.push({ type: "done", reason: "toolUse", message: partial });
+    });
+  });
+
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "agent.submit",
+    params: { sessionId, turnId: "T1", prompt: "write", citedContext: {} },
+  });
+  await flush();
+
+  expect(executed).toBe(false);
+  expect(convo.messages.find((m) => m.role === "toolResult" && m.toolCallId === "tc_policy_callback_error")).toBeUndefined();
+  expect(captured.notifications).toContainEqual({
+    method: RPCMethod.uiError,
+    params: {
+      sessionId,
+      turnId: "T1",
+      code: -32603,
+      message: 'permission policy "write" failed for tool "write": permission policy expected content to be a string',
+    },
+  });
+});
+
+test("computer read tools execute without approval", async () => {
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const { manager, sessionId } = setupSession();
+  const permissionGateway = new PermissionGateway(dispatcher, builtinPermissionPolicyCatalog);
+  registerAgentHandlers(dispatcher, { manager, permissionGateway });
+
+  let executed = false;
+  toolRegistry.register(defineTool({
+    name: "list_apps",
+    description: "List apps",
+    parameters: z.object({ mode: z.string().optional() }).strict(),
+    execute: async () => {
+      executed = true;
+      return { content: [{ type: "text", text: "Finder" }], isError: false };
+    },
+  }));
+
+  scriptedRounds.push((model) => {
+    const tc: ToolCall = { type: "toolCall", id: "tc_list_apps", name: "list_apps", arguments: { mode: "running" } };
+    return emitStream((s) => {
+      const partial = fakeAssistant(model, [tc], "toolUse");
+      s.push({ type: "toolcall_end", contentIndex: 0, toolCall: tc, partial });
+      s.push({ type: "done", reason: "toolUse", message: partial });
+    });
+  });
+  scriptedRounds.push((model) => emitStream((s) => {
+    const partial = fakeAssistant(model, [{ type: "text", text: "done" }], "stop");
+    s.push({ type: "text_delta", contentIndex: 0, delta: "done", partial });
+    s.push({ type: "done", reason: "stop", message: partial });
+  }));
+
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "agent.submit",
+    params: { sessionId, turnId: "T1", prompt: "list apps", citedContext: {} },
+  });
+  await flush();
+
+  expect(executed).toBe(true);
+  expect(captured.requests.filter((r) => r.method === RPCMethod.permissionRequestApproval)).toHaveLength(0);
+});
+
+test("cancelling during pending permission approval does not create a permission denial result", async () => {
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const { manager, convo, sessionId } = setupSession();
+  const permissionGateway = new PermissionGateway(dispatcher, builtinPermissionPolicyCatalog);
+  registerAgentHandlers(dispatcher, { manager, permissionGateway });
+
+  let executed = false;
+  const path = `/tmp/notch-cancel-approval-${crypto.randomUUID()}.txt`;
+  toolRegistry.register(defineTool({
+    name: "write",
+    description: "Write outside workspace",
+    parameters: z.object({ path: z.string(), content: z.string() }).strict(),
+    execute: async () => {
+      executed = true;
+      return { content: [{ type: "text", text: "wrote" }], isError: false };
+    },
+  }));
+
+  scriptedRounds.push((model) => {
+    const tc: ToolCall = { type: "toolCall", id: "tc_cancel_permission", name: "write", arguments: { path, content: "hello" } };
+    return emitStream((s) => {
+      const partial = fakeAssistant(model, [tc], "toolUse");
+      s.push({ type: "toolcall_end", contentIndex: 0, toolCall: tc, partial });
+      s.push({ type: "done", reason: "toolUse", message: partial });
+    });
+  });
+  scriptedRounds.push(() => {
+    throw new Error("loop should not continue after cancellation while waiting for permission");
+  });
+
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "agent.submit",
+    params: { sessionId, turnId: "T1", prompt: "write outside", citedContext: {} },
+  });
+  await flush(60);
+
+  expect(captured.requests.find((r) => r.method === RPCMethod.permissionRequestApproval)).toBeDefined();
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "agent.cancel",
+    params: { sessionId, turnId: "T1" },
+  });
+  await flush(120);
+
+  expect(executed).toBe(false);
+  expect(captured.notifications).toContainEqual({
+    method: RPCMethod.permissionApprovalCancelled,
+    params: { sessionId, turnId: "T1", toolCallId: "tc_cancel_permission" },
+  });
+  expect(captured.notifications.filter((n) => n.method === "ui.toolCall" && n.params.phase === "permissionDenied")).toHaveLength(0);
+  const toolResult = convo.messages.find((m) => m.role === "toolResult" && m.toolCallId === "tc_cancel_permission");
+  expect(toolResult).toMatchObject({
+    role: "toolResult",
+    toolName: "write",
+    isError: true,
+    content: [{ type: "text", text: "Cancelled by user" }],
+  });
+  expect(convo.turns[0].status).toBe("cancelled");
+});
+
+test("computer-use turn grant allows subsequent same-turn actuating tools without another approval", async () => {
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const { manager, sessionId } = setupSession();
+  const permissionGateway = new PermissionGateway(dispatcher, builtinPermissionPolicyCatalog);
+  registerAgentHandlers(dispatcher, { manager, permissionGateway });
+
+  const executed: string[] = [];
+  for (const name of ["use_keyboard", "use_mouse"]) {
+    toolRegistry.register(defineTool({
+      name,
+      description: name,
+      parameters: z.object({ windowId: z.number(), event: z.any() }).strict(),
+      execute: async () => {
+        executed.push(name);
+        return { content: [{ type: "text", text: `${name} ok` }], isError: false };
+      },
+    }));
+  }
+
+  scriptedRounds.push((model) => {
+    const keyboard: ToolCall = {
+      type: "toolCall",
+      id: "tc_keyboard",
+      name: "use_keyboard",
+      arguments: { windowId: 42, event: { kind: "keyPress", key: "a" } },
+    };
+    const mouse: ToolCall = {
+      type: "toolCall",
+      id: "tc_mouse",
+      name: "use_mouse",
+      arguments: { windowId: 42, event: { kind: "click", button: "left", point: { x: 1, y: 2 } } },
+    };
+    return emitStream((s) => {
+      const partial = fakeAssistant(model, [keyboard, mouse], "toolUse");
+      s.push({ type: "toolcall_end", contentIndex: 0, toolCall: keyboard, partial });
+      s.push({ type: "toolcall_end", contentIndex: 1, toolCall: mouse, partial });
+      s.push({ type: "done", reason: "toolUse", message: partial });
+    });
+  });
+  scriptedRounds.push((model) => emitStream((s) => {
+    const partial = fakeAssistant(model, [{ type: "text", text: "done" }], "stop");
+    s.push({ type: "text_delta", contentIndex: 0, delta: "done", partial });
+    s.push({ type: "done", reason: "stop", message: partial });
+  }));
+
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "agent.submit",
+    params: { sessionId, turnId: "T1", prompt: "use computer", citedContext: {} },
+  });
+  await flush(60);
+
+  const approval = captured.requests.find((r) => r.method === RPCMethod.permissionRequestApproval);
+  expect(approval?.params.title).toBe("Allow Computer Use?");
+  pushInbound({ jsonrpc: "2.0", id: approval!.id, result: { decision: "allow" } });
+  await flush();
+
+  expect(executed).toEqual(["use_keyboard", "use_mouse"]);
+  const approvalRequests = captured.requests.filter((r) => r.method === RPCMethod.permissionRequestApproval);
+  expect(approvalRequests).toHaveLength(1);
 });

@@ -20,6 +20,7 @@ import { RPCErrorCode } from "../src/rpc/rpc-types";
 import {
   fakeAssistantMessage,
   flush,
+  allowAllPermissionGateway,
   makeCapturingDispatcher,
   makeFakeModel,
   setupSession,
@@ -62,7 +63,7 @@ afterEach(() => {
 test("happy path: ack + turnStarted + thinking + tokens + done", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, convo, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   nextStream = (model) => {
     const s = new AssistantMessageEventStream();
@@ -126,7 +127,7 @@ test("thinking lifecycle: thinking_delta and thinking_end are forwarded as ui.th
   // so the Shell's reasoning affordance closes before the reply renders.
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, convo, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   nextStream = (model) => {
     const s = new AssistantMessageEventStream();
@@ -166,7 +167,7 @@ test("thinking lifecycle: error mid-thinking synthesizes a {kind:end} before ui.
   // must synthesize the end itself or the shimmer keeps animating.
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, convo, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   nextStream = (model) => {
     const s = new AssistantMessageEventStream();
@@ -200,7 +201,7 @@ test("thinking lifecycle: cancel mid-thinking synthesizes a {kind:end} before ui
   // before that done so the Shell's per-turn timer freezes correctly.
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, convo, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   nextStream = (model, signal) => {
     const s = new AssistantMessageEventStream();
@@ -245,7 +246,7 @@ test("thinking lifecycle: end is not duplicated when provider already sent think
   // where the provider closes the block itself.
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, convo, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   nextStream = (model) => {
     const s = new AssistantMessageEventStream();
@@ -272,7 +273,7 @@ test("thinking lifecycle: end is not duplicated when provider already sent think
 test("cancel path: agent.cancel aborts the stream and emits status done", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, convo, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   let abortFired = false;
   nextStream = (model, signal) => {
@@ -337,7 +338,7 @@ test("error path: typed authInvalidated reason maps to permissionDenied", async 
   // a free-text "401" in `errorMessage` no longer takes a special path.
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, convo, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   nextStream = (model) => {
     const s = new AssistantMessageEventStream();
@@ -378,7 +379,7 @@ test("error path: untyped errors fall through to internalError", async () => {
   // internalError. Providers that wrap auth must tag the typed reason.
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, convo, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   nextStream = (model) => {
     const s = new AssistantMessageEventStream();
@@ -402,7 +403,7 @@ test("error path: untyped errors fall through to internalError", async () => {
 test("conversation history: prior turn's user+assistant messages are replayed into the next request", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, convo, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   // Capture the messages array the streamSimple wrapper sees on each call so
   // we can prove the second turn carried turn 1's full history.
@@ -468,7 +469,7 @@ test("dev context observer: terminal publish includes the assistant reply", asyn
   const observer = new ContextObserver();
 
   const { manager, convo, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager, contextObserver: observer });
+  registerAgentHandlers(dispatcher, { manager, contextObserver: observer, permissionGateway: allowAllPermissionGateway() });
   // `registerAgentHandlers` installs its own sink that forwards to the
   // dispatcher; read the published snapshots back from `dev.context.changed`
   // notifications rather than overriding that sink.
@@ -519,7 +520,7 @@ test("dev context observer: terminal publish includes the assistant reply", asyn
 test("agent.reset wipes conversation, aborts in-flight turn, and emits conversation.reset", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, convo, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   let abortFired = false;
   nextStream = (model, signal) => {
@@ -558,7 +559,7 @@ test("multi-session: notifications carry the correct sessionId; reset of A does 
   const manager = new SessionManager();
   const a = manager.create();
   const b = manager.create();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   // Both sessions get a finite-but-async stream so submit ack doesn't race.
   nextStream = (model) => {
@@ -603,7 +604,7 @@ test("agent.submit queues a steer prompt during an in-flight turn and inserts it
   // a steer prompt, then materialized as the next turn before the loop exits.
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, convo, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   let resolveFirst: () => void = () => {};
   let streamCount = 0;
@@ -664,7 +665,7 @@ test("agent.submit queues a steer prompt during an in-flight turn and inserts it
 test("agent.cancel removes a queued steer prompt before it is inserted", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, convo, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   let resolveFirst: () => void = () => {};
   nextStream = (model) => {
@@ -704,7 +705,7 @@ test("agent.cancel removes a queued steer prompt before it is inserted", async (
 test("provider error clears a queued steer prompt so the session can accept a new submit", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, convo, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   let failFirst: () => void = () => {};
   let streamCount = 0;
@@ -758,7 +759,7 @@ test("agent.submit / cancel / reset return unknownSession for an unknown session
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const manager = new SessionManager();
   manager.create(); // an active session exists, but the request will pass a bogus id.
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   pushInbound({ jsonrpc: "2.0", id: 1, method: "agent.submit", params: { sessionId: "sess_nope", turnId: "T1", prompt: "x", citedContext: {} } });
   pushInbound({ jsonrpc: "2.0", id: 2, method: "agent.cancel", params: { sessionId: "sess_nope", turnId: "T1" } });

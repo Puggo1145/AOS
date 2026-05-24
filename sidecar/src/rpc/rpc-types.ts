@@ -121,6 +121,8 @@ export const RPCMethod = {
   uiUsage: "ui.usage",
   uiTodo: "ui.todo",
   uiCompact: "ui.compact",
+  permissionRequestApproval: "permission.requestApproval",
+  permissionApprovalCancelled: "permission.approvalCancelled",
   providerStatus: "provider.status",
   providerStartLogin: "provider.startLogin",
   providerCancelLogin: "provider.cancelLogin",
@@ -566,6 +568,8 @@ export type UIThinkingParams =
 ///                    show what was attempted) and `errorMessage` is the
 ///                    validation failure surfaced to both the user and the
 ///                    model on the next round.
+///   - `"permissionDenied"` — arguments were valid, but the Permission
+///                    Gateway did not allow execution. The handler never ran.
 /// Lives on its own channel (separate from `ui.token`) so the Notch panel
 /// can render tool activity distinctly from the visible reply.
 export type UIToolCallParams =
@@ -594,9 +598,18 @@ export type UIToolCallParams =
       toolName: string;
       args: JSONValue;
       errorMessage: string;
+    }
+  | {
+      sessionId: string;
+      turnId: string;
+      phase: "permissionDenied";
+      toolCallId: string;
+      toolName: string;
+      args: JSONValue;
+      errorMessage: string;
     };
 
-export type UIStatus = "working" | "waiting" | "done";
+export type UIStatus = "working" | "waiting" | "awaitingPermission" | "done";
 
 export interface UIStatusParams {
   sessionId: string;
@@ -610,6 +623,38 @@ export interface UIErrorParams {
   code: number;
   message: string;
   data?: JSONValue;
+}
+
+// ---------------------------------------------------------------------------
+// permission.* — Sidecar → Shell
+// ---------------------------------------------------------------------------
+
+export interface PermissionCapabilityView {
+  capability: string;
+  action: string;
+  target?: string;
+  details?: JSONValue;
+}
+
+export interface PermissionRequestApprovalParams {
+  sessionId: string;
+  turnId: string;
+  toolCallId: string;
+  toolName: string;
+  title: string;
+  message: string;
+  risk: "low" | "medium" | "high";
+  capabilities: PermissionCapabilityView[];
+}
+
+export interface PermissionRequestApprovalResult {
+  decision: "allow" | "deny";
+}
+
+export interface PermissionApprovalCancelledParams {
+  sessionId: string;
+  turnId: string;
+  toolCallId: string;
 }
 
 /// Token-usage snapshot emitted once per LLM round, immediately after the

@@ -107,7 +107,9 @@ struct RoundtripTests {
         FixtureRow(name: "ui.toolCall.called.json") { try assertRoundtrip(fixture: "ui.toolCall.called.json", as: RPCNotification<UIToolCallParams>.self) },
         FixtureRow(name: "ui.toolCall.result.json") { try assertRoundtrip(fixture: "ui.toolCall.result.json", as: RPCNotification<UIToolCallParams>.self) },
         FixtureRow(name: "ui.toolCall.rejected.json") { try assertRoundtrip(fixture: "ui.toolCall.rejected.json", as: RPCNotification<UIToolCallParams>.self) },
+        FixtureRow(name: "ui.toolCall.permissionDenied.json") { try assertRoundtrip(fixture: "ui.toolCall.permissionDenied.json", as: RPCNotification<UIToolCallParams>.self) },
         FixtureRow(name: "ui.status.json") { try assertRoundtrip(fixture: "ui.status.json", as: RPCNotification<UIStatusParams>.self) },
+        FixtureRow(name: "ui.status.awaitingPermission.json") { try assertRoundtrip(fixture: "ui.status.awaitingPermission.json", as: RPCNotification<UIStatusParams>.self) },
         FixtureRow(name: "ui.error.json") { try assertRoundtrip(fixture: "ui.error.json", as: RPCNotification<UIErrorParams>.self) },
         FixtureRow(name: "ui.usage.json") { try assertRoundtrip(fixture: "ui.usage.json", as: RPCNotification<UIUsageParams>.self) },
         FixtureRow(name: "ui.todo.json") { try assertRoundtrip(fixture: "ui.todo.json", as: RPCNotification<UITodoParams>.self) },
@@ -117,6 +119,8 @@ struct RoundtripTests {
 
         // provider.*
         FixtureRow(name: "provider.status.json") { try assertRoundtrip(fixture: "provider.status.json", as: RPCRequest<ProviderStatusParams>.self) },
+        FixtureRow(name: "permission.requestApproval.json") { try assertRoundtrip(fixture: "permission.requestApproval.json", as: RPCRequest<PermissionRequestApprovalParams>.self) },
+        FixtureRow(name: "permission.approvalCancelled.json") { try assertRoundtrip(fixture: "permission.approvalCancelled.json", as: RPCNotification<PermissionApprovalCancelledParams>.self) },
         FixtureRow(name: "provider.startLogin.json") { try assertRoundtrip(fixture: "provider.startLogin.json", as: RPCRequest<ProviderStartLoginParams>.self) },
         FixtureRow(name: "provider.cancelLogin.json") { try assertRoundtrip(fixture: "provider.cancelLogin.json", as: RPCRequest<ProviderCancelLoginParams>.self) },
         FixtureRow(name: "provider.loginStatus.json") { try assertRoundtrip(fixture: "provider.loginStatus.json", as: RPCNotification<ProviderLoginStatusParams>.self) },

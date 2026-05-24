@@ -49,6 +49,7 @@ public final class CompositionRoot {
     public private(set) var providerService: ProviderService?
     public private(set) var configService: ConfigService?
     private(set) var computerUseRPCService: ComputerUseRPCService?
+    private(set) var permissionApprovalService: PermissionApprovalService?
     public private(set) var devContextService: DevContextService?
     private(set) var devComputerUseService: DevComputerUseService?
     public private(set) var devModeWindowController: DevModeWindowController?
@@ -125,6 +126,7 @@ public final class CompositionRoot {
             rpc: client,
             core: shellComputerUseClient
         )
+        self.permissionApprovalService = PermissionApprovalService(rpc: client)
         let session = SessionService(rpc: client)
         self.sessionService = session
         let store = SessionStore(rpc: client, sessionService: session)
@@ -278,6 +280,7 @@ public final class CompositionRoot {
             configService: config,
             permissionsService: permissionsService,
             visualCapturePolicyStore: visualCapturePolicyStore,
+            permissionApprovalService: permissionApprovalService,
             screen: screen
         )
     }
@@ -336,6 +339,8 @@ public final class CompositionRoot {
         providerService = nil
         configService = nil
         computerUseRPCService = nil
+        permissionApprovalService?.failAllPendingRequests(message: "permission approval service stopped")
+        permissionApprovalService = nil
         ComputerUseWindowHighlightControls.setStopHandler(nil)
         agentService = nil
         sessionService = nil

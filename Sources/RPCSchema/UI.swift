@@ -149,6 +149,7 @@ public struct UIToolCallParams: Codable, Sendable, Equatable {
         case called
         case result
         case rejected
+        case permissionDenied
     }
 
     public let sessionId: String
@@ -156,13 +157,13 @@ public struct UIToolCallParams: Codable, Sendable, Equatable {
     public let phase: Phase
     public let toolCallId: String
     public let toolName: String
-    /// Set iff `phase == .called` or `phase == .rejected`.
+    /// Set iff `phase == .called`, `.rejected`, or `.permissionDenied`.
     public let args: JSONValue?
     /// Set iff `phase == .result`.
     public let isError: Bool?
     /// Set iff `phase == .result`.
     public let outputText: String?
-    /// Set iff `phase == .rejected`. Human-readable validation failure.
+    /// Set iff `phase == .rejected` or `.permissionDenied`.
     public let errorMessage: String?
 
     public init(
@@ -305,6 +306,38 @@ public struct UIToolCallParams: Codable, Sendable, Equatable {
                 toolCallId: toolCallId, toolName: toolName,
                 args: args, errorMessage: errorMessage
             )
+        case .permissionDenied:
+            guard c.contains(.args) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .args, in: c,
+                    debugDescription: "ui.toolCall phase=permissionDenied requires an 'args' field"
+                )
+            }
+            guard c.contains(.errorMessage) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .errorMessage, in: c,
+                    debugDescription: "ui.toolCall phase=permissionDenied requires an 'errorMessage' string"
+                )
+            }
+            guard !c.contains(.isError) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .isError, in: c,
+                    debugDescription: "ui.toolCall phase=permissionDenied must not carry 'isError'"
+                )
+            }
+            guard !c.contains(.outputText) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .outputText, in: c,
+                    debugDescription: "ui.toolCall phase=permissionDenied must not carry 'outputText'"
+                )
+            }
+            let args = try c.decode(JSONValue.self, forKey: .args)
+            let errorMessage = try c.decode(String.self, forKey: .errorMessage)
+            self.init(
+                sessionId: sessionId, turnId: turnId, phase: .permissionDenied,
+                toolCallId: toolCallId, toolName: toolName,
+                args: args, errorMessage: errorMessage
+            )
         }
     }
 
@@ -351,6 +384,18 @@ public struct UIToolCallParams: Codable, Sendable, Equatable {
             }
             try c.encode(args, forKey: .args)
             try c.encode(errorMessage, forKey: .errorMessage)
+        case .permissionDenied:
+            guard let args, let errorMessage else {
+                throw EncodingError.invalidValue(
+                    self,
+                    EncodingError.Context(
+                        codingPath: c.codingPath,
+                        debugDescription: "UIToolCallParams.args and .errorMessage must be set when phase == .permissionDenied"
+                    )
+                )
+            }
+            try c.encode(args, forKey: .args)
+            try c.encode(errorMessage, forKey: .errorMessage)
         }
     }
 }
@@ -359,6 +404,7 @@ public struct UIToolCallParams: Codable, Sendable, Equatable {
 public enum UIStatus: String, Codable, Sendable, Equatable, CaseIterable {
     case working
     case waiting
+    case awaitingPermission
     case done
 }
 

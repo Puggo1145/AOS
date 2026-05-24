@@ -8,6 +8,7 @@ import OSSenseKit
 // view model so the panel can size itself.
 struct LiveComposerSection: View {
     let viewModel: NotchViewModel
+    let onHeightChange: (CGFloat) -> Void
 
     var body: some View {
         ComposerCard(
@@ -30,7 +31,7 @@ struct LiveComposerSection: View {
             }
         )
         .onPreferenceChange(ComposerHeightKey.self) { h in
-            viewModel.composerContentHeight = h
+            onHeightChange(h)
         }
     }
 }

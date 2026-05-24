@@ -31,6 +31,7 @@ import {
 } from "../src/llm";
 import { AssistantMessageEventStream } from "../src/llm/utils/event-stream";
 import {
+  allowAllPermissionGateway,
   flush,
   makeCapturingDispatcher,
   makeFakeModel as baseFakeModel,
@@ -138,7 +139,7 @@ function makeSessionWithHistory(turnsCount: number): {
 test("auto-compact runs at runTurn entry when remaining context is below threshold and rewrites the conversation before the first round", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, session, sessionId } = makeSessionWithHistory(3);
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   // Push the running estimate near the ceiling so the next turn's
   // remaining context (= contextWindow - lastTotalTokens = 100K - 90K =
@@ -194,7 +195,7 @@ test("auto-compact runs at runTurn entry when remaining context is below thresho
 test("queued submit during auto-compact waits for the active turn's first reply", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, session, sessionId } = makeSessionWithHistory(3);
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
   session.conversation.recordTotalTokens(90_000);
 
   let finishCompact: () => void = () => {};
@@ -249,7 +250,7 @@ test("queued submit during auto-compact waits for the active turn's first reply"
 test("auto-compact does not run when remaining context is comfortably above threshold", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, sessionId } = makeSessionWithHistory(3);
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   // No recordTotalTokens call → lastTotalTokens stays 0 → remaining = 100K.
 
@@ -275,7 +276,7 @@ test("auto-compact does not run when remaining context is comfortably above thre
 test("auto-compact failure surfaces ui.compact failed and leaves the conversation untouched", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, session, sessionId } = makeSessionWithHistory(2);
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
   session.conversation.recordTotalTokens(95_000);
 
   // Round 1 (summarizer) — emit an error event.
@@ -335,7 +336,7 @@ test("after a successful compact, the next round still receives the ambient todo
 
   const { dispatcher, pushInbound } = makeCapturingDispatcher();
   const { manager, session, sessionId } = makeSessionWithHistory(2);
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
   session.conversation.recordTotalTokens(95_000);
   session.todos.update([{ id: "1", text: "post-compact step", status: "in_progress" }]);
 
@@ -364,7 +365,7 @@ test("after a successful compact, the next round still receives the ambient todo
 test("agent.reset clears the compact breaker so a fresh session starts unobstructed", async () => {
   const { dispatcher, pushInbound } = makeCapturingDispatcher();
   const { manager, session, sessionId } = makeSessionWithHistory(2);
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
   session.conversation.recordTotalTokens(95_000);
 
   // Trip the breaker with three failing summarizer calls.
@@ -440,7 +441,7 @@ test("agent.reset clears the compact breaker so a fresh session starts unobstruc
 test("agent.compact: manual entry runs compact, emits ui.compact lifecycle, and returns compactedTurnCount", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, sessionId } = makeSessionWithHistory(3);
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   // Summarizer round.
   scriptedRounds.push(emitTextStream("Intent: A. Progress: B. Current: C. Anchors: D."));
@@ -471,7 +472,7 @@ test("agent.compact: manual entry runs compact, emits ui.compact lifecycle, and 
 test("agent.compact: rejects when a turn is in flight on the session", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, sessionId } = makeSessionWithHistory(2);
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   // Long-running first turn — never completes during this test.
   scriptedRounds.push((model) => {
@@ -506,7 +507,7 @@ test("agent.compact: rejects when a turn is in flight on the session", async () 
 test("agent.compact: rejects a second compact while manual compact is running", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, sessionId } = makeSessionWithHistory(2);
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   scriptedRounds.push(() => new AssistantMessageEventStream());
 
@@ -538,7 +539,7 @@ test("agent.cancel interrupts a running manual compact", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, session } = makeSessionWithHistory(2);
   const sessionId = session.id;
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   let abortFired = false;
   scriptedRounds.push((model, signal) => {
@@ -584,7 +585,7 @@ test("agent.cancel interrupts a running manual compact", async () => {
 test("agent.submit during manual compact waits until compact finishes before starting the turn", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, session, sessionId } = makeSessionWithHistory(2);
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   let finishCompact: () => void = () => {};
   scriptedRounds.push((model) => {

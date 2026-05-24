@@ -23,6 +23,11 @@ import {
   toolRegistry,
 } from "./agent/tools";
 import { registerBuiltinAmbient } from "./agent/ambient";
+import {
+  assertRegisteredToolsMatchPermissionPolicies,
+  builtinPermissionPolicyCatalog,
+  PermissionGateway,
+} from "./agent/permissions";
 import { ensureWorkspace } from "./agent/workspace";
 import { logger } from "./log";
 import { NOTCH_PROTOCOL_VERSION, RPCMethod, type HelloResult } from "./rpc/rpc-types";
@@ -55,8 +60,10 @@ async function main(): Promise<void> {
   // todo state, so it registers AFTER the manager exists but BEFORE the
   // agent loop attaches (the loop snapshots the tool registry per turn).
   registerTodoTool(sessions);
+  assertRegisteredToolsMatchPermissionPolicies(toolRegistry.list(), builtinPermissionPolicyCatalog);
+  const permissionGateway = new PermissionGateway(dispatcher, builtinPermissionPolicyCatalog);
   registerSessionHandlers(dispatcher, sessions);
-  registerAgentHandlers(dispatcher, { manager: sessions });
+  registerAgentHandlers(dispatcher, { manager: sessions, permissionGateway });
   registerProviderHandlers(dispatcher);
   registerConfigHandlers(dispatcher);
   // rpc.ping handler — installed before the reader sees any inbound frames so

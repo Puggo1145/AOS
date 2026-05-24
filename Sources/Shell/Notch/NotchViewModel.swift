@@ -326,6 +326,7 @@ public final class NotchViewModel {
     public let configService: ConfigService
     public let permissionsService: PermissionsService
     public let visualCapturePolicyStore: VisualCapturePolicyStore
+    public let permissionApprovalService: PermissionApprovalService?
 
     /// History popup visibility — driven by the header history button.
     public var showHistory: Bool = false {
@@ -364,6 +365,7 @@ public final class NotchViewModel {
         configService: ConfigService,
         permissionsService: PermissionsService,
         visualCapturePolicyStore: VisualCapturePolicyStore,
+        permissionApprovalService: PermissionApprovalService? = nil,
         screenRect: CGRect,
         deviceNotchRect: CGRect
     ) {
@@ -374,6 +376,7 @@ public final class NotchViewModel {
         self.configService = configService
         self.permissionsService = permissionsService
         self.visualCapturePolicyStore = visualCapturePolicyStore
+        self.permissionApprovalService = permissionApprovalService
         self.screenRect = screenRect
         self.deviceNotchRect = deviceNotchRect
         // Per design: -4 if there is a real notch, 0 otherwise — expands the

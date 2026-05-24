@@ -163,6 +163,8 @@ public enum RPCMethod {
     public static let uiUsage = "ui.usage"
     public static let uiTodo = "ui.todo"
     public static let uiCompact = "ui.compact"
+    public static let permissionRequestApproval = "permission.requestApproval"
+    public static let permissionApprovalCancelled = "permission.approvalCancelled"
     public static let providerStatus = "provider.status"
     public static let providerStartLogin = "provider.startLogin"
     public static let providerCancelLogin = "provider.cancelLogin"

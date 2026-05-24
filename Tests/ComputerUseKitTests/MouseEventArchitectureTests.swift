@@ -119,12 +119,12 @@ struct MouseEventArchitectureTests {
 
     @Test("agent mouse RPC keeps screenshot coordinates in Shell")
     func agentMouseRPCKeepsScreenshotCoordinatesInShell() throws {
-        let sidecarTool = try Self.source("sidecar/src/agent/tools/computer-use.ts")
+        let sidecarTool = try Self.source("sidecar/src/agent/tools/builtins/computer-use.ts")
         let rpcService = try Self.source("Sources/Shell/Agent/ComputerUseRPCService.swift")
         let core = try Self.source("Sources/ComputerUseKit/ComputerUseCore.swift")
 
         #expect(!sidecarTool.contains("screenshotPointToScreenPoint"))
-        #expect(sidecarTool.contains("stateId,"))
+        #expect(sidecarTool.contains("stateId:"))
         #expect(rpcService.contains("stateId: StateID(params.stateId)"))
         #expect(core.contains("frameTranslatedToCurrentWindowBounds"))
     }

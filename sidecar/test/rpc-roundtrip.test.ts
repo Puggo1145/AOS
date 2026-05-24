@@ -43,6 +43,8 @@ import {
   type ProviderSetApiKeyParams,
   type ProviderClearApiKeyParams,
   type ProviderLogoutParams,
+  type PermissionRequestApprovalParams,
+  type PermissionApprovalCancelledParams,
   type DevContextGetParams,
   type DevContextChangedParams,
   type UITodoParams,
@@ -251,14 +253,37 @@ test("ui.toolCall.rejected fixture roundtrips byte-equal", () => {
   expect("outputText" in note.params).toBe(false);
 });
 
+test("ui.toolCall.permissionDenied fixture roundtrips byte-equal", () => {
+  assertRoundtrip("ui.toolCall.permissionDenied.json");
+  const { parsed } = loadFixture("ui.toolCall.permissionDenied.json");
+  const note = parsed as RPCNotification<UIToolCallParams>;
+  expect(note.method).toBe(RPCMethod.uiToolCall);
+  expect(note.params.phase).toBe("permissionDenied");
+  if (note.params.phase === "permissionDenied") {
+    expect(note.params.toolName).toBe("write");
+    expect(typeof note.params.errorMessage).toBe("string");
+    expect(typeof note.params.args).toBe("object");
+  }
+  expect("isError" in note.params).toBe(false);
+  expect("outputText" in note.params).toBe(false);
+});
+
 test("ui.status fixture roundtrips byte-equal", () => {
   assertRoundtrip("ui.status.json");
   const { parsed } = loadFixture("ui.status.json");
   const note = parsed as RPCNotification<UIStatusParams>;
   expect(note.method).toBe(RPCMethod.uiStatus);
-  expect(["working", "waiting", "done"]).toContain(
+  expect(["working", "waiting", "awaitingPermission", "done"]).toContain(
     note.params.status
   );
+});
+
+test("ui.status.awaitingPermission fixture roundtrips byte-equal", () => {
+  assertRoundtrip("ui.status.awaitingPermission.json");
+  const { parsed } = loadFixture("ui.status.awaitingPermission.json");
+  const note = parsed as RPCNotification<UIStatusParams>;
+  expect(note.method).toBe(RPCMethod.uiStatus);
+  expect(note.params.status).toBe("awaitingPermission");
 });
 
 test("ui.error fixture roundtrips byte-equal", () => {
@@ -331,6 +356,23 @@ test("provider.status fixture roundtrips byte-equal", () => {
   const { parsed } = loadFixture("provider.status.json");
   const req = parsed as RPCRequest<ProviderStatusParams>;
   expect(req.method).toBe(RPCMethod.providerStatus);
+});
+
+test("permission.requestApproval fixture roundtrips byte-equal", () => {
+  assertRoundtrip("permission.requestApproval.json");
+  const { parsed } = loadFixture("permission.requestApproval.json");
+  const req = parsed as RPCRequest<PermissionRequestApprovalParams>;
+  expect(req.method).toBe(RPCMethod.permissionRequestApproval);
+  expect(req.params.risk).toBe("high");
+  expect(req.params.capabilities[0]?.capability).toBe("process.spawn");
+});
+
+test("permission.approvalCancelled fixture roundtrips byte-equal", () => {
+  assertRoundtrip("permission.approvalCancelled.json");
+  const { parsed } = loadFixture("permission.approvalCancelled.json");
+  const note = parsed as RPCNotification<PermissionApprovalCancelledParams>;
+  expect(note.method).toBe(RPCMethod.permissionApprovalCancelled);
+  expect(note.params.toolCallId).toBe("tc_01HBASH");
 });
 
 test("provider.startLogin fixture roundtrips byte-equal", () => {

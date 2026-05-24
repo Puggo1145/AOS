@@ -76,6 +76,9 @@ const RPC_METHOD_CATALOG = {
   [RPCMethod.uiTodo]: method(RPCMethod.uiTodo, "bunToShell", "notification"),
   [RPCMethod.uiCompact]: method(RPCMethod.uiCompact, "bunToShell", "notification"),
 
+  [RPCMethod.permissionRequestApproval]: method(RPCMethod.permissionRequestApproval, "bunToShell", "request"),
+  [RPCMethod.permissionApprovalCancelled]: method(RPCMethod.permissionApprovalCancelled, "bunToShell", "notification"),
+
   [RPCMethod.providerStatus]: method(RPCMethod.providerStatus, "shellToBun", "request"),
   [RPCMethod.providerStartLogin]: method(RPCMethod.providerStartLogin, "shellToBun", "request"),
   [RPCMethod.providerCancelLogin]: method(RPCMethod.providerCancelLogin, "shellToBun", "request"),

@@ -68,6 +68,7 @@ import { autoCompactIfNeeded, compactBreaker, compactConversation, COMPACT_NOOP_
 import { buildSystemPrompt } from "./system-prompt";
 import { AgentRoundRunner } from "./turn/round";
 import { logger } from "../log";
+import type { PermissionAuthorizer } from "./permissions";
 
 export { pickErrorCode } from "./turn/round";
 
@@ -137,11 +138,14 @@ export interface RegisterAgentOptions {
   manager: SessionManager;
   /// Override the context observer used by Dev Mode.
   contextObserver?: ContextObserver;
+  /// Required Gateway boundary for every agent-originated tool effect.
+  permissionGateway: PermissionAuthorizer;
 }
 
 export function registerAgentHandlers(dispatcher: Dispatcher, opts: RegisterAgentOptions): void {
   const observer = opts.contextObserver ?? defaultContextObserver;
   const manager = opts.manager;
+  const permissionGateway = opts.permissionGateway;
 
   // Wire the observer's sink to the dispatcher. The agent loop only ever
   // calls `observer.publish(...)`; this is the single edge where the
@@ -361,6 +365,7 @@ export function registerAgentHandlers(dispatcher: Dispatcher, opts: RegisterAgen
       turnId: input.turnId,
       signal: controller.signal,
       observer,
+      permissionGateway,
       onDone: () => manager.notifyListChanged(),
       onSteerActivated: (fromTurnId, toTurnId) => {
         reg.replace(fromTurnId, toTurnId);
@@ -417,6 +422,7 @@ export async function runTurn(
     /// Move the abort-controller registry key when a steer prompt becomes
     /// the active visible turn.
     onSteerActivated?: (fromTurnId: string, toTurnId: string) => void;
+    permissionGateway: PermissionAuthorizer;
   },
 ): Promise<void> {
   const { session, signal } = params;
@@ -476,6 +482,7 @@ export async function runTurn(
     observer,
     toolSpecs,
     toolByName,
+    permissionGateway: params.permissionGateway,
     maxConsecutiveSilentToolRounds: MAX_CONSECUTIVE_TOOL_ROUNDS,
   });
 
@@ -486,6 +493,7 @@ export async function runTurn(
       throw new Error("runTurn missing steer activation callbacks");
     }
     const previousTurnId = turnId;
+    params.permissionGateway.clearTurnGrants(sessionId, previousTurnId);
     if (!previousAlreadyDone) {
       const ok = convo.markDone(previousTurnId);
       dispatcher.notify(RPCMethod.uiStatus, { sessionId, turnId: previousTurnId, status: "done" });
@@ -618,6 +626,7 @@ export async function runTurn(
     }
     dropQueuedSteer();
   } finally {
+    params.permissionGateway.clearTurnGrants(sessionId, turnId);
     unsubTodo();
   }
 }

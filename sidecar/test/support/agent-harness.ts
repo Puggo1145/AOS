@@ -2,11 +2,17 @@ import { Dispatcher } from "../../src/rpc/dispatcher";
 import { StdioTransport, type ByteSink, type ByteSource } from "../../src/rpc/transport";
 import { Conversation } from "../../src/agent/conversation";
 import { SessionManager } from "../../src/agent/session/manager";
+import type {
+  PermissionAuthorizeInput,
+  PermissionAuthorizeResult,
+  PermissionAuthorizer,
+} from "../../src/agent/permissions";
 import type { Api, AssistantMessage, Model } from "../../src/llm";
 
 export interface CapturedFrame {
   method: string;
   params: any;
+  id?: any;
 }
 
 export interface CapturedResponse {
@@ -17,6 +23,7 @@ export interface CapturedResponse {
 
 export interface CapturedRpc {
   notifications: CapturedFrame[];
+  requests: CapturedFrame[];
   responses: CapturedResponse[];
 }
 
@@ -80,7 +87,7 @@ export function makeCapturingDispatcher(): {
       yield Buffer.from(await new Promise<string>((r) => inboundWaiters.push(r)), "utf8");
     }
   })();
-  const captured: CapturedRpc = { notifications: [], responses: [] };
+  const captured: CapturedRpc = { notifications: [], requests: [], responses: [] };
   const sink: ByteSink = {
     write(line: string): boolean {
       const trimmed = line.endsWith("\n") ? line.slice(0, -1) : line;
@@ -89,8 +96,11 @@ export function makeCapturingDispatcher(): {
         captured.notifications.push({ method: frame.method, params: frame.params });
       } else if ("id" in frame && !("method" in frame)) {
         captured.responses.push({ id: frame.id, result: frame.result, error: frame.error });
-      } else if (frame.method === "computerUse.stopAppSession") {
-        pushInboundLine(JSON.stringify({ jsonrpc: "2.0", id: frame.id, result: { stopped: true, pid: 123 } }) + "\n");
+      } else if ("method" in frame && "id" in frame) {
+        captured.requests.push({ id: frame.id, method: frame.method, params: frame.params });
+        if (frame.method === "computerUse.stopAppSession") {
+          pushInboundLine(JSON.stringify({ jsonrpc: "2.0", id: frame.id, result: { stopped: true, pid: 123 } }) + "\n");
+        }
       }
       return true;
     },
@@ -119,4 +129,15 @@ export function setupSession(): {
 
 export async function flush(ms = 80): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
+}
+
+export function allowAllPermissionGateway(): PermissionAuthorizer {
+  return {
+    async authorize(_input: PermissionAuthorizeInput): Promise<PermissionAuthorizeResult> {
+      return { kind: "allowed" };
+    },
+    clearTurnGrants(_sessionId: string, _turnId: string): void {
+      // Test helper: no turn-scoped state.
+    },
+  };
 }

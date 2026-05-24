@@ -298,6 +298,22 @@ public final class ConversationMirror {
             // `endedAt` waits for the explicit lifecycle frame.
             markCurrentThinkingNotAppendable(in: &turns[idx])
             appendToolCallSegment(&turns[idx], id: p.toolCallId)
+        case .permissionDenied:
+            let record = ToolCallRecord(
+                id: p.toolCallId,
+                name: p.toolName,
+                args: p.args!,
+                status: .completed,
+                isError: false,
+                outputText: p.errorMessage!
+            )
+            if let existing = turns[idx].toolCalls.firstIndex(where: { $0.id == p.toolCallId }) {
+                turns[idx].toolCalls[existing] = record
+            } else {
+                turns[idx].toolCalls.append(record)
+            }
+            markCurrentThinkingNotAppendable(in: &turns[idx])
+            appendToolCallSegment(&turns[idx], id: p.toolCallId)
         }
     }
 

@@ -29,6 +29,7 @@ import {
   type ToolCall,
 } from "../src/llm";
 import { AssistantMessageEventStream } from "../src/llm/utils/event-stream";
+import { allowAllPermissionGateway } from "./support/agent-harness";
 
 const FAKE_SOURCE_ID = "test-ambient-loop";
 
@@ -178,7 +179,7 @@ test("ambient block is appended to outbound messages when the session has open t
   ambientRegistry.register(todosAmbientProvider);
   const { dispatcher, pushInbound } = makeCapturingDispatcher();
   const { manager, session, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   // Seed the plan so the very first round sees ambient injected.
   session.todos.update([{ id: "1", text: "do thing", status: "in_progress" }]);
@@ -218,7 +219,7 @@ test("no ambient message is appended when no provider has anything to say", asyn
   // `runTurn` should pass the unmodified `messages` to streamSimple.
   const { dispatcher, pushInbound } = makeCapturingDispatcher();
   const { manager, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   scriptedRounds.push((model) => {
     return emitStream((s) => {
@@ -250,7 +251,7 @@ test("the ambient message does not persist in the Conversation after the turn co
   ambientRegistry.register(todosAmbientProvider);
   const { dispatcher, pushInbound } = makeCapturingDispatcher();
   const { manager, session, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   session.todos.update([{ id: "1", text: "step", status: "in_progress" }]);
 
@@ -293,7 +294,7 @@ test("multi-round tool flow re-injects a fresh ambient on every round", async ()
   ambientRegistry.register(todosAmbientProvider);
   const { dispatcher, pushInbound } = makeCapturingDispatcher();
   const { manager, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   // Round 1: write the plan via todo_write so the ambient picks it up
   // from round 2 onward.
@@ -373,7 +374,11 @@ test("dev-mode context snapshot includes the ambient tail so it can be inspected
   const observer = new ContextObserver();
   const { dispatcher, pushInbound } = makeCapturingDispatcher();
   const { manager, session, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager, contextObserver: observer });
+  registerAgentHandlers(dispatcher, {
+    manager,
+    contextObserver: observer,
+    permissionGateway: allowAllPermissionGateway(),
+  });
 
   session.todos.update([{ id: "1", text: "debug me", status: "in_progress" }]);
 

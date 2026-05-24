@@ -30,6 +30,7 @@ import {
   type ToolCall,
 } from "../src/llm";
 import { AssistantMessageEventStream } from "../src/llm/utils/event-stream";
+import { allowAllPermissionGateway } from "./support/agent-harness";
 
 const FAKE_SOURCE_ID = "test-todo-loop";
 
@@ -172,7 +173,7 @@ function setupSession() {
 test("todo_write tool round emits ui.todo with the new plan and stores it on the session", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, session, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   const items = [
     { id: "1", text: "draft section", status: "in_progress" },
@@ -239,7 +240,7 @@ test("todo_write tool round emits ui.todo with the new plan and stores it on the
 test("invalid todo_write args (multiple in_progress) surface as a recoverable isError result", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, session, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   scriptedRounds.push((model) => {
     const tc: ToolCall = {
@@ -298,7 +299,7 @@ test("invalid todo_write args (multiple in_progress) surface as a recoverable is
 test("agent.reset clears the per-session plan and emits an empty ui.todo", async () => {
   const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
   const { manager, session, sessionId } = setupSession();
-  registerAgentHandlers(dispatcher, { manager });
+  registerAgentHandlers(dispatcher, { manager, permissionGateway: allowAllPermissionGateway() });
 
   // Seed the plan directly so we can isolate the reset behavior — no need
   // to run a turn first.

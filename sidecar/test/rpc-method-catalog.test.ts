@@ -54,6 +54,14 @@ test("method-level semantics distinguish request and notification routes inside 
     direction: "bunToShell",
     kind: "notification",
   });
+  expect(rpcMethodSemantics(RPCMethod.permissionRequestApproval)).toMatchObject({
+    direction: "bunToShell",
+    kind: "request",
+  });
+  expect(rpcMethodSemantics(RPCMethod.permissionApprovalCancelled)).toMatchObject({
+    direction: "bunToShell",
+    kind: "notification",
+  });
 });
 
 test("timeout and fast-path metadata live on the same method semantic entries", () => {
