@@ -185,40 +185,20 @@ public struct ToolCallRecord: Identifiable, Sendable, Equatable {
     public var outputText: String?
 }
 
-/// One compact-pass mirror entry. Built from `ui.compact` lifecycle
-/// frames (auto path from `runTurn` entry, or manual `agent.compact`).
-///
-/// Placement uses "render AFTER this turn" semantics — `afterTurnId` is
-/// the id of the most recent turn that already existed when the compact
-/// pass was triggered. The history view emits the divider immediately
-/// after that turn's row, so anything submitted later (including the
-/// auto path's brand-new turn that triggered compact) appears BELOW the
-/// divider in chronological order. `nil` means "no prior turn" — rare,
-/// only happens if compact were ever to fire on an empty mirror — and
-/// renders at the very top.
-///
-/// Why `afterTurnId` and not `beforeTurnId`:
-///   - Manual `/compact` runs from idle. The user's next prompt should
-///     appear BELOW the divider (the divider stays pinned to where the
-///     compact happened). With "before" semantics anchored to "the next
-///     turn that comes along", any later submission would push the
-///     divider downward forever; with "after" semantics the divider
-///     is glued to the historical turn that bounded the compact.
-///   - Auto-compact's new turn is already in the mirror when `started`
-///     arrives (the sidecar registers the turn before kicking off
-///     runTurn, then runTurn fires `ui.compact { started }`). We
-///     resolve `afterTurnId` to "the turn just before the new one" so
-///     the divider lands between the prior history and the new turn.
+/// One compact-pass mirror entry. Built from `ui.compact` lifecycle frames
+/// (auto path from `runTurn` entry, or manual `agent.compact`). The Shell
+/// renders compact lifecycle in the tray drawer below the composer, not in
+/// the conversation transcript.
 ///
 /// Status:
 ///   - `.running` while the summarizer LLM call is in flight. The
-///     divider shows "compacting context" with a left→right shimmer.
+///     tray shows "Compacting context" as non-dismissable live state.
 ///   - `.done` once the sidecar reports completion. The marker stops
-///     animating and remains in history as a milestone.
+///     showing live state and becomes a dismissable "Context compacted"
+///     notification until the user dismisses it or starts the next turn.
 ///   - `failed` is not stored — `applyCompact` removes the event on
-///     `failed` instead of carrying a tombstone, since a stale "compact
-///     failed" divider in the middle of an otherwise normal
-///     conversation is more noise than signal.
+///     `failed` instead of carrying a tombstone, since a stale failure
+///     notification is more noise than signal.
 public struct CompactEvent: Identifiable, Sendable, Equatable {
     public enum Status: Sendable, Equatable {
         case running
@@ -226,16 +206,17 @@ public struct CompactEvent: Identifiable, Sendable, Equatable {
     }
 
     public let id: String
-    /// Turn id the divider should render AFTER. `nil` puts it at the
-    /// very top of history (no prior turn existed at compact time).
-    public let afterTurnId: String?
+    /// Wire `turnId` carried by the `ui.compact` lifecycle frames. Manual
+    /// compaction uses an empty string; auto compaction uses the triggering
+    /// turn id. The mirror uses this only to pair started/done/failed frames.
+    public let wireTurnId: String
     public var status: Status
     /// Filled in on the `.done` frame. `nil` while running.
     public var compactedTurnCount: Int?
 
-    public init(id: String, afterTurnId: String?, status: Status, compactedTurnCount: Int?) {
+    public init(id: String, wireTurnId: String, status: Status, compactedTurnCount: Int?) {
         self.id = id
-        self.afterTurnId = afterTurnId
+        self.wireTurnId = wireTurnId
         self.status = status
         self.compactedTurnCount = compactedTurnCount
     }
@@ -416,8 +397,7 @@ public final class AgentService {
         sessionStore.activeMirror?.todos ?? []
     }
     /// Active session's compact-pass markers, in emit order. Drives the
-    /// "context compacted" divider blocks the history view interleaves
-    /// with turns. Empty until the first `ui.compact { started }` frame.
+    /// compact lifecycle drawer row below the composer.
     public var compactEvents: [CompactEvent] {
         sessionStore.activeMirror?.compactEvents ?? []
     }
@@ -429,6 +409,9 @@ public final class AgentService {
     }
     public var hasRunningCompact: Bool {
         sessionStore.activeMirror?.hasRunningCompact ?? false
+    }
+    public var hasCompactableContext: Bool {
+        sessionStore.activeMirror?.hasCompactableContext ?? false
     }
 
     public var currentSessionId: String? { sessionStore.activeId }
@@ -633,6 +616,19 @@ public final class AgentService {
             await stopComputerUseAppSessionAfterManualAbort(mirror: mirror)
             return
         }
+        if mirror.hasRunningCompact && !mirror.hasActiveTurn {
+            do {
+                _ = try await rpc.request(
+                    method: RPCMethod.agentCancel,
+                    params: AgentCancelParams(sessionId: sessionId, turnId: ""),
+                    as: AgentCancelResult.self
+                )
+            } catch {
+                mirror.setSubmitError(Self.formatSubmitFailureMessage(error: error))
+            }
+            await stopComputerUseAppSessionAfterManualAbort(mirror: mirror)
+            return
+        }
         guard let turnId = currentTurn else {
             await stopComputerUseAppSessionAfterManualAbort(mirror: mirror)
             return
@@ -660,11 +656,14 @@ public final class AgentService {
     /// Manual `/compact` entry. Asks the sidecar to summarize prior
     /// history right now. Sidecar emits the same `ui.compact { started →
     /// done | failed }` lifecycle as the auto path; the active mirror
-    /// picks those up and surfaces a divider block in history.
+    /// picks those up and surfaces the lifecycle in the composer drawer.
     /// Errors propagate to the active mirror's submit-error banner so
     /// the user sees what went wrong (e.g. "in-flight turn" rejection).
     public func compactSession() async {
         guard let sessionId = currentSessionId, let mirror = sessionStore.activeMirror else {
+            return
+        }
+        guard mirror.hasCompactableContext else {
             return
         }
         do {

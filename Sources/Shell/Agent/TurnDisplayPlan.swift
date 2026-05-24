@@ -56,6 +56,28 @@ public struct CompactTurnDisplayPlan: Equatable {
     }
 }
 
+public struct TurnRowDisplayPlan: Equatable {
+    public let turnId: String
+    public let prompt: String
+    public let clipboardLabels: [String]
+    public let agentMessages: [TurnDisplaySegment]
+    public let shouldShowAgentStatus: Bool
+
+    public init(
+        turnId: String,
+        prompt: String,
+        clipboardLabels: [String],
+        agentMessages: [TurnDisplaySegment],
+        shouldShowAgentStatus: Bool
+    ) {
+        self.turnId = turnId
+        self.prompt = prompt
+        self.clipboardLabels = clipboardLabels
+        self.agentMessages = agentMessages
+        self.shouldShowAgentStatus = shouldShowAgentStatus
+    }
+}
+
 public enum TurnDisplayPlanner {
     public static func plan(
         segments: [TurnSegment],
@@ -120,19 +142,45 @@ public enum TurnDisplayPlanner {
         plan(segments: segments, toolCallsById: toolCallsById).last
     }
 
+    /// History is the canonical transcript view. Compact is a projection of
+    /// that same per-turn plan: keep the current prompt, then collapse the
+    /// agent side to the newest rendered segment.
     @MainActor
-    public static func compactPlan(for turn: ConversationTurn) -> CompactTurnDisplayPlan {
+    public static func rowPlan(
+        for turn: ConversationTurn,
+        mode: ConversationDisplayMode
+    ) -> TurnRowDisplayPlan {
         let toolCallsById = Dictionary(uniqueKeysWithValues: turn.toolCalls.map { ($0.id, $0) })
-        let latest = latestMessage(
+        let fullAgentMessages = plan(
             segments: turn.segments,
             toolCallsById: toolCallsById
         )
-        return CompactTurnDisplayPlan(
+        let agentMessages: [TurnDisplaySegment]
+        switch mode {
+        case .history:
+            agentMessages = fullAgentMessages
+        case .compact:
+            agentMessages = fullAgentMessages.last.map { [$0] } ?? []
+        }
+
+        return TurnRowDisplayPlan(
             turnId: turn.id,
             prompt: turn.prompt,
             clipboardLabels: turn.context.clipboardLabels,
-            latestAgentMessage: latest,
-            shouldShowAgentStatus: latest != nil || shouldShowEmptyAgentStatus(for: turn.status)
+            agentMessages: agentMessages,
+            shouldShowAgentStatus: mode == .history || !agentMessages.isEmpty || shouldShowEmptyAgentStatus(for: turn.status)
+        )
+    }
+
+    @MainActor
+    public static func compactPlan(for turn: ConversationTurn) -> CompactTurnDisplayPlan {
+        let rowPlan = rowPlan(for: turn, mode: .compact)
+        return CompactTurnDisplayPlan(
+            turnId: rowPlan.turnId,
+            prompt: rowPlan.prompt,
+            clipboardLabels: rowPlan.clipboardLabels,
+            latestAgentMessage: rowPlan.agentMessages.first,
+            shouldShowAgentStatus: rowPlan.shouldShowAgentStatus
         )
     }
 

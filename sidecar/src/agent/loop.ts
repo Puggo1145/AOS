@@ -208,6 +208,9 @@ export function registerAgentHandlers(dispatcher: Dispatcher, opts: RegisterAgen
       throw new RPCMethodError(RPCErrorCode.invalidParams, "agent.cancel requires { sessionId, turnId }");
     }
     const session = resolveSession(sessionId);
+    if (turnId === "" && session.isCompacting) {
+      return { cancelled: session.cancelCompact() };
+    }
     if (session.cancelSteer(turnId)) {
       return { cancelled: true };
     }
@@ -246,8 +249,14 @@ export function registerAgentHandlers(dispatcher: Dispatcher, opts: RegisterAgen
         `session ${session.id} has an in-flight turn; cancel or wait before compacting`,
       );
     }
+    if (session.isCompacting) {
+      throw new RPCMethodError(
+        RPCErrorCode.invalidRequest,
+        `session ${session.id} is already compacting`,
+      );
+    }
     const model = modelResolver();
-    session.setCompacting(true);
+    const compactController = session.beginCompact();
     const lifecycleTurnId = "";
     dispatcher.notify(RPCMethod.uiCompact, {
       sessionId: session.id,
@@ -255,7 +264,10 @@ export function registerAgentHandlers(dispatcher: Dispatcher, opts: RegisterAgen
       phase: "started",
     });
     try {
-      const result = await compactConversation(session, model, { mode: "manual" });
+      const result = await compactConversation(session, model, {
+        mode: "manual",
+        signal: compactController.signal,
+      });
       if (result === COMPACT_NOOP_EMPTY) {
         // Documented short-circuit: empty session, nothing to fold. Emit
         // a `done` with no count so the Shell's lifecycle still closes
@@ -265,7 +277,7 @@ export function registerAgentHandlers(dispatcher: Dispatcher, opts: RegisterAgen
           turnId: lifecycleTurnId,
           phase: "done",
         });
-        session.setCompacting(false);
+        session.clearCompact(compactController);
         startQueuedTurnIfIdle(session);
         return { ok: true };
       }
@@ -275,10 +287,21 @@ export function registerAgentHandlers(dispatcher: Dispatcher, opts: RegisterAgen
         phase: "done",
         compactedTurnCount: result.compactedTurnCount,
       });
-      session.setCompacting(false);
+      session.clearCompact(compactController);
       startQueuedTurnIfIdle(session);
       return { ok: true, compactedTurnCount: result.compactedTurnCount };
     } catch (err) {
+      if (compactController.signal.aborted) {
+        dispatcher.notify(RPCMethod.uiCompact, {
+          sessionId: session.id,
+          turnId: lifecycleTurnId,
+          phase: "failed",
+          errorMessage: "compact cancelled",
+        });
+        session.clearCompact(compactController);
+        startQueuedTurnIfIdle(session);
+        return { ok: false };
+      }
       const message = err instanceof Error ? err.message : String(err);
       logger.error("manual compact failed", { sessionId: session.id, err: String(err) });
       dispatcher.notify(RPCMethod.uiCompact, {
@@ -287,7 +310,7 @@ export function registerAgentHandlers(dispatcher: Dispatcher, opts: RegisterAgen
         phase: "failed",
         errorMessage: message,
       });
-      session.setCompacting(false);
+      session.clearCompact(compactController);
       startQueuedTurnIfIdle(session);
       throw new RPCMethodError(RPCErrorCode.internalError, message);
     }

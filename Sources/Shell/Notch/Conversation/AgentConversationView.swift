@@ -50,58 +50,14 @@ struct AgentConversationView: View {
         displayMode == .compact ? .focused : .normal
     }
 
-    /// One renderable row in the history feed. Turns and compact-event
-    /// dividers share the list so SwiftUI's identity-based diffing
-    /// continues to drive insert / removal transitions for both.
-    private enum HistoryItem: Identifiable {
-        case turn(ConversationTurn)
-        case compact(CompactEvent)
-
-        var id: String {
-            switch self {
-            case .turn(let t): return "turn:\(t.id)"
-            case .compact(let e): return "compact:\(e.id)"
-            }
-        }
-    }
-
-    /// Interleave `agentService.turns` with `agentService.compactEvents`.
-    /// Placement uses the event's `afterTurnId` — render the divider
-    /// IMMEDIATELY AFTER the turn it references — see `CompactEvent`
-    /// for the rationale (a divider anchored "after" pins it to the
-    /// historical position even after subsequent turns are submitted).
-    /// `afterTurnId == nil` puts the divider at the very top; an
-    /// `afterTurnId` that no longer matches any current turn (race with
-    /// `agent.reset`) is treated the same as nil — it lands at the top
-    /// so it isn't silently lost.
-    private var historyItems: [HistoryItem] {
-        let turns = ConversationDisplayProjection.turns(agentService.turns, mode: displayMode)
-        let events = agentService.compactEvents
-        guard displayMode == .history, !events.isEmpty else { return turns.map { .turn($0) } }
-
-        var afterByTurn: [String: [CompactEvent]] = [:]
-        var topEvents: [CompactEvent] = []
-        let knownIds = Set(turns.map(\.id))
-        for ev in events {
-            if let anchor = ev.afterTurnId, knownIds.contains(anchor) {
-                afterByTurn[anchor, default: []].append(ev)
-            } else {
-                topEvents.append(ev)
-            }
-        }
-
-        var out: [HistoryItem] = []
-        out.reserveCapacity(turns.count + events.count)
-        for ev in topEvents {
-            out.append(.compact(ev))
-        }
-        for turn in turns {
-            out.append(.turn(turn))
-            if let evs = afterByTurn[turn.id] {
-                for ev in evs { out.append(.compact(ev)) }
-            }
-        }
-        return out
+    /// Turn-only conversation feed. Compact lifecycle UI is rendered by the
+    /// tray drawer below the composer, so transcript rows stay focused on
+    /// user/agent conversation content.
+    private var historyItems: [ConversationDisplayProjection.Item] {
+        ConversationDisplayProjection.items(
+            turns: agentService.turns,
+            mode: displayMode
+        )
     }
 
     var body: some View {
@@ -207,29 +163,18 @@ struct AgentConversationView: View {
                         ForEach(historyItems) { item in
                             switch item {
                             case .turn(let turn):
-                                Group {
-                                    if displayMode == .compact {
-                                        compactTurnRow(turn)
-                                    } else {
-                                        turnRow(turn)
-                                    }
-                                }
+                                turnRow(turn)
                                 .id(item.id)
                                 .transition(.asymmetric(
                                     insertion: .opacity,
                                     removal: .identity
                                 ))
-                            case .compact(let event):
-                                CompactBlockView(event: event)
-                                    .id(item.id)
-                                    .transition(.opacity)
                             }
                         }
                     }
-                    // Keyed on the combined item count so a new turn OR a
-                    // compact-event start triggers the insert transition,
-                    // while streaming tokens inside an existing turn do
-                    // not.
+                    // Keyed on the turn count so a new turn triggers the
+                    // insert transition, while streaming tokens inside an
+                    // existing turn do not.
                     .animation(reduceMotion ? nil : .smooth(duration: 0.32), value: historyItems.count)
 
                     Color.clear
@@ -296,8 +241,6 @@ struct AgentConversationView: View {
         let rounded = rawHeight.rounded()
         guard viewModel.historyContentHeight != rounded else { return }
         let didGrow = rounded > viewModel.historyContentHeight
-        // Treat compact dividers as "rows" too so opening a compact
-        // marker auto-snaps the viewport like a turn insertion would.
         let countNow = historyItems.count
         let countGrew = countNow > lastObservedTurnCount
         lastObservedTurnCount = countNow
@@ -401,21 +344,21 @@ struct AgentConversationView: View {
 
     // MARK: - Turn rendering
 
-    /// One historical turn: compressed header (app icon + prompt) over
-    /// an emoji-prefixed reply block, plus an optional error banner.
+    /// One turn row in the history feed. Compact mode is a projection of this
+    /// row: same prompt/status/error structure, but with only the latest agent
+    /// segment visible.
     private func turnRow(_ turn: ConversationTurn) -> some View {
         // O(1) segment → tool-call resolution; matters on tool-heavy turns
         // because every streaming token redraws every visible row.
         let toolCallById: [String: ToolCallRecord] = Dictionary(
             uniqueKeysWithValues: turn.toolCalls.map { ($0.id, $0) }
         )
-        let displaySegments = TurnDisplayPlanner.plan(
-            segments: turn.segments,
-            toolCallsById: toolCallById
-        )
-        return VStack(alignment: .leading, spacing: 6) {
+        let plan = TurnDisplayPlanner.rowPlan(for: turn, mode: displayMode)
+        let isCompact = displayMode == .compact
+
+        return VStack(alignment: .leading, spacing: isCompact ? 8 : 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                if let icon = turn.context.appIcon {
+                if !isCompact, let icon = turn.context.appIcon {
                     Image(nsImage: icon)
                         .resizable()
                         .scaledToFit()
@@ -423,81 +366,47 @@ struct AgentConversationView: View {
                         .alignmentGuide(.firstTextBaseline) { d in d[.bottom] - 2 }
                 }
                 PromptWithChipsView(
-                    prompt: turn.prompt,
-                    clipboardLabels: turn.context.clipboardLabels
+                    prompt: plan.prompt,
+                    clipboardLabels: plan.clipboardLabels
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            HStack(alignment: .top, spacing: 8) {
-                turnEmojiView(turn)
-                    .notchFont(size: 13, weight: .regular, design: .monospaced)
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                VStack(alignment: .leading, spacing: 6) {
-                    // Segments render in emission order so thinking / tool
-                    // calls / reply chunks interleave as the model produced
-                    // them. IDs are stable so SwiftUI preserves per-row
-                    // state across redraws.
-                    ForEach(displaySegments) { segment in
-                        displaySegmentView(segment, toolCallById: toolCallById)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            if turn.status == .error, let msg = turn.errorMessage, !msg.isEmpty {
-                Text(msg)
-                    .notchFont(size: 12, weight: .medium)
-                    .foregroundStyle(.red.opacity(0.9))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(Color.red.opacity(0.12))
-                    )
-            }
-        }
-    }
-
-    /// Compact mode keeps the current user prompt anchored while projecting
-    /// only the newest emitted agent item underneath it.
-    private func compactTurnRow(_ turn: ConversationTurn) -> some View {
-        let toolCallById: [String: ToolCallRecord] = Dictionary(
-            uniqueKeysWithValues: turn.toolCalls.map { ($0.id, $0) }
-        )
-        let compactPlan = TurnDisplayPlanner.compactPlan(for: turn)
-
-        return VStack(alignment: .leading, spacing: 8) {
-            PromptWithChipsView(
-                prompt: compactPlan.prompt,
-                clipboardLabels: compactPlan.clipboardLabels
-            )
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            if compactPlan.shouldShowAgentStatus {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
+            if plan.shouldShowAgentStatus {
+                HStack(alignment: isCompact ? .firstTextBaseline : .top, spacing: 8) {
                     turnEmojiView(turn)
-                        .notchFont(size: contentScale.agentEmojiFontSize, design: .monospaced)
+                        .notchFont(
+                            size: isCompact ? contentScale.agentEmojiFontSize : 13,
+                            weight: .regular,
+                            design: .monospaced
+                        )
                         .foregroundStyle(.white)
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
-                    if let latestAgentMessage = compactPlan.latestAgentMessage {
-                        CompactAgentMessageSwitcher(
-                            message: latestAgentMessage,
-                            toolCallById: toolCallById,
-                            contentScale: contentScale
-                        )
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 6) {
+                        // Segments render in emission order so thinking / tool
+                        // calls / reply chunks interleave as the model produced
+                        // them. Compact mode receives the same plan, narrowed
+                        // to its latest segment by `TurnDisplayPlanner`.
+                        ForEach(plan.agentMessages) { segment in
+                            if isCompact {
+                                CompactAgentMessageSwitcher(
+                                    message: segment,
+                                    toolCallById: toolCallById,
+                                    contentScale: contentScale
+                                )
+                            } else {
+                                displaySegmentView(segment, toolCallById: toolCallById)
+                            }
+                        }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
 
             if turn.status == .error, let msg = turn.errorMessage, !msg.isEmpty {
                 Text(msg)
-                    .notchFont(size: 13, weight: .medium)
+                    .notchFont(size: isCompact ? 13 : 12, weight: .medium)
                     .foregroundStyle(.red.opacity(0.9))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 8)
@@ -508,9 +417,9 @@ struct AgentConversationView: View {
                     )
             }
         }
-        .fontWeight(contentScale.fontWeight)
-        .padding(.vertical, 12)
-        .padding(.trailing, 4)
+        .fontWeight(isCompact ? contentScale.fontWeight : nil)
+        .padding(.vertical, isCompact ? 12 : 0)
+        .padding(.trailing, isCompact ? 4 : 0)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 

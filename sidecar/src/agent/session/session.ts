@@ -34,7 +34,7 @@ export class Session {
   readonly todos: TodoManager;
   readonly computerUseStateCache = new ComputerUseStateCache();
   private _pendingSteer: PendingSteerPrompt | undefined;
-  private _compacting = false;
+  private _compactController: AbortController | undefined;
   /// Count of consecutive tool-call rounds in the in-flight (or most
   /// recently completed) turn during which the assistant produced no
   /// visible text. The agent loop is the sole writer; ambient providers
@@ -67,15 +67,40 @@ export class Session {
   }
 
   get isCompacting(): boolean {
-    return this._compacting;
+    return this._compactController !== undefined;
   }
 
   get computerUseAppSession(): ComputerUseAppSessionInfo | undefined {
     return this._computerUseAppSession;
   }
 
+  beginCompact(): AbortController {
+    if (this._compactController) {
+      throw new Error(`session ${this.id} is already compacting`);
+    }
+    this._compactController = new AbortController();
+    return this._compactController;
+  }
+
+  cancelCompact(): boolean {
+    const controller = this._compactController;
+    if (!controller) return false;
+    controller.abort(new Error("compact cancelled"));
+    return true;
+  }
+
+  clearCompact(controller?: AbortController): void {
+    if (controller && this._compactController !== controller) return;
+    this._compactController = undefined;
+  }
+
   setCompacting(compacting: boolean): void {
-    this._compacting = compacting;
+    if (compacting) {
+      this.beginCompact();
+    } else {
+      this.cancelCompact();
+      this.clearCompact();
+    }
   }
 
   queueSteer(input: PendingSteerPrompt): void {

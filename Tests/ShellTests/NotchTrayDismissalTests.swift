@@ -150,6 +150,87 @@ struct NotchTrayDismissalTests {
         #expect(vm.trayItems.isEmpty)
     }
 
+    // MARK: - Compact lifecycle row
+
+    @Test("running compact appears as a non-dismissable tray row")
+    func compactRunningRowAppears() {
+        let vm = makeViewModel()
+        vm.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
+
+        vm.agentService.handleCompact(UICompactParams(
+            sessionId: "S",
+            turnId: "",
+            phase: .started
+        ))
+
+        let row = vm.trayItems.first
+        #expect(vm.trayItems.count == 1)
+        #expect(row?.id.hasPrefix(BuiltinTrayItemID.compactPrefix) == true)
+        #expect(row?.message == "Compacting context")
+        #expect(row?.dismissable == false)
+        #expect(row?.shimmer == true)
+    }
+
+    @Test("completed compact appears as a dismissable tray notification")
+    func compactDoneRowAppears() {
+        let vm = makeViewModel()
+        vm.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
+
+        vm.agentService.handleCompact(UICompactParams(sessionId: "S", turnId: "", phase: .started))
+        vm.agentService.handleCompact(UICompactParams(
+            sessionId: "S",
+            turnId: "",
+            phase: .done,
+            compactedTurnCount: 3
+        ))
+
+        let row = vm.trayItems.first
+        #expect(vm.trayItems.count == 1)
+        #expect(row?.id.hasPrefix(BuiltinTrayItemID.compactPrefix) == true)
+        #expect(row?.message == "Context compacted")
+        #expect(row?.dismissable == true)
+    }
+
+    @Test("completed compact notification can be dismissed manually")
+    func compactDoneRowDismissesManually() {
+        let vm = makeViewModel()
+        vm.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
+        vm.agentService.handleCompact(UICompactParams(sessionId: "S", turnId: "", phase: .started))
+        vm.agentService.handleCompact(UICompactParams(sessionId: "S", turnId: "", phase: .done))
+        let id = vm.trayItems[0].id
+
+        vm.dismissTrayItem(id: id)
+
+        #expect(vm.trayItems.isEmpty)
+    }
+
+    @Test("completed compact notification disappears on the next turn")
+    func compactDoneRowClearsOnNextTurn() {
+        let vm = makeViewModel()
+        vm.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
+        vm.agentService.handleCompact(UICompactParams(sessionId: "S", turnId: "", phase: .started))
+        vm.agentService.handleCompact(UICompactParams(sessionId: "S", turnId: "", phase: .done))
+        #expect(vm.trayItems.count == 1)
+
+        vm.agentService._testTurnStarted(id: "next")
+
+        #expect(vm.trayItems.isEmpty)
+    }
+
+    @Test("command palette filters stale compact rows when context stops being compactable")
+    func commandPaletteFiltersStaleCompactRows() {
+        let vm = makeViewModel()
+        vm.agentService._testTurnStarted(id: "T1", prompt: "hello")
+        vm.agentService.handleStatus(UIStatusParams(sessionId: "S", turnId: "T1", status: .done))
+        vm.composerInputModel._testSetPlainText("/")
+        vm.refreshCommandPalette()
+        #expect(vm.trayItems.map(\.id) == [BuiltinTrayItemID.commandPrefix + "compact"])
+
+        vm.agentService.handleCompact(UICompactParams(sessionId: "S", turnId: "", phase: .started))
+
+        #expect(vm.trayItems.map(\.id) == [BuiltinTrayItemID.commandPrefix + "_empty"])
+    }
+
     @Test("dismissTrayItem is a no-op for non-dismissable rows")
     func dismissNonDismissableIsNoop() {
         let vm = makeViewModel()

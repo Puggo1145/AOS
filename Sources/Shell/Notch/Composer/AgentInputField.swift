@@ -85,6 +85,9 @@ struct ComposerCard: View {
             // catch this.
             viewModel.refreshCommandPalette()
         }
+        .onChange(of: viewModel.agentService.hasCompactableContext) { _, _ in
+            viewModel.refreshCommandPalette()
+        }
     }
 
     // MARK: - Input row
@@ -236,7 +239,7 @@ struct ComposerCard: View {
     private var sendButton: some View {
         if viewModel.agentService.hasQueuedPrompt {
             cancelQueuedButton
-        } else if viewModel.isAgentBusy {
+        } else if viewModel.isAgentBusy || viewModel.agentService.hasRunningCompact {
             stopButton
         } else {
             submitButton
@@ -274,7 +277,7 @@ struct ComposerCard: View {
                 .background(Circle().fill(Color.white))
         }
         .buttonStyle(.notchPressable)
-        .accessibilityLabel(Text("Stop agent"))
+        .accessibilityLabel(Text(viewModel.agentService.hasRunningCompact ? "Stop compaction" : "Stop agent"))
     }
 
     private var cancelQueuedButton: some View {

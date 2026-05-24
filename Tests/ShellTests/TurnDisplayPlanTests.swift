@@ -33,6 +33,44 @@ struct TurnDisplayPlanTests {
         #expect(projected.map(\.id) == ["first", "current"])
     }
 
+    @Test("compact display excludes compact markers from the conversation feed")
+    func compactDisplayExcludesCompactMarkers() {
+        let first = turn(id: "first")
+        let current = turn(id: "current")
+
+        let projected = ConversationDisplayProjection.items(
+            turns: [first, current],
+            mode: .compact
+        )
+
+        #expect(projected.map(\.id) == ["turn:current"])
+    }
+
+    @Test("history display excludes compact markers from the conversation feed")
+    func historyDisplayExcludesCompactMarkers() {
+        let prior = turn(id: "prior")
+        let active = turn(id: "active")
+
+        let projected = ConversationDisplayProjection.items(
+            turns: [prior, active],
+            mode: .history
+        )
+
+        #expect(projected.map(\.id) == ["turn:prior", "turn:active"])
+    }
+
+    @Test("compact display ignores completed compact markers")
+    func compactDisplayIgnoresCompletedCompactMarkers() {
+        let current = turn(id: "current")
+
+        let projected = ConversationDisplayProjection.items(
+            turns: [current],
+            mode: .compact
+        )
+
+        #expect(projected.map(\.id) == ["turn:current"])
+    }
+
     @Test("latest message returns only the final reply after prior activity")
     func latestMessageReturnsFinalReply() {
         let t1 = tool(id: "A", name: "bash", status: .completed)

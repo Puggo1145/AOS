@@ -85,6 +85,48 @@ struct AgentServiceTests {
         #expect(s.queuedPrompt == nil)
     }
 
+    @Test("compact command is hidden when there is no compactable context")
+    func compactCommandHiddenWithoutContext() {
+        let s = makeService()
+        #expect(s.hasCompactableContext == false)
+        #expect(SlashCommandRegistry.commands(agentService: s).isEmpty)
+    }
+
+    @Test("compact command is shown only for completed idle context")
+    func compactCommandShownOnlyForCompletedIdleContext() {
+        let s = makeService()
+        s._testTurnStarted(id: "T1", prompt: "hello")
+        #expect(s.hasCompactableContext == false)
+        #expect(SlashCommandRegistry.commands(agentService: s).isEmpty)
+
+        s.handleStatus(UIStatusParams(sessionId: "S", turnId: "T1", status: .done))
+
+        #expect(s.hasCompactableContext == true)
+        #expect(SlashCommandRegistry.commands(agentService: s).map(\.name) == ["compact"])
+    }
+
+    @Test("compact done prunes folded turns so command hides again")
+    func compactDonePrunesFoldedTurns() {
+        let s = makeService()
+        s._testTurnStarted(id: "T1", prompt: "hello")
+        s.handleStatus(UIStatusParams(sessionId: "S", turnId: "T1", status: .done))
+        #expect(s.hasCompactableContext == true)
+
+        s.handleCompact(UICompactParams(sessionId: "S", turnId: "", phase: .started))
+        #expect(s.hasCompactableContext == false)
+        s.handleCompact(UICompactParams(
+            sessionId: "S",
+            turnId: "",
+            phase: .done,
+            compactedTurnCount: 1
+        ))
+
+        #expect(s.turns.isEmpty)
+        #expect(s.currentTurn == nil)
+        #expect(s.hasCompactableContext == false)
+        #expect(SlashCommandRegistry.commands(agentService: s).isEmpty)
+    }
+
     @Test("ui.status maps to AgentStatus and updates the matching turn")
     func statusMapping() async throws {
         let s = makeService()

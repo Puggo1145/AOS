@@ -14,6 +14,10 @@ extension NotchViewModel {
         }
         registerTraySource { [weak self] in
             guard let self else { return [] }
+            return self.compactLifecycleItems()
+        }
+        registerTraySource { [weak self] in
+            guard let self else { return [] }
             return self.todoProgressItems()
         }
     }
@@ -56,10 +60,45 @@ extension NotchViewModel {
         return out
     }
 
+    /// Context compact lifecycle row. Running compaction is live state and
+    /// cannot be dismissed; the completed notification is dismissable and is
+    /// also cleared from the mirror when the next user turn starts.
+    func compactLifecycleItems() -> [TrayItem] {
+        if let running = agentService.compactEvents.last(where: { $0.status == .running }) {
+            return [TrayItem(
+                id: BuiltinTrayItemID.compactPrefix + running.id,
+                icon: "arrow.triangle.2.circlepath",
+                tint: .white.opacity(0.85),
+                message: "Compacting context",
+                trailing: nil,
+                dismissable: false,
+                onTap: nil,
+                shimmer: true
+            )]
+        }
+
+        guard let done = agentService.compactEvents.last(where: { $0.status == .done }) else {
+            return []
+        }
+        return [TrayItem(
+            id: BuiltinTrayItemID.compactPrefix + done.id,
+            icon: "checkmark.circle.fill",
+            tint: .green.opacity(0.9),
+            message: "Context compacted",
+            trailing: nil,
+            dismissable: true,
+            onTap: nil
+        )]
+    }
+
     /// Slash-command palette rows. Built directly because `trayItems`
     /// short-circuits to these while the palette is active.
     func commandPaletteItems() -> [TrayItem] {
-        let matches = commandPalette.matches.prefix(5)
+        let currentCommands = SlashCommandRegistry.commands(agentService: agentService)
+        let currentCommandIds = Set(currentCommands.map(\.id))
+        let matches = commandPalette.matches
+            .filter { currentCommandIds.contains($0.id) }
+            .prefix(5)
         if matches.isEmpty {
             return [TrayItem(
                 id: BuiltinTrayItemID.commandPrefix + "_empty",

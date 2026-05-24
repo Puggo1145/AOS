@@ -68,14 +68,14 @@ interface ProviderCall {
   toolsArg: unknown;
 }
 
-let scriptedRounds: ((model: Model<Api>) => AssistantMessageEventStream)[] = [];
+let scriptedRounds: ((model: Model<Api>, signal?: AbortSignal) => AssistantMessageEventStream)[] = [];
 let providerCalls: ProviderCall[] = [];
 
 beforeEach(() => {
   registerApiProvider({
     api: "openai-responses",
     sourceId: FAKE_SOURCE_ID,
-    stream: (model, ctx) => {
+    stream: (model, ctx, options) => {
       providerCalls.push({
         systemPrompt: ctx.systemPrompt ?? "",
         messages: JSON.parse(JSON.stringify(ctx.messages)),
@@ -83,7 +83,7 @@ beforeEach(() => {
       });
       const next = scriptedRounds.shift();
       if (!next) throw new Error("test ran out of scripted rounds");
-      return next(model);
+      return next(model, options?.signal);
     },
   });
   setModelResolver(() => makeFakeModel());
@@ -501,6 +501,84 @@ test("agent.compact: rejects when a turn is in flight on the session", async () 
   expect(providerCalls).toHaveLength(1);
   // No ui.compact emitted — the handler bails before lifecycle frames.
   expect(captured.notifications.filter((n) => n.method === "ui.compact")).toEqual([]);
+});
+
+test("agent.compact: rejects a second compact while manual compact is running", async () => {
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const { manager, sessionId } = makeSessionWithHistory(2);
+  registerAgentHandlers(dispatcher, { manager });
+
+  scriptedRounds.push(() => new AssistantMessageEventStream());
+
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "agent.compact",
+    params: { sessionId },
+  });
+  await flush(40);
+
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "agent.compact",
+    params: { sessionId },
+  });
+  await flush(40);
+
+  expect(providerCalls).toHaveLength(1);
+  expect(captured.notifications.filter((n) => n.method === "ui.compact").map((n) => n.params.phase)).toEqual([
+    "started",
+  ]);
+  const second = captured.responses.find((r) => r.id === 2);
+  expect(second?.error?.message).toContain("already compacting");
+});
+
+test("agent.cancel interrupts a running manual compact", async () => {
+  const { dispatcher, captured, pushInbound } = makeCapturingDispatcher();
+  const { manager, session } = makeSessionWithHistory(2);
+  const sessionId = session.id;
+  registerAgentHandlers(dispatcher, { manager });
+
+  let abortFired = false;
+  scriptedRounds.push((model, signal) => {
+    const s = new AssistantMessageEventStream();
+    signal?.addEventListener(
+      "abort",
+      () => {
+        abortFired = true;
+        s.push({ type: "error", reason: "error", error: fakeAssistant(model, "compact cancelled") });
+        s.end();
+      },
+      { once: true },
+    );
+    return s;
+  });
+
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "agent.compact",
+    params: { sessionId },
+  });
+  await flush(40);
+
+  pushInbound({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "agent.cancel",
+    params: { sessionId, turnId: "" },
+  });
+  await flush(120);
+
+  expect(abortFired).toBe(true);
+  expect(session.isCompacting).toBe(false);
+  expect(captured.responses.find((r) => r.id === 2)?.result).toEqual({ cancelled: true });
+  expect(captured.responses.find((r) => r.id === 1)?.result).toEqual({ ok: false });
+  expect(captured.notifications.filter((n) => n.method === "ui.compact").map((n) => n.params.phase)).toEqual([
+    "started",
+    "failed",
+  ]);
 });
 
 test("agent.submit during manual compact waits until compact finishes before starting the turn", async () => {

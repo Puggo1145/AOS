@@ -25,6 +25,7 @@ import SwiftUI
 
 struct SystemTrayView: View {
     let viewModel: NotchViewModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var items: [TrayItem] { viewModel.trayItems }
     private var hasMultiple: Bool { items.count > 1 }
@@ -197,10 +198,18 @@ struct SystemTrayView: View {
                 .notchFont(size: 12, weight: .semibold)
                 .foregroundStyle(item.tint)
                 .frame(width: 14, alignment: .center)
-            Text(item.message)
-                .notchFont(size: 11, weight: .medium)
-                .foregroundStyle(messageColor)
-                .lineLimit(1)
+            if item.shimmer {
+                TrayShimmerText(
+                    text: item.message,
+                    baseColor: messageColor,
+                    reduceMotion: reduceMotion
+                )
+            } else {
+                Text(item.message)
+                    .notchFont(size: 11, weight: .medium)
+                    .foregroundStyle(messageColor)
+                    .lineLimit(1)
+            }
             Spacer(minLength: 6)
             if let trailing = item.trailing {
                 trailingLabel(trailing)
@@ -253,5 +262,56 @@ private struct TrayHeightKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = max(value, nextValue())
+    }
+}
+
+private struct TrayShimmerText: View {
+    let text: String
+    let baseColor: Color
+    let reduceMotion: Bool
+
+    var body: some View {
+        if reduceMotion {
+            Text(text)
+                .notchFont(size: 11, weight: .medium)
+                .foregroundStyle(.white.opacity(0.9))
+                .lineLimit(1)
+        } else {
+            ZStack(alignment: .leading) {
+                Text(text)
+                    .notchFont(size: 11, weight: .medium)
+                    .foregroundStyle(baseColor)
+                    .lineLimit(1)
+
+                Text(text)
+                    .notchFont(size: 11, weight: .medium)
+                    .foregroundStyle(.white.opacity(0.98))
+                    .lineLimit(1)
+                    .accessibilityHidden(true)
+                    .mask(
+                        GeometryReader { geo in
+                            TimelineView(.animation) { ctx in
+                                let period = 1.45
+                                let phase = ctx.date.timeIntervalSinceReferenceDate
+                                    .truncatingRemainder(dividingBy: period) / period
+                                let width = max(geo.size.width, 1)
+                                let bandWidth = max(48, width * 0.42)
+                                let travel = width + bandWidth
+                                LinearGradient(
+                                    colors: [
+                                        .white.opacity(0),
+                                        .white,
+                                        .white.opacity(0),
+                                    ],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                                .frame(width: bandWidth, height: geo.size.height)
+                                .offset(x: -bandWidth + travel * phase)
+                            }
+                        }
+                    )
+            }
+        }
     }
 }

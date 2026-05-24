@@ -44,7 +44,10 @@ public enum SlashCommandRegistry {
     /// or restarting the sidecar gives every closure a fresh handle on
     /// next composer render.
     public static func commands(agentService: AgentService) -> [SlashCommand] {
-        [
+        guard agentService.hasCompactableContext else {
+            return []
+        }
+        return [
             SlashCommand(
                 id: "compact",
                 name: "compact",

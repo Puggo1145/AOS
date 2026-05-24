@@ -47,6 +47,9 @@ public struct TrayItem: Identifiable {
     /// so the keyboard cursor is visually unambiguous; ordinary tray
     /// notices never set this.
     public let highlighted: Bool
+    /// Purely visual live-state treatment. The row stays semantically the
+    /// same, but `SystemTrayView` paints the message with a moving shimmer.
+    public let shimmer: Bool
 
     public init(
         id: String,
@@ -56,7 +59,8 @@ public struct TrayItem: Identifiable {
         trailing: TrayItemTrailing? = nil,
         dismissable: Bool = true,
         onTap: (@MainActor () -> Void)? = nil,
-        highlighted: Bool = false
+        highlighted: Bool = false,
+        shimmer: Bool = false
     ) {
         self.id = id
         self.icon = icon
@@ -66,6 +70,7 @@ public struct TrayItem: Identifiable {
         self.dismissable = dismissable
         self.onTap = onTap
         self.highlighted = highlighted
+        self.shimmer = shimmer
     }
 }
 
@@ -107,6 +112,10 @@ public enum BuiltinTrayItemID {
     public static let missingProvider = "system.missingProvider"
     public static let configCorruption = "system.configCorruption"
     public static let todoProgress = "agent.todoProgress"
+    /// Context compact lifecycle rows. The suffix is the `CompactEvent.id`
+    /// so a dismissed "Context compacted" notification suppresses only that
+    /// completed pass; the next compact pass gets a fresh row id.
+    public static let compactPrefix = "agent.compact."
     /// Slash-command palette rows. The drawer hosts these directly while
     /// the user is in command mode; the suffix is the command's slug so
     /// each match has a stable diff key (e.g. `"command.compact"`).
