@@ -10,8 +10,12 @@
 // nudges the model toward `~/.notch-agent/workspace/` for scratch artifacts.
 
 import { promises as fs } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { dirname } from "node:path";
+import {
+  FILE_TOOL_PATH_PARAMETER_DESCRIPTION,
+  FILE_TOOL_PATH_POLICY_TEXT,
+  resolveFileToolPath,
+} from "./file-path-policy";
 import { ToolUserError, type ToolHandler, type ToolExecContext, type ToolExecResult } from "./types";
 
 interface WriteArgs {
@@ -31,14 +35,14 @@ export function createWriteTool(): ToolHandler<WriteArgs, WriteDetails> {
       name: "write",
       description:
         `Write \`content\` to \`path\` as UTF-8, creating parent directories as needed and ` +
-        `overwriting any existing file. Path is NOT sandboxed — pass an absolute path or one ` +
-        `starting with \`~\`. Use \`update\` instead when you need to change part of an existing file.`,
+        `overwriting any existing file. ${FILE_TOOL_PATH_POLICY_TEXT} Use \`update\` instead ` +
+        `when you need to change part of an existing file.`,
       parameters: {
         type: "object",
         properties: {
           path: {
             type: "string",
-            description: "Absolute path, or one starting with `~` for the user's home directory.",
+            description: FILE_TOOL_PATH_PARAMETER_DESCRIPTION,
           },
           content: {
             type: "string",
@@ -53,7 +57,7 @@ export function createWriteTool(): ToolHandler<WriteArgs, WriteDetails> {
 }
 
 async function runWrite(args: WriteArgs, ctx: ToolExecContext): Promise<ToolExecResult<WriteDetails>> {
-  const resolved = resolveUserPath(args.path);
+  const resolved = resolveFileToolPath(args.path);
 
   // `created` is observable at the wire level: the model often wants to know
   // whether it just clobbered something or made a fresh file. Only ENOENT
@@ -88,11 +92,4 @@ async function runWrite(args: WriteArgs, ctx: ToolExecContext): Promise<ToolExec
     details: { resolvedPath: resolved, bytesWritten, created },
     isError: false,
   };
-}
-
-function resolveUserPath(path: string): string {
-  if (path.startsWith("~/") || path === "~") {
-    return resolve(homedir(), path.slice(path === "~" ? 1 : 2));
-  }
-  return resolve(path);
 }

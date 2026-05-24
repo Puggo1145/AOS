@@ -10,9 +10,8 @@
 
 import { promises as fs } from "node:fs";
 import { createReadStream } from "node:fs";
-import { homedir } from "node:os";
-import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
+import { FILE_TOOL_PATH_PARAMETER_DESCRIPTION, resolveFileToolPath } from "./file-path-policy";
 import { ToolUserError, type ToolHandler, type ToolExecContext, type ToolExecResult } from "./types";
 
 const DEFAULT_LINE_COUNT = 500;
@@ -46,7 +45,7 @@ export function createReadTool(): ToolHandler<ReadArgs, ReadDetails> {
         properties: {
           path: {
             type: "string",
-            description: "Absolute path, or one starting with `~` for the user's home directory.",
+            description: FILE_TOOL_PATH_PARAMETER_DESCRIPTION,
           },
           start: {
             type: "number",
@@ -65,7 +64,7 @@ export function createReadTool(): ToolHandler<ReadArgs, ReadDetails> {
 }
 
 async function runRead(args: ReadArgs, ctx: ToolExecContext): Promise<ToolExecResult<ReadDetails>> {
-  const resolved = resolveUserPath(args.path);
+  const resolved = resolveFileToolPath(args.path);
   const start = normalizeLineNumber(args.start ?? 1, "start");
   const end = args.end === undefined
     ? start + DEFAULT_LINE_COUNT - 1
@@ -145,14 +144,4 @@ function normalizeLineNumber(value: number, name: string): number {
 
 function formatNumberedLine(lineNumber: number, line: string): string {
   return `${lineNumber} | ${line}`;
-}
-
-/// Expand a leading `~` to the current user's home and resolve to an
-/// absolute path. We accept relative paths too — they resolve against the
-/// sidecar's cwd, matching the bash tool's "no pinned cwd" stance.
-function resolveUserPath(path: string): string {
-  if (path.startsWith("~/") || path === "~") {
-    return resolve(homedir(), path.slice(path === "~" ? 1 : 2));
-  }
-  return resolve(path);
 }

@@ -41,6 +41,15 @@ interface is stable, while its internal Modules own catalog definitions, Shell
 RPC adapter calls, event validation, result rendering, and screenshot
 coordinate state.
 
+### File Tool Path Policy
+
+The Sidecar-owned path semantics Module for file tools such as `read`, `write`,
+and `update`. It centralizes how model-supplied paths become absolute filesystem
+paths: absolute paths are normalized, relative paths resolve against the
+Sidecar cwd, and bare `~` or `~/...` resolve to the user's home directory.
+File tools are not sandboxed; the system prompt nudges scratch work toward the
+Notch Agent workspace.
+
 ### RPC Method Catalog
 
 The Sidecar-local Method Semantics catalog: one entry per RPC method covering

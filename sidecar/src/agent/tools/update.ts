@@ -12,8 +12,11 @@
 // to keep in sync between read and update.
 
 import { promises as fs } from "node:fs";
-import { homedir } from "node:os";
-import { resolve } from "node:path";
+import {
+  FILE_TOOL_PATH_PARAMETER_DESCRIPTION,
+  FILE_TOOL_PATH_POLICY_TEXT,
+  resolveFileToolPath,
+} from "./file-path-policy";
 import { ToolUserError, type ToolHandler, type ToolExecContext, type ToolExecResult } from "./types";
 
 interface UpdateArgs {
@@ -35,14 +38,14 @@ export function createUpdateTool(): ToolHandler<UpdateArgs, UpdateDetails> {
       description:
         `Replace \`old_text\` with \`new_text\` in the file at \`path\`. \`old_text\` must ` +
         `match exactly once (whitespace and indentation included); zero or multiple matches are ` +
-        `errors. Make \`old_text\` long enough to uniquely identify the edit site. Path is NOT ` +
-        `sandboxed — pass an absolute path or one starting with \`~\`.`,
+        `errors. Make \`old_text\` long enough to uniquely identify the edit site. ` +
+        FILE_TOOL_PATH_POLICY_TEXT,
       parameters: {
         type: "object",
         properties: {
           path: {
             type: "string",
-            description: "Absolute path, or one starting with `~` for the user's home directory.",
+            description: FILE_TOOL_PATH_PARAMETER_DESCRIPTION,
           },
           old_text: {
             type: "string",
@@ -68,7 +71,7 @@ async function runUpdate(args: UpdateArgs, ctx: ToolExecContext): Promise<ToolEx
     throw new ToolUserError(`update: \`old_text\` must be non-empty.`);
   }
 
-  const resolved = resolveUserPath(args.path);
+  const resolved = resolveFileToolPath(args.path);
 
   let original: string;
   try {
@@ -130,11 +133,4 @@ function countOccurrences(haystack: string, needle: string): number {
     from = i + needle.length;
   }
   return count;
-}
-
-function resolveUserPath(path: string): string {
-  if (path.startsWith("~/") || path === "~") {
-    return resolve(homedir(), path.slice(path === "~" ? 1 : 2));
-  }
-  return resolve(path);
 }

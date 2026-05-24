@@ -1,9 +1,9 @@
 // Read / write / update tools — round-trip and error-path coverage.
 
 import { test, expect } from "bun:test";
-import { mkdtempSync, existsSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join, relative } from "node:path";
 import { createReadTool } from "../src/agent/tools/read";
 import { createWriteTool } from "../src/agent/tools/write";
 import { createUpdateTool } from "../src/agent/tools/update";
@@ -26,6 +26,17 @@ function tempDir(): string {
 
 function textOf(result: { content: { type: string; text?: string }[] }): string {
   return (result.content[0] as { text: string }).text;
+}
+
+async function withHomeTemp<T>(run: (fixture: { root: string; tildePath: (path: string) => string }) => Promise<T>): Promise<T> {
+  const name = `.notch-agent-file-tools-${Math.random().toString(36).slice(2)}`;
+  const root = join(homedir(), name);
+  const tildePath = (path: string) => `~/${name}/${path}`;
+  try {
+    return await run({ root, tildePath });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 // --- read ---
@@ -139,6 +150,33 @@ test("read expands a leading ~ to the user's home directory", async () => {
   ).rejects.toThrow(new RegExp(home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
 
+test("read resolves relative paths through the shared file path policy", async () => {
+  const dir = tempDir();
+  const absolutePath = join(dir, "relative-read.txt");
+  const relativePath = relative(process.cwd(), absolutePath);
+  await Bun.write(absolutePath, "from relative path");
+
+  const r = await createReadTool().execute({ path: relativePath }, ctx());
+
+  expect(r.isError).toBe(false);
+  expect(textOf(r)).toBe("1 | from relative path");
+  expect(r.details?.resolvedPath).toBe(absolutePath);
+});
+
+test("read expands home paths through the shared file path policy", async () => {
+  await withHomeTemp(async ({ root, tildePath }) => {
+    const path = join(root, "notes", "home-read.txt");
+    mkdirSync(join(root, "notes"), { recursive: true });
+    await Bun.write(path, "from home path");
+
+    const r = await createReadTool().execute({ path: tildePath("notes/home-read.txt") }, ctx());
+
+    expect(r.isError).toBe(false);
+    expect(textOf(r)).toBe("1 | from home path");
+    expect(r.details?.resolvedPath).toBe(path);
+  });
+});
+
 // --- write ---
 
 test("write creates a new file and reports `Created`", async () => {
@@ -172,6 +210,30 @@ test("write refuses to run when already aborted and does not create the file", a
     createWriteTool().execute({ path, content: "hi" }, ctx(ac.signal)),
   ).rejects.toBeInstanceOf(ToolUserError);
   expect(existsSync(path)).toBe(false);
+});
+
+test("write resolves relative paths through the shared file path policy", async () => {
+  const dir = tempDir();
+  const absolutePath = join(dir, "relative", "write.txt");
+  const relativePath = relative(process.cwd(), absolutePath);
+
+  const r = await createWriteTool().execute({ path: relativePath, content: "relative write" }, ctx());
+
+  expect(r.isError).toBe(false);
+  expect(readFileSync(absolutePath, "utf-8")).toBe("relative write");
+  expect(r.details?.resolvedPath).toBe(absolutePath);
+});
+
+test("write expands home paths through the shared file path policy", async () => {
+  await withHomeTemp(async ({ root, tildePath }) => {
+    const path = join(root, "notes", "home-write.txt");
+
+    const r = await createWriteTool().execute({ path: tildePath("notes/home-write.txt"), content: "home write" }, ctx());
+
+    expect(r.isError).toBe(false);
+    expect(readFileSync(path, "utf-8")).toBe("home write");
+    expect(r.details?.resolvedPath).toBe(path);
+  });
 });
 
 // --- update ---
@@ -223,4 +285,37 @@ test("update on a missing file throws and does not create it", async () => {
     createUpdateTool().execute({ path, old_text: "a", new_text: "b" }, ctx()),
   ).rejects.toBeInstanceOf(ToolUserError);
   expect(existsSync(path)).toBe(false);
+});
+
+test("update resolves relative paths through the shared file path policy", async () => {
+  const dir = tempDir();
+  const absolutePath = join(dir, "relative-update.txt");
+  const relativePath = relative(process.cwd(), absolutePath);
+  await Bun.write(absolutePath, "alpha beta");
+
+  const r = await createUpdateTool().execute(
+    { path: relativePath, old_text: "beta", new_text: "BETA" },
+    ctx(),
+  );
+
+  expect(r.isError).toBe(false);
+  expect(readFileSync(absolutePath, "utf-8")).toBe("alpha BETA");
+  expect(r.details?.resolvedPath).toBe(absolutePath);
+});
+
+test("update expands home paths through the shared file path policy", async () => {
+  await withHomeTemp(async ({ root, tildePath }) => {
+    const path = join(root, "notes", "home-update.txt");
+    mkdirSync(join(root, "notes"), { recursive: true });
+    await Bun.write(path, "alpha beta");
+
+    const r = await createUpdateTool().execute(
+      { path: tildePath("notes/home-update.txt"), old_text: "beta", new_text: "BETA" },
+      ctx(),
+    );
+
+    expect(r.isError).toBe(false);
+    expect(readFileSync(path, "utf-8")).toBe("alpha BETA");
+    expect(r.details?.resolvedPath).toBe(path);
+  });
 });
