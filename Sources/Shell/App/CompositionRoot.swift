@@ -316,7 +316,9 @@ public final class CompositionRoot {
         alert.informativeText = message
         alert.addButton(withTitle: "Quit Notch Agent")
         alert.addButton(withTitle: "Keep Open")
-        let response = alert.runModal()
+        let response = notchWindowController?.withSystemModalPresentation {
+            alert.runModal()
+        } ?? alert.runModal()
         if response == .alertFirstButtonReturn {
             NSApp.terminate(nil)
         }

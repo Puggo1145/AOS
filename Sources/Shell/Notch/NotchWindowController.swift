@@ -27,6 +27,10 @@ public final class NotchWindowController {
     private var hostingView: NSHostingView<NotchView>?
     private var viewModel: NotchViewModel?
     private var cancellables: Set<AnyCancellable> = []
+    private static var modalSuppression = ModalOverlaySuppressionState()
+    private static weak var modalWindow: NotchWindow?
+    private static weak var modalWindowController: NotchWindowController?
+    private static var modalNotificationCancellables: Set<AnyCancellable> = []
 
     public init(
         senseStore: SenseStore,
@@ -79,8 +83,12 @@ public final class NotchWindowController {
         win.orderFrontRegardless()
         self.window = win
         self.hostingView = hosting
+        Self.modalWindow = win
+        Self.modalWindowController = self
 
         bindClickThrough(window: win, viewModel: viewModel)
+        Self.installSystemModalSuppressionObservers()
+        Self.applyActiveSystemModalSuppression(window: win, state: Self.modalSuppression)
     }
 
     /// Subscribe to global mouse-location + status-change streams and flip
@@ -94,6 +102,7 @@ public final class NotchWindowController {
             .receive(on: DispatchQueue.main)
             .sink { [weak window, weak viewModel] location in
                 guard let window, let viewModel else { return }
+                guard !Self.modalSuppression.isActive else { return }
                 Self.applyClickThrough(window: window, viewModel: viewModel, mouse: location)
             }
             .store(in: &cancellables)
@@ -103,6 +112,7 @@ public final class NotchWindowController {
             .receive(on: DispatchQueue.main)
             .sink { [weak window, weak viewModel] _ in
                 guard let window, let viewModel else { return }
+                guard !Self.modalSuppression.isActive else { return }
                 Self.applyClickThrough(
                     window: window,
                     viewModel: viewModel,
@@ -119,6 +129,7 @@ public final class NotchWindowController {
             .receive(on: DispatchQueue.main)
             .sink { [weak window, weak viewModel] _ in
                 guard let window, let viewModel else { return }
+                guard !Self.modalSuppression.isActive else { return }
                 Self.applyClickThrough(
                     window: window,
                     viewModel: viewModel,
@@ -126,6 +137,65 @@ public final class NotchWindowController {
                 )
             }
             .store(in: &cancellables)
+    }
+
+    /// Hide the notch overlay while AppKit is running an app-modal dialog.
+    /// Modal alerts are ordinary app windows; the notch panel sits above the
+    /// status bar and can otherwise cover the alert's top region while the
+    /// main UI is blocked by the modal loop. Sheet notifications cover the
+    /// async AppKit sheet path; synchronous `runModal()` callers must bracket
+    /// their call with `beginSystemModalPresentation()` / `endSystemModalPresentation()`.
+    private static func installSystemModalSuppressionObservers() {
+        guard modalNotificationCancellables.isEmpty else { return }
+
+        NotificationCenter.default
+            .publisher(for: NSWindow.willBeginSheetNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { _ in
+                Self.beginSystemModalPresentationForCurrentWindow()
+            }
+            .store(in: &modalNotificationCancellables)
+
+        NotificationCenter.default
+            .publisher(for: NSWindow.didEndSheetNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { _ in
+                Self.endSystemModalPresentationForCurrentWindow()
+            }
+            .store(in: &modalNotificationCancellables)
+    }
+
+    public func beginSystemModalPresentation() {
+        Self.beginSystemModalPresentationForCurrentWindow()
+    }
+
+    public func endSystemModalPresentation() {
+        Self.endSystemModalPresentationForCurrentWindow()
+    }
+
+    public func withSystemModalPresentation<T>(_ body: () throws -> T) rethrows -> T {
+        beginSystemModalPresentation()
+        defer { endSystemModalPresentation() }
+        return try body()
+    }
+
+    @discardableResult
+    private static func beginSystemModalPresentationForCurrentWindow() -> Bool {
+        beginSystemModalSuppression(window: modalWindow, state: &modalSuppression)
+        return true
+    }
+
+    @discardableResult
+    private static func endSystemModalPresentationForCurrentWindow() -> Bool {
+        let shouldRestore = endSystemModalSuppression(window: modalWindow, state: &modalSuppression)
+        guard shouldRestore,
+              let controller = modalWindowController,
+              let window = controller.window,
+              let viewModel = controller.viewModel else {
+            return shouldRestore
+        }
+        applyClickThrough(window: window, viewModel: viewModel, mouse: NSEvent.mouseLocation)
+        return shouldRestore
     }
 
     private static func applyClickThrough(
@@ -162,6 +232,59 @@ public final class NotchWindowController {
         !mouseActiveRect.contains(mouse)
     }
 
+    struct ModalOverlaySuppressionState: Equatable {
+        var depth: Int = 0
+        var wasVisibleBeforeFirstModal: Bool = false
+
+        var isActive: Bool { depth > 0 }
+    }
+
+    static func beginSystemModalSuppression(
+        window: NotchWindow?,
+        state: inout ModalOverlaySuppressionState
+    ) {
+        precondition(state.depth >= 0, "Modal suppression depth cannot be negative")
+        if state.depth == 0 {
+            state.wasVisibleBeforeFirstModal = window?.isVisible ?? false
+            if let window {
+                suppressWindowForSystemModal(window)
+            }
+        }
+        state.depth += 1
+    }
+
+    @discardableResult
+    static func endSystemModalSuppression(
+        window: NotchWindow?,
+        state: inout ModalOverlaySuppressionState
+    ) -> Bool {
+        precondition(state.depth > 0, "Cannot end modal suppression that has not begun")
+        state.depth -= 1
+        guard state.depth == 0 else { return false }
+
+        let shouldRestore = state.wasVisibleBeforeFirstModal
+        state.wasVisibleBeforeFirstModal = false
+        if shouldRestore, let window {
+            window.orderFrontRegardless()
+        }
+        return shouldRestore
+    }
+
+    static func applyActiveSystemModalSuppression(
+        window: NotchWindow,
+        state: ModalOverlaySuppressionState
+    ) {
+        guard state.isActive else { return }
+        suppressWindowForSystemModal(window)
+    }
+
+    private static func suppressWindowForSystemModal(_ window: NotchWindow) {
+        window.ignoresMouseEvents = true
+        if window.isVisible {
+            window.orderOut(nil)
+        }
+    }
+
     /// Tear down per notch-dev-guide §3.4: cancel subscriptions, drop view
     /// hierarchy, close + nil out the window. Called by CompositionRoot when
     /// the screen configuration changes (so we can rebuild on the new
@@ -171,6 +294,12 @@ public final class NotchWindowController {
         cancellables.removeAll()
         viewModel?.destroy()
         viewModel = nil
+        if Self.modalWindow === window {
+            Self.modalWindow = nil
+        }
+        if Self.modalWindowController === self {
+            Self.modalWindowController = nil
+        }
         window?.close()
         window?.contentView = nil
         window = nil
