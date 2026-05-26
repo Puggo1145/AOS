@@ -4,7 +4,6 @@ playground/
 Notch Agent.app/
 node_modules/
 bun.lockb
-bun.lock
 *.xcodeproj
 .DS_Store
 .dist/

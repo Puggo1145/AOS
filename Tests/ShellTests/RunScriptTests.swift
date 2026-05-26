@@ -49,6 +49,21 @@ struct RunScriptTests {
         #expect(script.contains(#"grep -Fq -- "$CODESIGN_IDENTITY""#))
     }
 
+    @Test("sidecar frozen install uses a committable bun lockfile")
+    func sidecarFrozenInstallUsesCommittableBunLockfile() throws {
+        let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let script = try String(contentsOf: root.appendingPathComponent("Scripts/build-app.sh"), encoding: .utf8)
+        let gitignore = try String(contentsOf: root.appendingPathComponent(".gitignore"), encoding: .utf8)
+        let ignoredNames = Set(gitignore
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("#") })
+
+        #expect(script.contains(#"cp sidecar/bun.lock "$APP_BUNDLE/Contents/Resources/sidecar/bun.lock""#))
+        #expect(script.contains(#""$HOST_BUN" install --frozen-lockfile --production"#))
+        #expect(!ignoredNames.contains("bun.lock"))
+    }
+
     @Test("build-dmg.sh creates a Finder drag install window")
     func buildDmgCreatesFinderInstallWindow() throws {
         let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)

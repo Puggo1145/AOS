@@ -13,28 +13,17 @@ struct PermissionApprovalSection: View {
     let onHeightChange: (CGFloat) -> Void
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            PermissionApprovalCard(
-                request: request,
-                allow: allow,
-                deny: deny,
-                fillsAvailableHeight: true
-            )
-
-            PermissionApprovalCard(
-                request: request,
-                allow: allow,
-                deny: deny
-            )
-            .hidden()
-            .accessibilityHidden(true)
-            .allowsHitTesting(false)
-            .background(
-                GeometryReader { geo in
-                    Color.clear.preference(key: PermissionApprovalHeightKey.self, value: geo.size.height)
-                }
-            )
-        }
+        PermissionApprovalCard(
+            request: request,
+            allow: allow,
+            deny: deny
+        )
+        .fixedSize(horizontal: false, vertical: true)
+        .background(
+            GeometryReader { geo in
+                Color.clear.preference(key: PermissionApprovalHeightKey.self, value: geo.size.height)
+            }
+        )
         .onPreferenceChange(PermissionApprovalHeightKey.self, perform: onHeightChange)
     }
 }

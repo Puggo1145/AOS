@@ -86,10 +86,6 @@ private struct BottomSectionPager: View {
         displayedRequest == nil ? composerHeight : max(composerHeight, approvalHeight)
     }
 
-    private var measuredPageHeight: CGFloat? {
-        pageHeight > 0 ? pageHeight : nil
-    }
-
     var body: some View {
         ZStack(alignment: .topLeading) {
             composerPage
@@ -97,7 +93,7 @@ private struct BottomSectionPager: View {
             approvalPage
                 .offset(x: showingApproval ? 0 : pageWidth)
         }
-        .frame(width: pageWidth, height: measuredPageHeight, alignment: .topLeading)
+        .frame(width: pageWidth, alignment: .topLeading)
         .clipped()
         .onChange(of: pageHeight) { _, h in
             viewModel.composerContentHeight = h
@@ -122,7 +118,7 @@ private struct BottomSectionPager: View {
                 viewModel.composerContentHeight = pageHeight
             }
         )
-        .frame(width: pageWidth, height: measuredPageHeight, alignment: .top)
+        .frame(width: pageWidth, alignment: .top)
         .accessibilityHidden(showingApproval)
         .allowsHitTesting(!showingApproval)
     }
@@ -139,12 +135,9 @@ private struct BottomSectionPager: View {
                     viewModel.composerContentHeight = pageHeight
                 }
             )
-            .frame(width: pageWidth, height: measuredPageHeight, alignment: .top)
+            .frame(width: pageWidth, alignment: .top)
             .accessibilityHidden(!showingApproval)
             .allowsHitTesting(showingApproval)
-        } else {
-            Color.clear
-                .frame(width: pageWidth, height: measuredPageHeight)
         }
     }
 

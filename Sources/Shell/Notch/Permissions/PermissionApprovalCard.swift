@@ -9,26 +9,14 @@ struct PermissionApprovalCard: View {
     let request: PermissionRequestApprovalParams
     let allow: () -> Void
     let deny: () -> Void
-    var fillsAvailableHeight: Bool = false
 
     var body: some View {
-        if fillsAvailableHeight {
-            VStack(alignment: .leading, spacing: 8) {
-                requestSummary
-                Spacer(minLength: 8)
-                actionRow
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .accessibilityElement(children: .contain)
-        } else {
-            VStack(alignment: .leading, spacing: 8) {
-                requestSummary
-                actionRow
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .fixedSize(horizontal: false, vertical: true)
-            .accessibilityElement(children: .contain)
+        VStack(alignment: .leading, spacing: 8) {
+            requestSummary
+            actionRow
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
     }
 
     private var requestSummary: some View {
