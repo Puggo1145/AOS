@@ -63,7 +63,8 @@ struct NotchEdgeHighlightShape: Shape {
 //
 // Single Path-based silhouette covering the entire notch outline: two
 // inverse-curve shoulders at the top corners, vertical sides, and the
-// rounded bottom. The shape's local rect is the FULL bounding box —
+// rounded bottom, optionally morphing into a fully-rounded detached panel.
+// The shape's local rect is the FULL bounding box —
 // including the shoulders' outward extension — so the path's `minX/maxX`
 // are at the far edges of the shoulders and the "main rect" lives at
 // `[minX + shoulderRadius, maxX - shoulderRadius]`.
@@ -79,12 +80,60 @@ struct NotchEdgeHighlightShape: Shape {
 // no sub-layer divergence.
 
 struct NotchSilhouetteShape: Shape {
-    /// Bottom corner radius of the silhouette.
-    var cornerRadius: CGFloat
+    /// Per-corner radii of the silhouette. Edge-docked panels flatten only
+    /// the side touching the screen while the other corners stay rounded.
+    var topLeadingRadius: CGFloat
+    var topTrailingRadius: CGFloat
+    var bottomLeadingRadius: CGFloat
+    var bottomTrailingRadius: CGFloat
     /// Inverse-curve shoulder radius. The shape extends `shoulderRadius`
     /// past the main rect on each horizontal side; `path(in:)` interprets
     /// the input rect as already including this extension.
     var shoulderRadius: CGFloat
+
+    init(
+        topLeadingRadius: CGFloat,
+        topTrailingRadius: CGFloat,
+        bottomLeadingRadius: CGFloat,
+        bottomTrailingRadius: CGFloat,
+        shoulderRadius: CGFloat
+    ) {
+        self.topLeadingRadius = topLeadingRadius
+        self.topTrailingRadius = topTrailingRadius
+        self.bottomLeadingRadius = bottomLeadingRadius
+        self.bottomTrailingRadius = bottomTrailingRadius
+        self.shoulderRadius = shoulderRadius
+    }
+
+    init(
+        cornerRadius: CGFloat,
+        shoulderRadius: CGFloat,
+        topCornerRadius: CGFloat = 0
+    ) {
+        self.init(
+            topLeadingRadius: topCornerRadius,
+            topTrailingRadius: topCornerRadius,
+            bottomLeadingRadius: cornerRadius,
+            bottomTrailingRadius: cornerRadius,
+            shoulderRadius: shoulderRadius
+        )
+    }
+
+    var cornerRadius: CGFloat {
+        get { bottomLeadingRadius }
+        set {
+            bottomLeadingRadius = newValue
+            bottomTrailingRadius = newValue
+        }
+    }
+
+    var topCornerRadius: CGFloat {
+        get { topLeadingRadius }
+        set {
+            topLeadingRadius = newValue
+            topTrailingRadius = newValue
+        }
+    }
 
     /// Expose the radii to SwiftUI's animation system. Without this, the
     /// default `EmptyAnimatableData` makes corner/shoulder radii snap on
@@ -92,11 +141,25 @@ struct NotchSilhouetteShape: Shape {
     /// runs once with the new radii, producing the visible "size morphs
     /// smoothly while the corners jump to the destination value first"
     /// glitch on open / close.
-    var animatableData: AnimatablePair<CGFloat, CGFloat> {
-        get { AnimatablePair(cornerRadius, shoulderRadius) }
+    var animatableData: AnimatablePair<
+        AnimatablePair<CGFloat, CGFloat>,
+        AnimatablePair<AnimatablePair<CGFloat, CGFloat>, CGFloat>
+    > {
+        get {
+            AnimatablePair(
+                AnimatablePair(topLeadingRadius, topTrailingRadius),
+                AnimatablePair(
+                    AnimatablePair(bottomLeadingRadius, bottomTrailingRadius),
+                    shoulderRadius
+                )
+            )
+        }
         set {
-            cornerRadius = newValue.first
-            shoulderRadius = newValue.second
+            topLeadingRadius = newValue.first.first
+            topTrailingRadius = newValue.first.second
+            bottomLeadingRadius = newValue.second.first.first
+            bottomTrailingRadius = newValue.second.first.second
+            shoulderRadius = newValue.second.second
         }
     }
 
@@ -104,41 +167,45 @@ struct NotchSilhouetteShape: Shape {
         var p = Path()
         let halfHeight = max(rect.height / 2, 0)
         let halfMainWidth = max((rect.width - 2 * shoulderRadius) / 2, 0)
-        let r = max(min(cornerRadius, min(halfHeight, halfMainWidth)), 0)
+        let tl = max(min(topLeadingRadius, min(halfHeight, halfMainWidth)), 0)
+        let tr = max(min(topTrailingRadius, min(halfHeight, halfMainWidth)), 0)
+        let bl = max(min(bottomLeadingRadius, min(halfHeight, halfMainWidth)), 0)
+        let br = max(min(bottomTrailingRadius, min(halfHeight, halfMainWidth)), 0)
         let sh = max(min(shoulderRadius, halfHeight), 0)
+        let topLeadingDrop = max(sh, tl)
+        let topTrailingDrop = max(sh, tr)
         let mainMinX = rect.minX + sh
         let mainMaxX = rect.maxX - sh
         let topY = rect.minY
         let bottomY = rect.maxY
 
-        // Far top-left of the left shoulder (attaches to the menu bar).
-        p.move(to: CGPoint(x: rect.minX, y: topY))
-        // Top edge across the entire silhouette.
-        p.addLine(to: CGPoint(x: rect.maxX, y: topY))
-        // Right shoulder inverse curve into the main rect.
+        // Top edge. With top radii at zero this is the attached notch
+        // shoulder silhouette; as they grow and `sh` shrinks it becomes a
+        // rounded rectangle without swapping Shape types.
+        p.move(to: CGPoint(x: rect.minX + tl, y: topY))
+        p.addLine(to: CGPoint(x: rect.maxX - tr, y: topY))
         p.addQuadCurve(
-            to: CGPoint(x: mainMaxX, y: topY + sh),
+            to: CGPoint(x: mainMaxX, y: topY + topTrailingDrop),
             control: CGPoint(x: mainMaxX, y: topY)
         )
         // Down the main rect's right edge.
-        p.addLine(to: CGPoint(x: mainMaxX, y: bottomY - r))
+        p.addLine(to: CGPoint(x: mainMaxX, y: bottomY - br))
         // Bottom-right rounded corner.
         p.addQuadCurve(
-            to: CGPoint(x: mainMaxX - r, y: bottomY),
+            to: CGPoint(x: mainMaxX - br, y: bottomY),
             control: CGPoint(x: mainMaxX, y: bottomY)
         )
         // Across the bottom edge.
-        p.addLine(to: CGPoint(x: mainMinX + r, y: bottomY))
+        p.addLine(to: CGPoint(x: mainMinX + bl, y: bottomY))
         // Bottom-left rounded corner.
         p.addQuadCurve(
-            to: CGPoint(x: mainMinX, y: bottomY - r),
+            to: CGPoint(x: mainMinX, y: bottomY - bl),
             control: CGPoint(x: mainMinX, y: bottomY)
         )
         // Up the main rect's left edge.
-        p.addLine(to: CGPoint(x: mainMinX, y: topY + sh))
-        // Left shoulder inverse curve out to the far top-left.
+        p.addLine(to: CGPoint(x: mainMinX, y: topY + topLeadingDrop))
         p.addQuadCurve(
-            to: CGPoint(x: rect.minX, y: topY),
+            to: CGPoint(x: rect.minX + tl, y: topY),
             control: CGPoint(x: mainMinX, y: topY)
         )
         p.closeSubpath()
@@ -198,7 +265,8 @@ struct NotchShape: View {
     var body: some View {
         NotchSilhouetteShape(
             cornerRadius: notchCornerRadius,
-            shoulderRadius: shoulderRadius
+            shoulderRadius: shoulderRadius,
+            topCornerRadius: 0
         )
         .fill(Color.black)
         .frame(

@@ -20,6 +20,22 @@ import SwiftUI
 struct NotchView: View {
     let viewModel: NotchViewModel
 
+    private enum FloatingPanelCornerAnimationKey: Equatable {
+        case attached
+        case detached
+        case edgeDock(NotchEdge)
+    }
+
+    private struct OpenedPanelAnimationKey: Equatable {
+        let panelHeight: CGFloat
+        let showSettings: Bool
+        let showHistory: Bool
+        let hasCompletedOnboarding: Bool
+        let hasReadyProvider: Bool
+        let onboardingPermissionsComplete: Bool
+        let isAgentLoopActive: Bool
+    }
+
     /// Reduce Motion gates the silhouette's height/tray easing so users who
     /// opted out of decorative animation get instant resizes instead of a
     /// 0.32s smooth interpolation. ThinkingView and the other motion-aware
@@ -28,6 +44,14 @@ struct NotchView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        if viewModel.isAttachedTop {
+            attachedTopBody
+        } else {
+            floatingPanelBody
+        }
+    }
+
+    private var attachedTopBody: some View {
         ZStack(alignment: .top) {
             // Layer 0: drawer silhouette — a literal "drawer pulled out from
             // under the notch". Square top corners, rounded bottom matching
@@ -91,12 +115,7 @@ struct NotchView: View {
             // Layer 2.5: drawer rows. Sits on top of the drawer silhouette,
             // clipped to its rounded-bottom shape so row content can't bleed
             // past the curves at the bottom corners.
-            SystemTrayView(viewModel: viewModel)
-                .frame(
-                    width: shapeWidth,
-                    height: trayHeight,
-                    alignment: .top
-                )
+            openedTrayContent
                 .clipShape(
                     .rect(
                         bottomLeadingRadius: containerCornerRadius,
@@ -129,15 +148,11 @@ struct NotchView: View {
         .offset(x: notchHorizontalOffset)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(viewModel.animation, value: viewModel.status)
-        // Height changes as the agent loop activates / completes. Drive the
-        // silhouette + content frame interpolation off the size value so the
-        // bottom edge eases down (or back up) instead of snapping. Gated on
-        // Reduce Motion so users who opted out of decorative motion get an
-        // instant resize instead of a 0.32s ease — and the inner ThinkingView
-        // (which also honours the setting) stays in lockstep with the outer
-        // silhouette.
+        // Height and opened-overlay swaps are keyed by the same derived
+        // state for attached and detached. Detached is only a placement of
+        // the opened notch, not a second animation model.
         .animation(reduceMotion ? nil : .notchHeight,
-                   value: viewModel.notchOpenedSize.height)
+                   value: openedPanelAnimationKey)
         // Tray drawer slides in/out smoothly when notices appear / are
         // dismissed. Driving on `trayHeight` (a derived CGFloat) keeps the
         // background-silhouette growth and the content fade on the same
@@ -148,6 +163,57 @@ struct NotchView: View {
                    value: viewModel.effectiveTrayExpanded)
     }
 
+    private var floatingPanelBody: some View {
+        ZStack(alignment: .top) {
+            floatingPanelShape
+                .fill(Color.black)
+                .frame(
+                    width: detachMorphPresentation.silhouetteSize.width,
+                    height: detachMorphPresentation.silhouetteSize.height
+                )
+                .overlay(floatingPanelChromeOverlay)
+
+            VStack(spacing: 0) {
+                openedPanelContent
+                    .clipShape(
+                        .rect(
+                            topLeadingRadius: detachMorphPresentation.contentClipCornerRadii.topLeading,
+                            bottomLeadingRadius: trayHeight > 0 ? 0 : detachMorphPresentation.contentClipCornerRadii.bottomLeading,
+                            bottomTrailingRadius: trayHeight > 0 ? 0 : detachMorphPresentation.contentClipCornerRadii.bottomTrailing,
+                            topTrailingRadius: detachMorphPresentation.contentClipCornerRadii.topTrailing
+                        )
+                    )
+
+                if trayHeight > 0 {
+                    openedTrayContent
+                }
+            }
+            .padding(.top, detachMorphPresentation.contentTopPadding)
+            .clipShape(
+                .rect(
+                    topLeadingRadius: detachMorphPresentation.contentClipCornerRadii.topLeading,
+                    bottomLeadingRadius: detachMorphPresentation.contentClipCornerRadii.bottomLeading,
+                    bottomTrailingRadius: detachMorphPresentation.contentClipCornerRadii.bottomTrailing,
+                    topTrailingRadius: detachMorphPresentation.contentClipCornerRadii.topTrailing
+                )
+            )
+        }
+        .frame(
+            width: viewModel.detachedTotalSize.width,
+            height: viewModel.detachedTotalSize.height,
+            alignment: .top
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.32, extraBounce: 0),
+                   value: viewModel.detachMorphPhase)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.36, extraBounce: 0),
+                   value: floatingPanelCornerAnimationKey)
+        .animation(reduceMotion ? nil : .notchHeight,
+                   value: openedPanelAnimationKey)
+        .animation(reduceMotion ? nil : .notchChrome,
+                   value: trayHeight)
+    }
+
     /// Tray drawer height. Zero outside the opened state; otherwise
     /// `notchTraySize.height` already accounts for "no notices" (returns
     /// 0) and the collapsed/expanded toggle.
@@ -155,15 +221,78 @@ struct NotchView: View {
         viewModel.status == .opened ? viewModel.notchTraySize.height : 0
     }
 
+    private var floatingPanelShape: NotchSilhouetteShape {
+        NotchSilhouetteShape(
+            topLeadingRadius: detachMorphPresentation.shapeCornerRadii.topLeading,
+            topTrailingRadius: detachMorphPresentation.shapeCornerRadii.topTrailing,
+            bottomLeadingRadius: detachMorphPresentation.shapeCornerRadii.bottomLeading,
+            bottomTrailingRadius: detachMorphPresentation.shapeCornerRadii.bottomTrailing,
+            shoulderRadius: detachMorphPresentation.shoulderRadius
+        )
+    }
+
+    private var floatingPanelCornerAnimationKey: FloatingPanelCornerAnimationKey {
+        switch viewModel.placement {
+        case .attachedTop:
+            return .attached
+        case .detached:
+            guard case let .detached(frame) = viewModel.currentPlacement else {
+                preconditionFailure("Detached placement must derive a detached current placement")
+            }
+            if let edge = NotchPlacementGeometry.touchingDockEdge(
+                screenRect: viewModel.screenRect,
+                frame: frame
+            ) {
+                return .edgeDock(edge)
+            }
+            return .detached
+        case let .edgeDock(edge, _, _, _, _):
+            return .edgeDock(edge)
+        }
+    }
+
+    private var openedPanelAnimationKey: OpenedPanelAnimationKey {
+        OpenedPanelAnimationKey(
+            panelHeight: viewModel.notchOpenedSize.height,
+            showSettings: viewModel.showSettings,
+            showHistory: viewModel.showHistory,
+            hasCompletedOnboarding: viewModel.configService.hasCompletedOnboarding,
+            hasReadyProvider: viewModel.providerService.hasReadyProvider,
+            onboardingPermissionsComplete: viewModel.permissionsService.onboardingPermissionsComplete,
+            isAgentLoopActive: viewModel.isAgentLoopActive
+        )
+    }
+
+    @ViewBuilder
+    private var floatingPanelChromeOverlay: some View {
+        if detachMorphPresentation.chromeOverlayOpacity > 0 {
+            floatingPanelShape
+                .fill(Color.white.opacity(detachMorphPresentation.chromeOverlayOpacity))
+                .frame(
+                    width: detachMorphPresentation.silhouetteSize.width,
+                    height: detachMorphPresentation.silhouetteSize.height
+                )
+        }
+    }
+
+    private var detachMorphPresentation: NotchViewModel.DetachMorphPresentation {
+        NotchViewModel.makeDetachMorphPresentation(
+            phase: reduceMotion ? .idle : viewModel.detachMorphPhase,
+            placement: viewModel.currentPlacement,
+            screenRect: viewModel.screenRect,
+            finalSize: viewModel.detachedTotalSize,
+            sourceHeight: viewModel.notchOpenedTotalSize.height,
+            sourceBottomCornerRadius: containerCornerRadius,
+            targetCornerRadius: viewModel.detachedCornerRadius,
+            targetTopPadding: viewModel.detachedTopPadding
+        )
+    }
+
     @ViewBuilder
     private var content: some View {
         ZStack(alignment: .top) {
             if viewModel.status == .opened {
-                openedContent
-                    .animation(reduceMotion ? nil : .notchHeight, value: viewModel.showSettings)
-                    .animation(reduceMotion ? nil : .notchHeight, value: viewModel.showHistory)
-                    .animation(reduceMotion ? nil : .notchHeight, value: viewModel.providerService.hasReadyProvider)
-                    .animation(reduceMotion ? nil : .notchHeight, value: viewModel.permissionsService.onboardingPermissionsComplete)
+                openedPanelContent
             }
 
             if viewModel.status != .opened {
@@ -178,13 +307,39 @@ struct NotchView: View {
         )
     }
 
+    /// Shared opened-content animation surface. Attached-top and detached
+    /// panels use different outer containers, but overlay/page swaps must
+    /// be driven by the same state animation contract.
+    private var animatedOpenedContent: some View {
+        openedContent
+    }
+
+    private var openedPanelContent: some View {
+        animatedOpenedContent
+            .frame(
+                width: viewModel.notchOpenedSize.width,
+                height: viewModel.notchOpenedSize.height,
+                alignment: .top
+            )
+            .animation(reduceMotion ? nil : .notchHeight, value: openedPanelAnimationKey)
+    }
+
+    private var openedTrayContent: some View {
+        SystemTrayView(viewModel: viewModel)
+            .frame(
+                width: viewModel.notchOpenedSize.width,
+                height: trayHeight,
+                alignment: .top
+            )
+    }
+
     /// Opened-state inner content. Switching among Onboard / Opened /
     /// Settings uses `.blurReplace` so the *contents* dissolve through a
     /// Gaussian blur cross-fade while the silhouette itself stays rock
     /// steady (the silhouette has its own animation driven by `status`).
     @ViewBuilder
     private var openedContent: some View {
-        ZStack {
+        ZStack(alignment: .topLeading) {
             if viewModel.showHistory {
                 SessionHistoryPanelView(
                     sessionStore: viewModel.agentService.sessionStore,
@@ -322,15 +477,7 @@ private struct OnboardingMeasurement: ViewModifier {
         content
             .frame(width: viewModel.notchOpenedSize.width)
             .fixedSize(horizontal: false, vertical: true)
-            .background(
-                GeometryReader { geo in
-                    Color.clear.preference(
-                        key: OnboardingHeightKey.self,
-                        value: geo.size.height
-                    )
-                }
-            )
-            .onPreferenceChange(OnboardingHeightKey.self) { h in
+            .background(HeightReporter { h in
                 // Round to integer points so sub-pixel jitter from
                 // SwiftUI's per-frame re-layout during the tray's expand
                 // animation doesn't propagate into `onboardingContentHeight`.
@@ -343,14 +490,7 @@ private struct OnboardingMeasurement: ViewModifier {
                 if viewModel.onboardingContentHeight != rounded {
                     viewModel.onboardingContentHeight = rounded
                 }
-            }
-    }
-}
-
-private struct OnboardingHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
+            })
     }
 }
 
@@ -370,29 +510,14 @@ private struct SettingsMeasurement: ViewModifier {
         content
             .frame(width: viewModel.notchOpenedSize.width)
             .fixedSize(horizontal: false, vertical: true)
-            .background(
-                GeometryReader { geo in
-                    Color.clear.preference(
-                        key: SettingsHeightKey.self,
-                        value: geo.size.height
-                    )
-                }
-            )
-            .onPreferenceChange(SettingsHeightKey.self) { h in
+            .background(HeightReporter { h in
                 // Round to integer points to suppress sub-pixel jitter from
                 // SwiftUI's per-frame relayout while sub-page transitions
                 // animate. Real content changes (row added, picker page
                 // pushed) are always >> 1pt and still flow through.
                 let rounded = h.rounded()
                 viewModel.markSettingsMeasured(height: rounded)
-            }
-    }
-}
-
-private struct SettingsHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
+            })
     }
 }
 
@@ -409,24 +534,31 @@ private struct HistoryMeasurement: ViewModifier {
         content
             .frame(width: viewModel.notchOpenedSize.width)
             .fixedSize(horizontal: false, vertical: true)
-            .background(
-                GeometryReader { geo in
-                    Color.clear.preference(
-                        key: HistoryPanelHeightKey.self,
-                        value: geo.size.height
-                    )
-                }
-            )
-            .onPreferenceChange(HistoryPanelHeightKey.self) { h in
+            .background(HeightReporter { h in
                 let rounded = h.rounded()
                 viewModel.markHistoryMeasured(height: rounded)
-            }
+            })
     }
 }
 
-private struct HistoryPanelHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
+private struct HeightReporter: View {
+    let onMeasure: (CGFloat) -> Void
+
+    var body: some View {
+        GeometryReader { geo in
+            Color.clear
+                .onAppear {
+                    report(geo.size.height)
+                }
+                .onChange(of: geo.size.height) { _, height in
+                    report(height)
+                }
+        }
+    }
+
+    private func report(_ height: CGFloat) {
+        let rounded = height.rounded()
+        guard rounded > 0 else { return }
+        onMeasure(rounded)
     }
 }

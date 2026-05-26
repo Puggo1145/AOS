@@ -48,46 +48,53 @@ struct SettingsPanelView: View {
     }
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .topLeading) {
             switch page {
             case .main:
                 mainPage
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                     .transition(.asymmetric(
                         insertion: .move(edge: .leading).combined(with: .opacity),
                         removal: .move(edge: .leading).combined(with: .opacity)
                     ))
             case .provider:
                 providerPickerPage
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                     .transition(.asymmetric(
                         insertion: .move(edge: .trailing).combined(with: .opacity),
                         removal: .move(edge: .trailing).combined(with: .opacity)
                     ))
             case .model:
                 modelPickerPage
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                     .transition(.asymmetric(
                         insertion: .move(edge: .trailing).combined(with: .opacity),
                         removal: .move(edge: .trailing).combined(with: .opacity)
                     ))
             case .effort:
                 effortPickerPage
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                     .transition(.asymmetric(
                         insertion: .move(edge: .trailing).combined(with: .opacity),
                         removal: .move(edge: .trailing).combined(with: .opacity)
                     ))
             case .displayMode:
                 displayModePickerPage
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                     .transition(.asymmetric(
                         insertion: .move(edge: .trailing).combined(with: .opacity),
                         removal: .move(edge: .trailing).combined(with: .opacity)
                     ))
             case .permissions:
                 permissionsPage
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                     .transition(.asymmetric(
                         insertion: .move(edge: .trailing).combined(with: .opacity),
                         removal: .move(edge: .trailing).combined(with: .opacity)
                     ))
             case .apiKey:
                 apiKeyPage
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                     .transition(.asymmetric(
                         insertion: .move(edge: .trailing).combined(with: .opacity),
                         removal: .move(edge: .trailing).combined(with: .opacity)

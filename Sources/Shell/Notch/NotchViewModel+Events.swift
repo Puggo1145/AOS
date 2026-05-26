@@ -39,6 +39,7 @@ extension NotchViewModel {
                 let hot = self.closedHotRect
                 switch self.status {
                 case .opened:
+                    guard self.isAttachedTop else { return }
                     // Outside the visible silhouette → close. Re-click on
                     // the physical notch cutout → close. We use
                     // `notchOpenedTotalRect` (panel + tray) rather than
@@ -114,6 +115,7 @@ extension NotchViewModel {
 
 extension Notification.Name {
     static let notchStatusChanged = Notification.Name("notch-agent.notch.statusChanged")
+    static let notchPlacementChanged = Notification.Name("notch-agent.notch.placementChanged")
 }
 
 @MainActor
@@ -132,5 +134,9 @@ extension NotchViewModel {
 
     func broadcastStatus() {
         NotificationCenter.default.post(name: .notchStatusChanged, object: status)
+    }
+
+    func broadcastPlacement() {
+        NotificationCenter.default.post(name: .notchPlacementChanged, object: placement)
     }
 }
