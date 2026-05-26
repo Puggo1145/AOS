@@ -1,5 +1,6 @@
 import { logger } from "../../log";
 import { RPCMethod, type PermissionRequestApprovalParams, type PermissionRequestApprovalResult } from "../../rpc/rpc-types";
+import type { PermissionLevel } from "../../config/storage";
 import { evaluatePermissionPolicy } from "./policies";
 import type {
   PermissionGroupId,
@@ -39,9 +40,15 @@ export class PermissionGateway implements PermissionAuthorizer {
   constructor(
     private readonly dispatcher: ApprovalDispatcher,
     private readonly catalog: PermissionPolicyCatalog,
+    private readonly permissionLevelProvider: () => PermissionLevel = () => "default",
   ) {}
 
   async authorize(input: PermissionAuthorizeInput): Promise<PermissionAuthorizeResult> {
+    if (this.permissionLevelProvider() === "fullAccess") {
+      this.logFullAccessDecision(input);
+      return { kind: "allowed" };
+    }
+
     const decision = evaluatePermissionPolicy(this.catalog.get(input.toolName), input);
     if (decision.behavior === "allow") {
       this.logDecision(input, decision, "allow");
@@ -124,6 +131,18 @@ export class PermissionGateway implements PermissionAuthorizer {
       behavior: decision.behavior,
       groupId: decision.behavior === "ask" ? decision.groupId : undefined,
       capabilities: decision.capabilities.map((c) => c.capability),
+    });
+  }
+
+  private logFullAccessDecision(input: PermissionAuthorizeInput): void {
+    logger.info("permission decision", {
+      sessionId: input.sessionId,
+      turnId: input.turnId,
+      toolCallId: input.toolCallId,
+      toolName: input.toolName,
+      resolved: "allow",
+      behavior: "fullAccess",
+      capabilities: [],
     });
   }
 }

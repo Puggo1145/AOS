@@ -16,6 +16,7 @@ import { SessionManager } from "./agent/session/manager";
 import { registerSessionHandlers } from "./agent/session/handlers";
 import { registerProviderHandlers } from "./auth/register";
 import { registerConfigHandlers } from "./config/handlers";
+import { readPermissionLevel } from "./config/storage";
 import {
   registerBuiltinTools,
   registerComputerUseTools,
@@ -61,7 +62,7 @@ async function main(): Promise<void> {
   // agent loop attaches (the loop snapshots the tool registry per turn).
   registerTodoTool(sessions);
   assertRegisteredToolsMatchPermissionPolicies(toolRegistry.list(), builtinPermissionPolicyCatalog);
-  const permissionGateway = new PermissionGateway(dispatcher, builtinPermissionPolicyCatalog);
+  const permissionGateway = new PermissionGateway(dispatcher, builtinPermissionPolicyCatalog, readPermissionLevel);
   registerSessionHandlers(dispatcher, sessions);
   registerAgentHandlers(dispatcher, { manager: sessions, permissionGateway });
   registerProviderHandlers(dispatcher);

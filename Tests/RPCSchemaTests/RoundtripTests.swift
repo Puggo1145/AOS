@@ -99,6 +99,7 @@ struct RoundtripTests {
         FixtureRow(name: "config.get.json") { try assertRoundtrip(fixture: "config.get.json", as: RPCRequest<ConfigGetParams>.self) },
         FixtureRow(name: "config.set.json") { try assertRoundtrip(fixture: "config.set.json", as: RPCRequest<ConfigSetParams>.self) },
         FixtureRow(name: "config.setEffort.json") { try assertRoundtrip(fixture: "config.setEffort.json", as: RPCRequest<ConfigSetEffortParams>.self) },
+        FixtureRow(name: "config.setPermissionLevel.json") { try assertRoundtrip(fixture: "config.setPermissionLevel.json", as: RPCRequest<ConfigSetPermissionLevelParams>.self) },
 
         // ui.*
         FixtureRow(name: "ui.token.json") { try assertRoundtrip(fixture: "ui.token.json", as: RPCNotification<UITokenParams>.self) },

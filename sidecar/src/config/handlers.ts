@@ -14,6 +14,8 @@ import {
   type ConfigSetResult,
   type ConfigSetEffortParams,
   type ConfigSetEffortResult,
+  type ConfigSetPermissionLevelParams,
+  type ConfigSetPermissionLevelResult,
   type ConfigMarkOnboardingCompletedResult,
 } from "../rpc/rpc-types";
 import {
@@ -25,7 +27,13 @@ import {
 import { defaultEffort, supportedEfforts, supportsEffort, supportsThinking } from "../llm/models/effort";
 import { supportsVision } from "../llm/models/capabilities";
 import type { Api, Model } from "../llm/types";
-import { readUserConfig, writeUserConfig, MalformedConfigError } from "./storage";
+import {
+  DEFAULT_PERMISSION_LEVEL,
+  isPermissionLevel,
+  readUserConfig,
+  writeUserConfig,
+  MalformedConfigError,
+} from "./storage";
 
 function buildProviderCatalog(): ConfigProviderEntry[] {
   return (Object.keys(MODELS) as KnownProvider[]).map((id) => {
@@ -97,6 +105,7 @@ export function registerConfigHandlers(dispatcher: Dispatcher): void {
     return {
       selection: cfg.selection ?? null,
       effort: cfg.effort ?? null,
+      permissionLevel: cfg.permissionLevel ?? DEFAULT_PERMISSION_LEVEL,
       providers: buildProviderCatalog(),
       hasCompletedOnboarding: cfg.hasCompletedOnboarding ?? false,
       recoveredFromCorruption,
@@ -153,6 +162,19 @@ export function registerConfigHandlers(dispatcher: Dispatcher): void {
     }
     writeUserConfig({ ...existing, effort: params.effort });
     return { effort: params.effort };
+  });
+
+  dispatcher.registerRequest(RPCMethod.configSetPermissionLevel, async (raw): Promise<ConfigSetPermissionLevelResult> => {
+    const params = raw as ConfigSetPermissionLevelParams;
+    if (!isPermissionLevel(params?.permissionLevel)) {
+      throw new RPCMethodError(
+        RPCErrorCode.invalidParams,
+        `config.setPermissionLevel requires { permissionLevel: "default" | "fullAccess" }`,
+      );
+    }
+    const existing = readMergedConfigOrEmpty();
+    writeUserConfig({ ...existing, permissionLevel: params.permissionLevel });
+    return { permissionLevel: params.permissionLevel };
   });
 
   dispatcher.registerRequest(RPCMethod.configMarkOnboardingCompleted, async (): Promise<ConfigMarkOnboardingCompletedResult> => {

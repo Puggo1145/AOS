@@ -23,6 +23,7 @@ public final class ConfigService {
     /// the active model's `supportedEfforts` to render rows; this string
     /// just decides which row gets the checkmark.
     public private(set) var effort: String?
+    public private(set) var permissionLevel: ConfigPermissionLevel = .default
     public private(set) var loaded: Bool = false
     public private(set) var lastError: String?
     /// Onboarding completion latch. Mirrored from `~/.notch-agent/config.json`
@@ -89,6 +90,7 @@ public final class ConfigService {
             providers = result.providers
             selection = result.selection
             effort = result.effort
+            permissionLevel = result.permissionLevel
             hasCompletedOnboarding = result.hasCompletedOnboarding
             // Only flip `true` — never flip back via a later refresh.
             // The flag is a one-shot session notice; the sidecar will
@@ -138,6 +140,22 @@ public final class ConfigService {
         }
     }
 
+    public func selectPermissionLevel(_ newLevel: ConfigPermissionLevel) async {
+        do {
+            let result = try await rpc.request(
+                method: RPCMethod.configSetPermissionLevel,
+                params: ConfigSetPermissionLevelParams(permissionLevel: newLevel),
+                as: ConfigSetPermissionLevelResult.self
+            )
+            permissionLevel = result.permissionLevel
+            lastError = nil
+        } catch let RPCClientError.server(rpcError) {
+            lastError = rpcError.message
+        } catch {
+            lastError = String(describing: error)
+        }
+    }
+
     /// One-shot latch. Persists via RPC before flipping the local
     /// `hasCompletedOnboarding` flag so a storage/RPC failure cannot route
     /// the current Shell session past onboarding without durable authority.
@@ -170,11 +188,13 @@ public final class ConfigService {
         providers newProviders: [ConfigProviderEntry],
         selection newSelection: ConfigSelection?,
         effort newEffort: String? = nil,
+        permissionLevel newPermissionLevel: ConfigPermissionLevel = .default,
         hasCompletedOnboarding completed: Bool = false
     ) {
         providers = newProviders
         selection = newSelection
         effort = newEffort
+        permissionLevel = newPermissionLevel
         hasCompletedOnboarding = completed
         loaded = true
         lastError = nil

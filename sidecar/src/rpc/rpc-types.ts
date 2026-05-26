@@ -134,6 +134,7 @@ export const RPCMethod = {
   configGet: "config.get",
   configSet: "config.set",
   configSetEffort: "config.setEffort",
+  configSetPermissionLevel: "config.setPermissionLevel",
   configMarkOnboardingCompleted: "config.markOnboardingCompleted",
   computerUseListApps: "computerUse.listApps",
   computerUseListWindows: "computerUse.listWindows",
@@ -887,6 +888,8 @@ export interface ConfigSelection {
   modelId: string;
 }
 
+export type ConfigPermissionLevel = "default" | "fullAccess";
+
 export type ConfigGetParams = Record<string, never>;
 
 export interface ConfigGetResult {
@@ -898,6 +901,10 @@ export interface ConfigGetResult {
   /// it up in the active model's `supportedEfforts`, falling back to the
   /// model's `defaultEffort`.
   effort: string | null;
+  /// Agent tool permission mode. `default` uses the current PermissionGateway
+  /// checks and approval UI; `fullAccess` allows tool calls without policy
+  /// checks or approval prompts.
+  permissionLevel: ConfigPermissionLevel;
   providers: ConfigProviderEntry[];
   /// One-shot flag: flips `true` the first time the Shell observes both
   /// runtime permissions granted AND a ready provider. After that the
@@ -929,6 +936,14 @@ export interface ConfigSetEffortParams {
 
 export interface ConfigSetEffortResult {
   effort: string;
+}
+
+export interface ConfigSetPermissionLevelParams {
+  permissionLevel: ConfigPermissionLevel;
+}
+
+export interface ConfigSetPermissionLevelResult {
+  permissionLevel: ConfigPermissionLevel;
 }
 
 export type ConfigMarkOnboardingCompletedParams = Record<string, never>;

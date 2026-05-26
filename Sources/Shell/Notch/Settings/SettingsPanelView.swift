@@ -42,6 +42,7 @@ struct SettingsPanelView: View {
         case provider
         case model
         case effort
+        case permissionLevel
         case displayMode
         case permissions
         case apiKey
@@ -73,6 +74,13 @@ struct SettingsPanelView: View {
                     ))
             case .effort:
                 effortPickerPage
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .trailing).combined(with: .opacity),
+                        removal: .move(edge: .trailing).combined(with: .opacity)
+                    ))
+            case .permissionLevel:
+                permissionLevelPickerPage
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     .transition(.asymmetric(
                         insertion: .move(edge: .trailing).combined(with: .opacity),
@@ -187,6 +195,8 @@ struct SettingsPanelView: View {
             }
 
             permissionsRow
+
+            permissionLevelRow
 
             displayModeRow
 
@@ -335,6 +345,12 @@ struct SettingsPanelView: View {
     private var permissionsRow: some View {
         SettingsPermissionsSummaryRow(missingCount: missingPermissions.count) {
             page = .permissions
+        }
+    }
+
+    private var permissionLevelRow: some View {
+        SettingsPermissionLevelRow(permissionLevel: configService.permissionLevel) {
+            page = .permissionLevel
         }
     }
 
@@ -508,6 +524,24 @@ struct SettingsPanelView: View {
                 onSelect: { rawValue in
                     displayModeRaw = rawValue
                     page = .main
+                }
+            )
+        }
+    }
+
+    private var permissionLevelPickerPage: some View {
+        pickerPage(title: "Permission Level") {
+            BentoOptionsList(
+                options: ConfigPermissionLevel.allCases.map {
+                    BentoOption(id: $0.rawValue, title: $0.label)
+                },
+                selectedId: configService.permissionLevel.rawValue,
+                onSelect: { rawValue in
+                    guard let level = ConfigPermissionLevel(rawValue: rawValue) else { return }
+                    Task {
+                        await configService.selectPermissionLevel(level)
+                        page = .main
+                    }
                 }
             )
         }

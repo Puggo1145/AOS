@@ -220,29 +220,32 @@ Lifecycle 不变量：
 
 ### `config.*`（Shell → Bun）
 
-Sidecar 拥有持久化（`~/.notch-agent/config.json`）和 catalog（provider/model 目录）。Shell 的 settings panel 完全只读，通过下面三个方法 driven。
+Sidecar 拥有持久化（`~/.notch-agent/config.json`）和 catalog（provider/model 目录）。Shell 的 settings panel 通过下面这些 RPC 读写 sidecar-owned config。
 
 | Method | 类型 | Params | Result |
 |---|---|---|---|
-| `config.get` | Request | `{}` | `{ selection?, effort?, defaultEffort, providers: ConfigProviderEntry[] }` |
+| `config.get` | Request | `{}` | `{ selection?, effort?, permissionLevel, providers: ConfigProviderEntry[], hasCompletedOnboarding, recoveredFromCorruption }` |
 | `config.set` | Request | `{ providerId, modelId }` | `{ selection: { providerId, modelId } }` |
 | `config.setEffort` | Request | `{ effort }` | `{ effort }` |
+| `config.setPermissionLevel` | Request | `{ permissionLevel }` | `{ permissionLevel }` |
 
 ```ts
-type ConfigEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+type ConfigPermissionLevel = "default" | "fullAccess";
 
-interface ConfigModelEntry  { id: string; name: string; reasoning: bool; supportsXhigh: bool; }
+interface ConfigEffortLevel { value: string; label: string; }
+interface ConfigModelEntry  { id: string; name: string; supportedEfforts: ConfigEffortLevel[]; defaultEffort: string | null; supportsVision: bool; }
 interface ConfigProviderEntry { id: string; name: string; defaultModelId: string; models: ConfigModelEntry[]; }
 interface ConfigSelection   { providerId: string; modelId: string; }
 ```
 
 - `config.get` 把当前选择 + 完整 catalog snapshot 一并返回，避免 Shell 二次查询「有哪些模型可选」。
-- `selection` / `effort` 为 `null` 表示用户从未选过；Shell 在 UI 端用 catalog 默认值兜底，sidecar agent loop 同样在 `agent.submit` 时回落到 `DEFAULT_MODEL_PER_PROVIDER` / `DEFAULT_EFFORT`——**这是唯一允许的回落**。
+- `selection` / `effort` 为 `null` 表示用户从未选过；Shell 在 UI 端用 catalog 默认值兜底，sidecar agent loop 同样在 `agent.submit` 时回落到 catalog default——**这是唯一允许的回落**。
+- `permissionLevel` 缺省为 `"default"`；`"fullAccess"` 表示 PermissionGateway 直接允许工具调用，不做 policy catalog 检查，也不向 Shell 请求 approval。
 - Sidecar 对配置文件的 fail-fast 契约（P2.4）：
   - 文件**不存在** → 返回空 config（首启动路径）
-  - 文件**存在但 JSON 损坏 / schema 不符** → `config.get` 抛 `agentConfigInvalid` (-32301)；用户必须显式重置或修复
+  - 文件**存在但 JSON 损坏 / schema 不符** → `config.get` 对 parse/schema corruption 写回 `{}` 并返回 `recoveredFromCorruption: true`；read/IO 错误抛 `agentConfigInvalid` (-32301)
   - `agent.submit` 时若 selection 指向已被 catalog 删除的 model → `runTurn` 抛 internalError 并走 `ui.error`（不静默换默认）
-  - `config.set` / `config.setEffort` 在「现有 config 损坏」时容忍——把它当作空配置 merge，给用户一条恢复路径
+  - `config.set` / `config.setEffort` / `config.setPermissionLevel` 在「现有 config 损坏」时容忍——把它当作空配置 merge，给用户一条恢复路径
 - 设置变更不走 `settings.update` notification（设计文档原本预留的字段）；Shell 主动 RPC 写、agent loop 在每次 `agent.submit` 时重读 `~/.notch-agent/config.json`。这是 stage 0 的简化，可与 `settings.*` 合并。
 
 ### `settings.*`（Shell → Bun）

@@ -33,6 +33,33 @@ struct ConfigServiceTests {
         #expect(config.hasCompletedOnboarding == false)
         #expect(config.lastError?.contains("disk write failed") == true)
     }
+
+    @Test("selectPermissionLevel round-trips through sidecar before updating local state")
+    func selectPermissionLevelRoundTripsBeforeLocalUpdate() async throws {
+        let harness = RPCServerHarness()
+        let config = ConfigService(rpc: harness.client)
+        harness.client.start()
+        defer { harness.client.stop() }
+
+        let server = Task {
+            let line = try await harness.readRequest(timeout: 2)
+            let probe = try JSONDecoder().decode(RequestProbe.self, from: line)
+            #expect(probe.method == RPCMethod.configSetPermissionLevel)
+            let typed = try JSONDecoder().decode(RPCRequest<ConfigSetPermissionLevelParams>.self, from: line)
+            #expect(typed.params.permissionLevel == .fullAccess)
+            let response = RPCResponse(
+                id: probe.id,
+                result: ConfigSetPermissionLevelResult(permissionLevel: .fullAccess)
+            )
+            try harness.write(response)
+        }
+
+        await config.selectPermissionLevel(.fullAccess)
+        try await server.value
+
+        #expect(config.permissionLevel == .fullAccess)
+        #expect(config.lastError == nil)
+    }
 }
 
 private final class RPCServerHarness: @unchecked Sendable {

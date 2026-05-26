@@ -1,4 +1,5 @@
 import SwiftUI
+import RPCSchema
 
 struct SettingsAPIKeyRow: View {
     let provider: ProviderService.Provider
@@ -223,6 +224,36 @@ struct SettingsDisplayModeRow: View {
             .settingsRowBackground()
         }
         .buttonStyle(.plain)
+    }
+}
+
+struct SettingsPermissionLevelRow: View {
+    let permissionLevel: ConfigPermissionLevel
+    let onOpen: () -> Void
+
+    var body: some View {
+        Button(action: onOpen) {
+            HStack(spacing: 10) {
+                Image(systemName: "shield.lefthalf.filled")
+                    .notchFont(size: 12, weight: .semibold)
+                    .foregroundStyle(.white.opacity(0.7))
+                    .frame(width: 16)
+                Text("Permission Level")
+                    .notchFont(size: 13, weight: .medium)
+                    .foregroundStyle(.white.opacity(0.92))
+                Spacer(minLength: 8)
+                Text(permissionLevel.label)
+                    .notchFont(size: 11)
+                    .notchForeground(.secondary)
+                    .lineLimit(1)
+                Image(systemName: "chevron.right")
+                    .notchFont(size: 10, weight: .semibold)
+                    .notchForeground(.secondary)
+            }
+            .settingsRowBackground()
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("Permission Level, \(permissionLevel.label)"))
     }
 }
 

@@ -98,6 +98,7 @@ test("configGet auto-resets a malformed config and signals recoveredFromCorrupti
   expect(result.recoveredFromCorruption).toBe(true);
   expect(result.selection).toBe(null);
   expect(result.effort).toBe(null);
+  expect(result.permissionLevel).toBe("default");
   expect(result.hasCompletedOnboarding).toBe(false);
   // File on disk should now be valid empty config.
   expect(readUserConfig()).toEqual({});
@@ -107,6 +108,7 @@ test("configGet on a healthy config does not signal recovery", async () => {
   writeUserConfig({
     selection: { providerId: "chatgpt-plan", modelId: "gpt-5.5" },
     effort: "high",
+    permissionLevel: "fullAccess",
   });
 
   const handlers = captureHandlers();
@@ -116,6 +118,39 @@ test("configGet on a healthy config does not signal recovery", async () => {
   expect(result.recoveredFromCorruption).toBe(false);
   expect(result.selection).toEqual({ providerId: "chatgpt-plan", modelId: "gpt-5.5" });
   expect(result.effort).toBe("high");
+  expect(result.permissionLevel).toBe("fullAccess");
+});
+
+test("setPermissionLevel persists fullAccess alongside existing config", async () => {
+  writeUserConfig({
+    selection: { providerId: "chatgpt-plan", modelId: "gpt-5.5" },
+    effort: "medium",
+  });
+
+  const handlers = captureHandlers();
+  const handler = handlers.get(RPCMethod.configSetPermissionLevel)!;
+  const result = await handler({ permissionLevel: "fullAccess" }, { id: "1" });
+
+  expect(result).toEqual({ permissionLevel: "fullAccess" });
+  expect(readUserConfig()).toEqual({
+    selection: { providerId: "chatgpt-plan", modelId: "gpt-5.5" },
+    effort: "medium",
+    permissionLevel: "fullAccess",
+  });
+});
+
+test("setPermissionLevel rejects unknown values", async () => {
+  const handlers = captureHandlers();
+  const handler = handlers.get(RPCMethod.configSetPermissionLevel)!;
+
+  let threw: unknown;
+  try {
+    await handler({ permissionLevel: "askEveryTime" }, { id: "1" });
+  } catch (err) {
+    threw = err;
+  }
+  expect(threw).toBeInstanceOf(RPCMethodError);
+  expect((threw as RPCMethodError).code).toBe(RPCErrorCode.invalidParams);
 });
 
 test("setEffort accepts a value supported by the currently-selected model", async () => {

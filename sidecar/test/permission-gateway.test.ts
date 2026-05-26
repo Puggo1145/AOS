@@ -17,7 +17,10 @@ interface NotifyCall {
   params: Record<string, unknown>;
 }
 
-function createGateway(decisions: Array<"allow" | "deny" | Error | object>) {
+function createGateway(
+  decisions: Array<"allow" | "deny" | Error | object>,
+  permissionLevelProvider?: () => "default" | "fullAccess",
+) {
   mkdirSync(workspaceDir(), { recursive: true });
   const calls: RequestCall[] = [];
   const notifications: NotifyCall[] = [];
@@ -34,10 +37,17 @@ function createGateway(decisions: Array<"allow" | "deny" | Error | object>) {
     },
   };
   return {
-    gateway: new PermissionGateway(dispatcher, builtinPermissionPolicyCatalog),
+    gateway: new PermissionGateway(dispatcher, builtinPermissionPolicyCatalog, permissionLevelProvider),
     calls,
     notifications,
   };
+}
+
+function createGatewayWithPermissionLevel(
+  permissionLevel: "default" | "fullAccess",
+  decisions: Array<"allow" | "deny" | Error | object>,
+) {
+  return createGateway(decisions, () => permissionLevel);
 }
 
 function authInput(toolName: string, args: Record<string, unknown>, turnId = "turn_gateway") {
@@ -77,6 +87,30 @@ test("ask policy sends approval request without timeout and allows on user appro
     risk: "high",
     capabilities: [{ capability: "filesystem.write", action: "Write file", target: path }],
   });
+});
+
+test("fullAccess permission level allows ask policies without Shell approval", async () => {
+  const { gateway, calls } = createGatewayWithPermissionLevel("fullAccess", ["deny"]);
+  const path = join(tmpdir(), `gateway-${crypto.randomUUID()}.txt`);
+
+  const decision = await gateway.authorize(authInput("write", { path, content: "hello" }));
+
+  expect(decision).toEqual({ kind: "allowed" });
+  expect(calls).toHaveLength(0);
+});
+
+test("fullAccess permission level bypasses policy catalog checks", async () => {
+  const dispatcher = {
+    async request(): Promise<never> {
+      throw new Error("approval should not be requested");
+    },
+    notify(): void {},
+  };
+  const gateway = new PermissionGateway(dispatcher, new Map(), () => "fullAccess");
+
+  const decision = await gateway.authorize(authInput("unknown_tool", { value: crypto.randomUUID() }));
+
+  expect(decision).toEqual({ kind: "allowed" });
 });
 
 test("user denial returns a non-error permission denial result", async () => {

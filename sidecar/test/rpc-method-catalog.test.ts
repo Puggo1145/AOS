@@ -54,6 +54,10 @@ test("method-level semantics distinguish request and notification routes inside 
     direction: "bunToShell",
     kind: "notification",
   });
+  expect(rpcMethodSemantics(RPCMethod.configSetPermissionLevel)).toMatchObject({
+    direction: "shellToBun",
+    kind: "request",
+  });
   expect(rpcMethodSemantics(RPCMethod.permissionRequestApproval)).toMatchObject({
     direction: "bunToShell",
     kind: "request",

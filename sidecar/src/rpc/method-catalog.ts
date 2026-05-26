@@ -91,6 +91,7 @@ const RPC_METHOD_CATALOG = {
   [RPCMethod.configGet]: method(RPCMethod.configGet, "shellToBun", "request"),
   [RPCMethod.configSet]: method(RPCMethod.configSet, "shellToBun", "request"),
   [RPCMethod.configSetEffort]: method(RPCMethod.configSetEffort, "shellToBun", "request"),
+  [RPCMethod.configSetPermissionLevel]: method(RPCMethod.configSetPermissionLevel, "shellToBun", "request"),
   [RPCMethod.configMarkOnboardingCompleted]: method(RPCMethod.configMarkOnboardingCompleted, "shellToBun", "request"),
 
   [RPCMethod.computerUseListApps]: method(RPCMethod.computerUseListApps, "bunToShell", "request"),

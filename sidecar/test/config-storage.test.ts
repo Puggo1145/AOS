@@ -69,14 +69,29 @@ test("effort empty string throws MalformedConfigError", () => {
   expect(() => readUserConfig()).toThrow(MalformedConfigError);
 });
 
+test("permissionLevel accepts default and fullAccess", () => {
+  writeRaw('{ "permissionLevel": "fullAccess" }');
+  expect(readUserConfig().permissionLevel).toBe("fullAccess");
+
+  writeRaw('{ "permissionLevel": "default" }');
+  expect(readUserConfig().permissionLevel).toBe("default");
+});
+
+test("permissionLevel with unknown value throws MalformedConfigError", () => {
+  writeRaw('{ "permissionLevel": "askEveryTime" }');
+  expect(() => readUserConfig()).toThrow(MalformedConfigError);
+});
+
 test("valid round trip: writeUserConfig then readUserConfig", () => {
   writeUserConfig({
     selection: { providerId: "chatgpt-plan", modelId: "gpt-5.5" },
     effort: "medium",
+    permissionLevel: "fullAccess",
   });
   expect(readUserConfig()).toEqual({
     selection: { providerId: "chatgpt-plan", modelId: "gpt-5.5" },
     effort: "medium",
+    permissionLevel: "fullAccess",
   });
 });
 

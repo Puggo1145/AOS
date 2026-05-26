@@ -39,6 +39,10 @@ export interface ModelSelection {
   modelId: string;
 }
 
+export const DEFAULT_PERMISSION_LEVEL = "default" as const;
+export const PERMISSION_LEVELS = ["default", "fullAccess"] as const;
+export type PermissionLevel = (typeof PERMISSION_LEVELS)[number];
+
 export interface UserConfig {
   selection?: ModelSelection;
   /// Global reasoning effort, stored as the wire `value` of one of the
@@ -55,6 +59,10 @@ export interface UserConfig {
   /// surface as inline warnings + Settings affordances instead. Cleared
   /// only by deleting `~/.notch-agent/config.json`.
   hasCompletedOnboarding?: boolean;
+  /// Agent tool permission mode. `default` uses the PermissionGateway
+  /// policy catalog and approval UI; `fullAccess` lets the gateway allow
+  /// tool calls without policy evaluation or Shell approval prompts.
+  permissionLevel?: PermissionLevel;
 }
 
 /// Raised when the on-disk config file exists but cannot be loaded.
@@ -162,7 +170,26 @@ export function readUserConfig(): UserConfig {
     out.hasCompletedOnboarding = obj.hasCompletedOnboarding;
   }
 
+  // permissionLevel: undefined OR one of the supported wire values.
+  if (obj.permissionLevel !== undefined) {
+    if (!isPermissionLevel(obj.permissionLevel)) {
+      throw new MalformedConfigError(
+        "schema",
+        `Config "permissionLevel" must be one of ${PERMISSION_LEVELS.join(", ")}, got: ${JSON.stringify(obj.permissionLevel)}`,
+      );
+    }
+    out.permissionLevel = obj.permissionLevel;
+  }
+
   return out;
+}
+
+export function readPermissionLevel(): PermissionLevel {
+  return readUserConfig().permissionLevel ?? DEFAULT_PERMISSION_LEVEL;
+}
+
+export function isPermissionLevel(value: unknown): value is PermissionLevel {
+  return typeof value === "string" && (PERMISSION_LEVELS as readonly string[]).includes(value);
 }
 
 export function writeUserConfig(cfg: UserConfig): void {

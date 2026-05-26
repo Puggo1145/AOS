@@ -176,6 +176,7 @@ public enum RPCMethod {
     public static let configGet = "config.get"
     public static let configSet = "config.set"
     public static let configSetEffort = "config.setEffort"
+    public static let configSetPermissionLevel = "config.setPermissionLevel"
     public static let configMarkOnboardingCompleted = "config.markOnboardingCompleted"
     public static let computerUseListApps = "computerUse.listApps"
     public static let computerUseListWindows = "computerUse.listWindows"

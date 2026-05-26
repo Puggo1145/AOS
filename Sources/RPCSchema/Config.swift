@@ -79,6 +79,22 @@ public struct ConfigSelection: Codable, Sendable, Equatable {
     }
 }
 
+public enum ConfigPermissionLevel: String, Codable, Sendable, Equatable, CaseIterable, Identifiable {
+    case `default`
+    case fullAccess
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .default:
+            return "Default"
+        case .fullAccess:
+            return "Full Access"
+        }
+    }
+}
+
 public struct ConfigGetParams: Codable, Sendable, Equatable {
     public init() {}
     public init(from decoder: Decoder) throws {
@@ -97,6 +113,10 @@ public struct ConfigGetResult: Codable, Sendable, Equatable {
     /// against the active model's `supportedEfforts`; `defaultEffort`
     /// per model lives on `ConfigModelEntry`.
     public let effort: String?
+    /// Agent tool permission mode. `.default` uses the sidecar
+    /// PermissionGateway policy catalog and approval UI; `.fullAccess`
+    /// allows tool calls without sidecar permission checks.
+    public let permissionLevel: ConfigPermissionLevel
     public let providers: [ConfigProviderEntry]
     /// One-shot completion gate. Once `true`, NotchView stops routing
     /// to the onboard panels even if a permission or provider drops —
@@ -110,12 +130,14 @@ public struct ConfigGetResult: Codable, Sendable, Equatable {
     public init(
         selection: ConfigSelection?,
         effort: String?,
+        permissionLevel: ConfigPermissionLevel,
         providers: [ConfigProviderEntry],
         hasCompletedOnboarding: Bool,
         recoveredFromCorruption: Bool
     ) {
         self.selection = selection
         self.effort = effort
+        self.permissionLevel = permissionLevel
         self.providers = providers
         self.hasCompletedOnboarding = hasCompletedOnboarding
         self.recoveredFromCorruption = recoveredFromCorruption
@@ -154,6 +176,22 @@ public struct ConfigSetEffortResult: Codable, Sendable, Equatable {
 
     public init(effort: String) {
         self.effort = effort
+    }
+}
+
+public struct ConfigSetPermissionLevelParams: Codable, Sendable, Equatable {
+    public let permissionLevel: ConfigPermissionLevel
+
+    public init(permissionLevel: ConfigPermissionLevel) {
+        self.permissionLevel = permissionLevel
+    }
+}
+
+public struct ConfigSetPermissionLevelResult: Codable, Sendable, Equatable {
+    public let permissionLevel: ConfigPermissionLevel
+
+    public init(permissionLevel: ConfigPermissionLevel) {
+        self.permissionLevel = permissionLevel
     }
 }
 

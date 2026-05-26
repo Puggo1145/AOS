@@ -29,6 +29,7 @@ import {
   type ConfigGetParams,
   type ConfigSetParams,
   type ConfigSetEffortParams,
+  type ConfigSetPermissionLevelParams,
   type UITokenParams,
   type UIThinkingParams,
   type UIToolCallParams,
@@ -177,6 +178,14 @@ test("config.setEffort fixture roundtrips byte-equal", () => {
   const req = parsed as RPCRequest<ConfigSetEffortParams>;
   expect(req.method).toBe(RPCMethod.configSetEffort);
   expect(req.params.effort).toBe("medium");
+});
+
+test("config.setPermissionLevel fixture roundtrips byte-equal", () => {
+  assertRoundtrip("config.setPermissionLevel.json");
+  const { parsed } = loadFixture("config.setPermissionLevel.json");
+  const req = parsed as RPCRequest<ConfigSetPermissionLevelParams>;
+  expect(req.method).toBe(RPCMethod.configSetPermissionLevel);
+  expect(req.params.permissionLevel).toBe("fullAccess");
 });
 
 test("ui.token fixture roundtrips byte-equal", () => {
