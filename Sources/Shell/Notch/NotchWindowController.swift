@@ -1,7 +1,14 @@
 import AppKit
 import Combine
+import QuartzCore
 import SwiftUI
 import OSSenseKit
+
+public struct NotchWindowFrameAnimationSpec: Sendable {
+    public let duration: TimeInterval
+    public let controlPoint1: CGPoint
+    public let controlPoint2: CGPoint
+}
 
 // MARK: - NotchWindowController
 //
@@ -26,11 +33,29 @@ public final class NotchWindowController {
     private var window: NotchWindow?
     private var hostingView: NSHostingView<NotchView>?
     private var viewModel: NotchViewModel?
+    private let screenFrame: CGRect
+    private let topStripHeight: CGFloat
     private var cancellables: Set<AnyCancellable> = []
+    private var lastAppliedPlacement: NotchPlacement = .attachedTop
+    private var deferredWindowFrameTask: Task<Void, Never>?
+    private var deferredWindowFrameTarget: CGRect?
+    private var deferredWindowFramePlacement: NotchPlacement?
     private static var modalSuppression = ModalOverlaySuppressionState()
     private static weak var modalWindow: NotchWindow?
     private static weak var modalWindowController: NotchWindowController?
     private static var modalNotificationCancellables: Set<AnyCancellable> = []
+    public nonisolated static let edgeDockFrameAnimation = NotchWindowFrameAnimationSpec(
+        duration: 0.32,
+        controlPoint1: CGPoint(x: 0.16, y: 1.0),
+        controlPoint2: CGPoint(x: 0.3, y: 1.0)
+    )
+    public nonisolated static let detachedWindowShrinkDelay: TimeInterval = 0.32
+
+    public enum WindowFrameUpdatePlan: Equatable, Sendable {
+        case set(CGRect, animated: Bool)
+        case deferSet(CGRect, delay: TimeInterval)
+        case keepDeferred(CGRect)
+    }
 
     public init(
         senseStore: SenseStore,
@@ -46,6 +71,7 @@ public final class NotchWindowController {
         let screenFrame = screen.frame
         let notchSize = screen.notchSize
         let deviceNotchRect = Self.makeDeviceNotchRect(screen: screen, notchSize: notchSize)
+        self.screenFrame = screenFrame
 
         let viewModel = NotchViewModel(
             senseStore: senseStore,
@@ -67,6 +93,7 @@ public final class NotchWindowController {
         // its budget (history ScrollView scrolls past it), and the system
         // tray drawer that pokes out below adds its own ceiling on top.
         let panelHeight = viewModel.notchOpenedMaxHeight + viewModel.notchTrayMaxHeight
+        self.topStripHeight = panelHeight
         let topStrip = Self.makeTopStripRect(screenFrame: screenFrame, panelHeight: panelHeight)
 
         let win = NotchWindow(
@@ -104,6 +131,23 @@ public final class NotchWindowController {
                 guard let window, let viewModel else { return }
                 guard !Self.modalSuppression.isActive else { return }
                 Self.applyClickThrough(window: window, viewModel: viewModel, mouse: location)
+                Self.applyEdgeReveal(window: window, viewModel: viewModel, mouse: location)
+            }
+            .store(in: &cancellables)
+
+        EventMonitors.shared.mouseDragged
+            .receive(on: DispatchQueue.main)
+            .sink { [weak viewModel] _ in
+                guard let viewModel, viewModel.isDetachDragging else { return }
+                viewModel.updateDetachDrag(pointer: NSEvent.mouseLocation)
+            }
+            .store(in: &cancellables)
+
+        EventMonitors.shared.mouseUp
+            .receive(on: DispatchQueue.main)
+            .sink { [weak viewModel] _ in
+                guard let viewModel, viewModel.isDetachDragging else { return }
+                viewModel.finishDetachDrag(pointer: NSEvent.mouseLocation)
             }
             .store(in: &cancellables)
 
@@ -112,6 +156,29 @@ public final class NotchWindowController {
             .receive(on: DispatchQueue.main)
             .sink { [weak window, weak viewModel] _ in
                 guard let window, let viewModel else { return }
+                guard !Self.modalSuppression.isActive else { return }
+                Self.applyClickThrough(
+                    window: window,
+                    viewModel: viewModel,
+                    mouse: NSEvent.mouseLocation
+                )
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default
+            .publisher(for: .notchPlacementChanged)
+            .sink { [weak self, weak window, weak viewModel] _ in
+                guard let self, let window, let viewModel else { return }
+                let previousPlacement = self.lastAppliedPlacement
+                let currentPlacement = viewModel.currentPlacement
+                let plan = Self.windowFrameUpdatePlan(
+                    from: previousPlacement,
+                    to: currentPlacement,
+                    screenFrame: self.screenFrame,
+                    topStripHeight: self.topStripHeight,
+                    pendingDeferredFrame: self.deferredWindowFrameTarget
+                )
+                self.applyWindowFrame(plan, to: window, appliedPlacement: currentPlacement)
                 guard !Self.modalSuppression.isActive else { return }
                 Self.applyClickThrough(
                     window: window,
@@ -216,6 +283,12 @@ public final class NotchWindowController {
             }
             return
         }
+        if viewModel.isDetachDragging {
+            if window.ignoresMouseEvents {
+                window.ignoresMouseEvents = false
+            }
+            return
+        }
         let shouldIgnore = Self.shouldIgnoreMouseEvents(
             mouse: mouse,
             mouseActiveRect: viewModel.mouseActiveRect
@@ -225,11 +298,170 @@ public final class NotchWindowController {
         }
     }
 
+    private static func applyEdgeReveal(
+        window: NotchWindow,
+        viewModel: NotchViewModel,
+        mouse: NSPoint
+    ) {
+        switch viewModel.currentPlacement {
+        case .attachedTop, .detached:
+            return
+        case let .edgeDock(_, _, _, triggerFrame, false):
+            if triggerFrame.contains(mouse) {
+                viewModel.revealEdgeDock()
+            }
+        case let .edgeDock(_, _, revealFrame, _, true):
+            if !revealFrame.insetBy(dx: -24, dy: -24).contains(mouse) {
+                viewModel.collapseEdgeDock()
+            }
+        }
+    }
+
     nonisolated static func shouldIgnoreMouseEvents(
         mouse: NSPoint,
         mouseActiveRect: CGRect
     ) -> Bool {
         !mouseActiveRect.contains(mouse)
+    }
+
+    public nonisolated static func windowFrame(
+        for placement: NotchPlacement,
+        screenFrame: CGRect,
+        topStripHeight: CGFloat
+    ) -> CGRect {
+        precondition(topStripHeight > 0, "Top strip height must be positive")
+
+        switch placement {
+        case .attachedTop:
+            return makeTopStripRect(screenFrame: screenFrame, panelHeight: topStripHeight)
+        case let .detached(frame):
+            return frame
+        case let .edgeDock(_, hiddenFrame, revealFrame, _, revealed):
+            return revealed ? revealFrame : hiddenFrame
+        }
+    }
+
+    public nonisolated static func shouldAnimateWindowFrame(
+        from previous: NotchPlacement,
+        to current: NotchPlacement
+    ) -> Bool {
+        if case .detached = previous,
+           case .attachedTop = current {
+            return true
+        }
+
+        if case .detached = previous,
+           case let .edgeDock(_, _, _, _, revealed) = current {
+            return !revealed
+        }
+
+        guard case let .edgeDock(previousEdge, previousHidden, previousReveal, previousTrigger, previousRevealed) = previous,
+              case let .edgeDock(currentEdge, currentHidden, currentReveal, currentTrigger, currentRevealed) = current else {
+            return false
+        }
+        return previousEdge == currentEdge
+            && previousHidden == currentHidden
+            && previousReveal == currentReveal
+            && previousTrigger == currentTrigger
+            && previousRevealed != currentRevealed
+    }
+
+    public nonisolated static func windowFrameUpdatePlan(
+        from previous: NotchPlacement,
+        to current: NotchPlacement,
+        screenFrame: CGRect,
+        topStripHeight: CGFloat,
+        pendingDeferredFrame: CGRect? = nil
+    ) -> WindowFrameUpdatePlan {
+        let target = windowFrame(
+            for: current,
+            screenFrame: screenFrame,
+            topStripHeight: topStripHeight
+        )
+
+        if case let .detached(previousFrame) = previous,
+           case let .detached(currentFrame) = current {
+            let shouldWaitForSwiftUIShrink =
+                currentFrame.width < previousFrame.width
+                || currentFrame.height < previousFrame.height
+            let keepsResizeAnchor =
+                currentFrame.maxY == previousFrame.maxY
+                && (
+                    currentFrame.minX == previousFrame.minX
+                    || currentFrame.maxX == previousFrame.maxX
+                )
+            if shouldWaitForSwiftUIShrink && keepsResizeAnchor {
+                if pendingDeferredFrame == target {
+                    return .keepDeferred(target)
+                }
+                return .deferSet(target, delay: detachedWindowShrinkDelay)
+            }
+            return .set(target, animated: false)
+        }
+
+        return .set(
+            target,
+            animated: shouldAnimateWindowFrame(from: previous, to: current)
+        )
+    }
+
+    private func applyWindowFrame(
+        _ plan: WindowFrameUpdatePlan,
+        to window: NotchWindow,
+        appliedPlacement: NotchPlacement
+    ) {
+        switch plan {
+        case let .set(frame, animated):
+            cancelDeferredWindowFrame()
+            Self.applyWindowFrame(frame, to: window, animate: animated)
+            lastAppliedPlacement = appliedPlacement
+        case let .deferSet(frame, delay):
+            cancelDeferredWindowFrame()
+            deferredWindowFrameTarget = frame
+            deferredWindowFramePlacement = appliedPlacement
+            deferredWindowFrameTask = Task { @MainActor [weak self, weak window] in
+                let milliseconds = Int((delay * 1_000).rounded())
+                try? await Task.sleep(for: .milliseconds(milliseconds))
+                guard !Task.isCancelled, let self, let window else { return }
+                Self.applyWindowFrame(frame, to: window, animate: false)
+                self.lastAppliedPlacement = self.deferredWindowFramePlacement ?? appliedPlacement
+                self.deferredWindowFrameTask = nil
+                self.deferredWindowFrameTarget = nil
+                self.deferredWindowFramePlacement = nil
+            }
+        case .keepDeferred:
+            deferredWindowFramePlacement = appliedPlacement
+        }
+    }
+
+    private func cancelDeferredWindowFrame() {
+        deferredWindowFrameTask?.cancel()
+        deferredWindowFrameTask = nil
+        deferredWindowFrameTarget = nil
+        deferredWindowFramePlacement = nil
+    }
+
+    private static func applyWindowFrame(
+        _ frame: CGRect,
+        to window: NotchWindow,
+        animate: Bool
+    ) {
+        guard animate, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            window.setFrame(frame, display: true, animate: false)
+            return
+        }
+
+        NSAnimationContext.runAnimationGroup { context in
+            let spec = edgeDockFrameAnimation
+            context.duration = spec.duration
+            context.timingFunction = CAMediaTimingFunction(
+                controlPoints: Float(spec.controlPoint1.x),
+                Float(spec.controlPoint1.y),
+                Float(spec.controlPoint2.x),
+                Float(spec.controlPoint2.y)
+            )
+            window.animator().setFrame(frame, display: true)
+        }
     }
 
     struct ModalOverlaySuppressionState: Equatable {
@@ -290,6 +522,8 @@ public final class NotchWindowController {
     /// the screen configuration changes (so we can rebuild on the new
     /// built-in display).
     public func destroy() {
+        deferredWindowFrameTask?.cancel()
+        deferredWindowFrameTask = nil
         cancellables.forEach { $0.cancel() }
         cancellables.removeAll()
         viewModel?.destroy()

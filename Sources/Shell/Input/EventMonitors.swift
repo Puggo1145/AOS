@@ -27,11 +27,22 @@ public final class EventMonitors {
     /// outside click; the live mouse location remains the coordinate truth.
     public let mouseDown = PassthroughSubject<NSEvent?, Never>()
 
+    /// Fires during left-button drags. Used for operations that must continue
+    /// even when moving the Notch window causes the original SwiftUI control
+    /// to leave the cursor.
+    public let mouseDragged = PassthroughSubject<NSEvent?, Never>()
+
+    /// Fires when the left button is released. Completes global drag
+    /// lifecycles started by controls inside the Notch window.
+    public let mouseUp = PassthroughSubject<NSEvent?, Never>()
+
     /// Fires the keyCode of every keyDown. Subscribers filter for ESC (53).
     public let keyDown = PassthroughSubject<UInt16, Never>()
 
     private var moveMonitor: EventMonitor?
     private var downMonitor: EventMonitor?
+    private var dragMonitor: EventMonitor?
+    private var upMonitor: EventMonitor?
     private var keyMonitor: EventMonitor?
 
     private init() {}
@@ -49,24 +60,40 @@ public final class EventMonitors {
         let down = EventMonitor(mask: .leftMouseDown) { [weak self] event in
             self?.mouseDown.send(event)
         }
+        let drag = EventMonitor(mask: .leftMouseDragged) { [weak self] event in
+            self?.mouseLocation.send(NSEvent.mouseLocation)
+            self?.mouseDragged.send(event)
+        }
+        let up = EventMonitor(mask: .leftMouseUp) { [weak self] event in
+            self?.mouseLocation.send(NSEvent.mouseLocation)
+            self?.mouseUp.send(event)
+        }
         let key = EventMonitor(mask: .keyDown) { [weak self] event in
             guard let event else { return }
             self?.keyDown.send(event.keyCode)
         }
         move.start()
         down.start()
+        drag.start()
+        up.start()
         key.start()
         moveMonitor = move
         downMonitor = down
+        dragMonitor = drag
+        upMonitor = up
         keyMonitor = key
     }
 
     public func stop() {
         moveMonitor?.stop()
         downMonitor?.stop()
+        dragMonitor?.stop()
+        upMonitor?.stop()
         keyMonitor?.stop()
         moveMonitor = nil
         downMonitor = nil
+        dragMonitor = nil
+        upMonitor = nil
         keyMonitor = nil
     }
 }

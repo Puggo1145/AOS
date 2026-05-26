@@ -41,20 +41,77 @@ public final class NotchViewModel {
         case unknown
     }
 
+    public enum DetachMorphPhase: Sendable, Equatable {
+        case idle
+        case source
+        case target
+    }
+
+    public struct PanelCornerRadii: Sendable, Equatable {
+        public let topLeading: CGFloat
+        public let topTrailing: CGFloat
+        public let bottomLeading: CGFloat
+        public let bottomTrailing: CGFloat
+
+        public init(
+            topLeading: CGFloat,
+            topTrailing: CGFloat,
+            bottomLeading: CGFloat,
+            bottomTrailing: CGFloat
+        ) {
+            self.topLeading = topLeading
+            self.topTrailing = topTrailing
+            self.bottomLeading = bottomLeading
+            self.bottomTrailing = bottomTrailing
+        }
+
+        public init(all radius: CGFloat) {
+            self.init(
+                topLeading: radius,
+                topTrailing: radius,
+                bottomLeading: radius,
+                bottomTrailing: radius
+            )
+        }
+    }
+
+    public struct DetachMorphPresentation: Sendable, Equatable {
+        public let shoulderRadius: CGFloat
+        public let contentTopPadding: CGFloat
+        public let silhouetteSize: CGSize
+        public let shapeCornerRadii: PanelCornerRadii
+        public let contentClipCornerRadii: PanelCornerRadii
+        public let chromeOverlayOpacity: CGFloat
+
+        public var bottomCornerRadius: CGFloat { shapeCornerRadii.bottomLeading }
+        public var topCornerRadius: CGFloat { shapeCornerRadii.topLeading }
+        public var contentClipTopRadius: CGFloat { contentClipCornerRadii.topLeading }
+        public var contentClipBottomRadius: CGFloat { contentClipCornerRadii.bottomLeading }
+    }
+
     // MARK: - Stored state
 
     public private(set) var status: Status = .closed
     public var openReason: OpenReason = .unknown
     public var screenRect: CGRect
     public var deviceNotchRect: CGRect
+    public var placement: NotchPlacement = .attachedTop
     public var inputFocused: Bool = false
+    private var detachDragOffset: CGPoint?
+    private var detachTransitionTask: Task<Void, Never>?
+    public var isDetachDragging: Bool { detachDragOffset != nil }
+    public private(set) var detachMorphPhase: DetachMorphPhase = .idle
+    public var isDetachTransitionActive: Bool { detachMorphPhase != .idle }
+    public private(set) var isEdgeRevealTransitionActive: Bool = false
     /// Settings panel overlay. Reachable from the gear button in
     /// OpenedPanelView; reset to false on close.
     public var showSettings: Bool = false {
         didSet {
             if showSettings, !oldValue {
                 settingsMeasurementPending = true
+                settingsPendingPanelHeight = openedBasePanelHeight
             }
+            openedSurfaceStateDidChange()
         }
     }
 
@@ -75,21 +132,29 @@ public final class NotchViewModel {
     /// up via PreferenceKey so the silhouette hugs the panel's intrinsic
     /// size — without this the panel falls back to `compactMin` and the
     /// cards collide with the tray drawer below.
-    public var onboardingContentHeight: CGFloat = 0
+    public var onboardingContentHeight: CGFloat = 0 {
+        didSet { openedSurfaceStateDidChange() }
+    }
 
     /// Measured natural height of SettingsPanelView. Same content-driven
     /// pattern as onboarding: PreferenceKey reports the intrinsic height,
     /// `notchOpenedSize` clamps it into [compactMin, max]. Adding/removing
     /// rows in Settings no longer needs a hand-tuned constant.
-    public var settingsContentHeight: CGFloat = 0
+    public var settingsContentHeight: CGFloat = 0 {
+        didSet { openedSurfaceStateDidChange() }
+    }
     private var settingsMeasurementPending: Bool = false
+    private var settingsPendingPanelHeight: CGFloat?
 
     /// Measured natural height of SessionHistoryPanelView. Same content-driven
     /// pattern as Settings: PreferenceKey reports the intrinsic height,
     /// `notchOpenedSize` clamps it into [compactMin, max]; the inner
     /// ScrollView takes over once the list exceeds the ceiling.
-    public var historyPanelContentHeight: CGFloat = 0
+    public var historyPanelContentHeight: CGFloat = 0 {
+        didSet { openedSurfaceStateDidChange() }
+    }
     private var historyMeasurementPending: Bool = false
+    private var historyPendingPanelHeight: CGFloat?
 
     /// Vertical chrome around the dynamic content inside OpenedPanelView:
     /// top safe inset + spacing(8) between history and composer + bottom
@@ -103,8 +168,12 @@ public final class NotchViewModel {
     /// The view writes these via PreferenceKey on every layout pass; we
     /// derive `notchOpenedSize.height` from them so the silhouette grows
     /// alongside the streamed reply, capped at `notchOpenedMaxHeight`.
-    public var historyContentHeight: CGFloat = 0
-    public var composerContentHeight: CGFloat = 0
+    public var historyContentHeight: CGFloat = 0 {
+        didSet { openedSurfaceStateDidChange() }
+    }
+    public var composerContentHeight: CGFloat = 0 {
+        didSet { openedSurfaceStateDidChange() }
+    }
 
     // MARK: - System tray (drawer) state
     //
@@ -118,9 +187,15 @@ public final class NotchViewModel {
     /// Sources are still asked for their current row on every render —
     /// the filter happens after composition, so the set survives a row
     /// flickering in and out (state churn won't reset dismissal).
-    public var dismissedItemIds: Set<String> = []
-    public var trayExpanded: Bool = false
-    public var trayContentHeight: CGFloat = 0
+    public var dismissedItemIds: Set<String> = [] {
+        didSet { openedSurfaceStateDidChange() }
+    }
+    public var trayExpanded: Bool = false {
+        didSet { openedSurfaceStateDidChange() }
+    }
+    public var trayContentHeight: CGFloat = 0 {
+        didSet { openedSurfaceStateDidChange() }
+    }
 
     /// Registered tray-item sources, in registration order. Each is invoked
     /// on every `trayItems` read; empty returns are dropped silently.
@@ -275,13 +350,25 @@ public final class NotchViewModel {
         // History panel: takes priority over Settings (the user opens history
         // from the same opened-panel header strip; they aren't both visible).
         if showHistory {
-            let h = min(max(historyPanelContentHeight, notchOpenedCompactMinHeight), notchOpenedMaxHeight)
+            let h = measuredOverlayPanelHeight(
+                historyPanelContentHeight,
+                measurementPending: historyMeasurementPending,
+                pendingPanelHeight: historyPendingPanelHeight
+            )
             return CGSize(width: notchOpenedWidth, height: h)
         }
         if showSettings {
-            let h = min(max(settingsContentHeight, notchOpenedCompactMinHeight), notchOpenedMaxHeight)
+            let h = measuredOverlayPanelHeight(
+                settingsContentHeight,
+                measurementPending: settingsMeasurementPending,
+                pendingPanelHeight: settingsPendingPanelHeight
+            )
             return CGSize(width: notchOpenedWidth, height: h)
         }
+        return CGSize(width: notchOpenedWidth, height: openedBasePanelHeight)
+    }
+
+    private var openedBasePanelHeight: CGFloat {
         // Onboarding panels: drive the silhouette off the panel's measured
         // intrinsic height so the cards' natural size dictates the frame.
         // Otherwise we'd fall through to the compactMin floor (composer is
@@ -289,8 +376,7 @@ public final class NotchViewModel {
         // would overflow, and the tray drawer below would visually clip
         // them when notices push it open.
         if isOnboarding {
-            let h = max(onboardingContentHeight, notchOpenedCompactMinHeight)
-            return CGSize(width: notchOpenedWidth, height: h)
+            return max(onboardingContentHeight, notchOpenedCompactMinHeight)
         }
         // No turns yet: panel hugs the composer card so the empty state
         // doesn't show wasted whitespace between the notch strip and the
@@ -299,12 +385,10 @@ public final class NotchViewModel {
         // history and composer is irrelevant when history is absent.
         guard isAgentLoopActive else {
             let desired = deviceNotchRect.height + composerContentHeight + 16
-            let clamped = max(desired, notchOpenedCompactMinHeight)
-            return CGSize(width: notchOpenedWidth, height: clamped)
+            return max(desired, notchOpenedCompactMinHeight)
         }
         let desired = openedContentVerticalChrome + historyContentHeight + composerContentHeight
-        let clamped = min(max(desired, notchOpenedCompactMinHeight), notchOpenedMaxHeight)
-        return CGSize(width: notchOpenedWidth, height: clamped)
+        return min(max(desired, notchOpenedCompactMinHeight), notchOpenedMaxHeight)
     }
 
     /// True once the conversation has at least one turn. Drives the panel
@@ -333,7 +417,9 @@ public final class NotchViewModel {
         didSet {
             if showHistory, !oldValue {
                 historyMeasurementPending = true
+                historyPendingPanelHeight = openedBasePanelHeight
             }
+            openedSurfaceStateDidChange()
         }
     }
 
@@ -442,6 +528,10 @@ public final class NotchViewModel {
     /// pages report height asynchronously, and a stale smaller measurement
     /// must not flip `ignoresMouseEvents` before an in-panel click arrives.
     public var mouseActiveRect: CGRect {
+        if !isAttachedTop {
+            return NotchPlacementGeometry.mouseActiveRect(for: currentPlacement)
+        }
+
         switch status {
         case .opened:
             let measurementPending = (showSettings && settingsMeasurementPending)
@@ -458,18 +548,163 @@ public final class NotchViewModel {
         }
     }
 
-    func markSettingsMeasured(height: CGFloat) {
-        settingsContentHeight = height
-        if height > 0 {
-            settingsMeasurementPending = false
+    public var detachedCornerRadius: CGFloat { 18 }
+    public var detachedTopPadding: CGFloat { 10 }
+    public var detachMorphDuration: Duration { .milliseconds(320) }
+
+    public var detachedTotalSize: CGSize {
+        CGSize(
+            width: notchOpenedTotalSize.width,
+            height: notchOpenedTotalSize.height + detachedTopPadding
+        )
+    }
+
+    public var isAttachedTop: Bool {
+        if case .attachedTop = placement { return true }
+        return false
+    }
+
+    public var currentPlacement: NotchPlacement {
+        NotchPlacementGeometry.resizedFloatingPlacement(
+            placement,
+            screenRect: screenRect,
+            targetSize: detachedTotalSize
+        )
+    }
+
+    private func measuredOverlayPanelHeight(
+        _ measuredHeight: CGFloat,
+        measurementPending: Bool,
+        pendingPanelHeight: CGFloat?
+    ) -> CGFloat {
+        if measuredHeight > 0 {
+            return min(max(measuredHeight, notchOpenedCompactMinHeight), notchOpenedMaxHeight)
+        }
+        if measurementPending, let pendingPanelHeight {
+            return min(max(pendingPanelHeight, notchOpenedCompactMinHeight), notchOpenedMaxHeight)
+        }
+        return min(max(measuredHeight, notchOpenedCompactMinHeight), notchOpenedMaxHeight)
+    }
+
+    public nonisolated static func makeDetachMorphPresentation(
+        phase: DetachMorphPhase,
+        placement: NotchPlacement,
+        screenRect: CGRect,
+        finalSize: CGSize,
+        sourceHeight: CGFloat,
+        sourceBottomCornerRadius: CGFloat,
+        targetCornerRadius: CGFloat,
+        targetTopPadding: CGFloat
+    ) -> DetachMorphPresentation {
+        precondition(screenRect.width > 0 && screenRect.height > 0, "Screen rect must be positive")
+        precondition(finalSize.width > 0 && finalSize.height > 0, "Detach size must be positive")
+        precondition(sourceHeight > 0, "Detach source height must be positive")
+        precondition(targetTopPadding >= 0, "Detach top padding cannot be negative")
+
+        switch phase {
+        case .source:
+            let shoulderRadius = NotchGeometryModel.openedShoulderRadius
+            return DetachMorphPresentation(
+                shoulderRadius: shoulderRadius,
+                contentTopPadding: 0,
+                silhouetteSize: CGSize(
+                    width: finalSize.width + 2 * shoulderRadius,
+                    height: sourceHeight
+                ),
+                shapeCornerRadii: PanelCornerRadii(
+                    topLeading: 0,
+                    topTrailing: 0,
+                    bottomLeading: sourceBottomCornerRadius,
+                    bottomTrailing: sourceBottomCornerRadius
+                ),
+                contentClipCornerRadii: PanelCornerRadii(
+                    topLeading: 0,
+                    topTrailing: 0,
+                    bottomLeading: sourceBottomCornerRadius,
+                    bottomTrailing: sourceBottomCornerRadius
+                ),
+                chromeOverlayOpacity: 0
+            )
+        case .target, .idle:
+            let cornerRadii = edgeAdjustedCornerRadii(
+                PanelCornerRadii(all: targetCornerRadius),
+                placement: placement,
+                screenRect: screenRect
+            )
+            return DetachMorphPresentation(
+                shoulderRadius: 0,
+                contentTopPadding: targetTopPadding,
+                silhouetteSize: finalSize,
+                shapeCornerRadii: cornerRadii,
+                contentClipCornerRadii: cornerRadii,
+                chromeOverlayOpacity: 0
+            )
         }
     }
 
+    private nonisolated static func edgeAdjustedCornerRadii(
+        _ radii: PanelCornerRadii,
+        placement: NotchPlacement,
+        screenRect: CGRect
+    ) -> PanelCornerRadii {
+        let edge: NotchEdge?
+        switch placement {
+        case let .edgeDock(dockedEdge, _, _, _, _):
+            edge = dockedEdge
+        case let .detached(frame):
+            edge = NotchPlacementGeometry.touchingDockEdge(
+                screenRect: screenRect,
+                frame: frame
+            )
+        case .attachedTop:
+            edge = nil
+        }
+
+        guard let edge else {
+            return radii
+        }
+
+        switch edge {
+        case .left:
+            return PanelCornerRadii(
+                topLeading: 0,
+                topTrailing: radii.topTrailing,
+                bottomLeading: 0,
+                bottomTrailing: radii.bottomTrailing
+            )
+        case .right:
+            return PanelCornerRadii(
+                topLeading: radii.topLeading,
+                topTrailing: 0,
+                bottomLeading: radii.bottomLeading,
+                bottomTrailing: 0
+            )
+        case .bottom:
+            return PanelCornerRadii(
+                topLeading: radii.topLeading,
+                topTrailing: radii.topTrailing,
+                bottomLeading: 0,
+                bottomTrailing: 0
+            )
+        case .top:
+            return radii
+        }
+    }
+
+    func markSettingsMeasured(height: CGFloat) {
+        if height > 0 {
+            settingsMeasurementPending = false
+            settingsPendingPanelHeight = nil
+        }
+        settingsContentHeight = height
+    }
+
     func markHistoryMeasured(height: CGFloat) {
-        historyPanelContentHeight = height
         if height > 0 {
             historyMeasurementPending = false
+            historyPendingPanelHeight = nil
         }
+        historyPanelContentHeight = height
     }
 
     public nonisolated static func makeNotchOpenedRect(screenRect: CGRect, panel: CGSize) -> CGRect {
@@ -590,6 +825,107 @@ public final class NotchViewModel {
         broadcastStatus()
     }
 
+    public func setPlacement(_ placement: NotchPlacement) {
+        guard self.placement != placement else { return }
+        self.placement = placement
+        broadcastPlacement()
+    }
+
+    /// Detached placement is position state only. Opened-surface state
+    /// changes invalidate the derived current placement so AppKit can resize
+    /// the hosting window before SwiftUI paints the new height.
+    private func openedSurfaceStateDidChange() {
+        guard !isAttachedTop else { return }
+        broadcastPlacement()
+    }
+
+    public func revealEdgeDock() {
+        guard case let .edgeDock(edge, hiddenFrame, revealFrame, triggerFrame, false) = currentPlacement else { return }
+        setPlacement(.edgeDock(
+            edge: edge,
+            hiddenFrame: hiddenFrame,
+            revealFrame: revealFrame,
+            triggerFrame: triggerFrame,
+            revealed: true
+        ))
+    }
+
+    public func collapseEdgeDock() {
+        guard case let .edgeDock(edge, hiddenFrame, revealFrame, triggerFrame, true) = currentPlacement else { return }
+        setPlacement(.edgeDock(
+            edge: edge,
+            hiddenFrame: hiddenFrame,
+            revealFrame: revealFrame,
+            triggerFrame: triggerFrame,
+            revealed: false
+        ))
+    }
+
+    public func startDetachDrag(pointer: CGPoint) {
+        guard detachDragOffset == nil else {
+            updateDetachDrag(pointer: pointer)
+            return
+        }
+
+        notchOpen(.click)
+        if isAttachedTop {
+            startDetachShapeTransition()
+        }
+        let startFrame = NotchPlacementGeometry.currentPanelFrame(
+            placement: currentPlacement,
+            attachedFrame: notchOpenedTotalRect
+        )
+        detachDragOffset = CGPoint(
+            x: pointer.x - startFrame.minX,
+            y: pointer.y - startFrame.minY
+        )
+        updateDetachDrag(pointer: pointer)
+    }
+
+    public func updateDetachDrag(pointer: CGPoint) {
+        guard let offset = detachDragOffset else {
+            preconditionFailure("Detach drag offset missing")
+        }
+        let frame = NotchPlacementGeometry.detachedFrame(
+            screenRect: screenRect,
+            panelSize: detachedTotalSize,
+            pointer: pointer,
+            dragOffset: offset
+        )
+        setPlacement(.detached(frame))
+    }
+
+    public func finishDetachDrag(pointer _: CGPoint) {
+        guard detachDragOffset != nil else {
+            preconditionFailure("Cannot end a detach drag that has not begun")
+        }
+        guard case let .detached(releasedFrame) = currentPlacement else {
+            preconditionFailure("Cannot finish detach drag without a current detached frame")
+        }
+        detachDragOffset = nil
+        setPlacement(NotchPlacementGeometry.placementOnRelease(
+            screenRect: screenRect,
+            deviceNotchRect: deviceNotchRect,
+            panelFrame: releasedFrame
+        ))
+    }
+
+    private func startDetachShapeTransition() {
+        detachTransitionTask?.cancel()
+        detachMorphPhase = .source
+        detachTransitionTask = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            detachMorphPhase = .target
+            do {
+                try await Task.sleep(for: detachMorphDuration)
+            } catch {
+                return
+            }
+            detachMorphPhase = .idle
+        }
+    }
+
     // MARK: - Tray actions
 
     /// Hide a tray row for the rest of the session. Routes the
@@ -629,6 +965,9 @@ public final class NotchViewModel {
 
     /// Cancel all subscriptions; called by the controller during destroy.
     public func destroy() {
+        detachTransitionTask?.cancel()
+        detachTransitionTask = nil
+        detachMorphPhase = .idle
         cancellables.forEach { $0.cancel() }
         cancellables.removeAll()
     }

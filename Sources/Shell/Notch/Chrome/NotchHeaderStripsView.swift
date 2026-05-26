@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import OSSenseKit
 
@@ -34,6 +35,7 @@ struct NotchHeaderStripsView: View {
                 newConversationButton
                     .padding(.leading, notchGap)
                 historyButton
+                moveButton
                 Spacer(minLength: 0)
             }
             .frame(width: stripWidth, height: bandHeight)
@@ -102,6 +104,20 @@ struct NotchHeaderStripsView: View {
         }
         .buttonStyle(.notchPressable)
         .accessibilityLabel(Text("Conversation history"))
+    }
+
+    private var moveButton: some View {
+        Button {} label: {
+            headerIcon("arrow.up.left.and.arrow.down.right")
+        }
+        .buttonStyle(.notchPressable)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    viewModel.startDetachDrag(pointer: NSEvent.mouseLocation)
+                }
+        )
+        .accessibilityLabel(Text("Move Notch"))
     }
 
     private func headerIcon(_ systemName: String) -> some View {
