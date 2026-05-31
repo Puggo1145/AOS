@@ -134,6 +134,14 @@ public final class WindowMirror {
         }
     }
 
+    /// Force a fresh focused-window read for the current app. Submit-time OS
+    /// Sense refresh uses this path because some apps update visible document
+    /// state, such as Preview's page number in the title, without delivering
+    /// the AX title notification before the user presses Send.
+    public func refresh() {
+        reemitWithCurrentWindow()
+    }
+
     private func applyFrontmost(_ runningApp: NSRunningApplication?) {
         // Self-activation suppression: clicking the notch activates Notch Agent.
         // Drop the event so the user's prior context survives.

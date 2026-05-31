@@ -143,4 +143,35 @@ struct WindowMirrorTests {
         #expect(emissions.map { $0.1?.title } == ["First Tab", "Second Tab"])
         #expect(emissions.allSatisfy { $0.0 == app })
     }
+
+    @Test("Manual refresh re-reads focused window title without AX notification")
+    func manualRefreshReReadsFocusedWindowTitle() async {
+        let pid = getpid()
+        let appElement = AXUIElementCreateApplication(pid)
+        let windowElement = AXUIElementCreateApplication(pid)
+        let app = AppIdentity(bundleId: "com.test.preview", name: "Preview", pid: pid, icon: nil)
+        let fixture = await WindowMirrorTitleChangeFixture()
+
+        let mirror = await MainActor.run {
+            WindowMirror(
+                hub: AXObserverHub(),
+                focusedWindowReader: { _, _ in
+                    fixture.nextSnapshot(element: windowElement)
+                },
+                appElementFactory: { _ in appElement },
+                onChange: { app, window in
+                    fixture.record(app: app, window: window)
+                }
+            )
+        }
+
+        await mirror.setAccessibilityGranted(true)
+        await fixture.reset()
+        await mirror._applyFrontmostForTesting(app: app)
+        await mirror.refresh()
+
+        let emissions = await fixture.emissions
+        #expect(emissions.map { $0.1?.title } == ["First Tab", "Second Tab"])
+        #expect(emissions.allSatisfy { $0.0 == app })
+    }
 }

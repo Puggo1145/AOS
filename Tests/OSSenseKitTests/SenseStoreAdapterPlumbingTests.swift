@@ -35,8 +35,9 @@ private actor MockAdapter: SenseAdapter {
         continuation = nil
     }
 
-    func refresh() async {
+    func refresh() async -> [BehaviorEnvelope] {
         refreshCount += 1
+        return []
     }
 
     func emit(_ envelopes: [BehaviorEnvelope]) {
@@ -59,6 +60,60 @@ private actor SlowAttachAdapter: SenseAdapter {
     }
 
     func detach() async {}
+}
+
+private actor RefreshEmittingAdapter: SenseAdapter {
+    static let id: AdapterID = "refreshing"
+    static var supportedBundleIds: Set<String> = ["com.test.refreshing"]
+    nonisolated let requiredPermissions: Set<Permission> = []
+
+    private var continuation: AsyncStream<[BehaviorEnvelope]>.Continuation?
+
+    func attach(hub: AXObserverHub, target: RunningApp) async -> AsyncStream<[BehaviorEnvelope]> {
+        AsyncStream { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func detach() async {
+        continuation?.finish()
+        continuation = nil
+    }
+
+    func refresh() async -> [BehaviorEnvelope] {
+        [
+            BehaviorEnvelope(
+                kind: "mock.signal",
+                citationKey: "mock.signal:fresh",
+                displaySummary: "Fresh page 18",
+                payload: .object([:])
+            ),
+        ]
+    }
+}
+
+private actor SlowRefreshEmittingAdapter: SenseAdapter {
+    static let id: AdapterID = "slow-refresh"
+    static var supportedBundleIds: Set<String> = ["com.test.slow-refresh"]
+    nonisolated let requiredPermissions: Set<Permission> = []
+
+    func attach(hub: AXObserverHub, target: RunningApp) async -> AsyncStream<[BehaviorEnvelope]> {
+        AsyncStream { _ in }
+    }
+
+    func detach() async {}
+
+    func refresh() async -> [BehaviorEnvelope] {
+        try? await Task.sleep(for: .milliseconds(100))
+        return [
+            BehaviorEnvelope(
+                kind: "mock.signal",
+                citationKey: "mock.signal:stale",
+                displaySummary: "Stale page 19",
+                payload: .object([:])
+            ),
+        ]
+    }
 }
 
 private actor PermissionedAdapter: SenseAdapter {
@@ -394,6 +449,72 @@ struct SenseStoreAdapterPlumbingTests {
 
         let refreshes = await mock.refreshCount
         #expect(refreshes == 1)
+    }
+
+    @Test("Submit-time OS Sense refresh waits for adapter emission before returning")
+    func submitRefreshWaitsForAdapterEmission() async {
+        let adapter = RefreshEmittingAdapter()
+        let store = await makeStore(adapters: [adapter])
+
+        store._applyFrontmostForTesting(
+            app: AppIdentity(bundleId: "com.test.refreshing", name: "Test", pid: 803, icon: nil),
+            window: WindowIdentity(title: "Test", windowId: nil)
+        )
+        await store._awaitPendingAdapterSwapForTesting()
+
+        await store.refreshForSubmit()
+
+        #expect(store.context.behaviors.contains {
+            $0.citationKey == "mock.signal:fresh" && $0.displaySummary == "Fresh page 18"
+        })
+    }
+
+    @Test("Submit-time adapter refresh result is ignored after app switch")
+    func submitRefreshIgnoresAdapterResultAfterAppSwitch() async {
+        let adapter = SlowRefreshEmittingAdapter()
+        let store = await makeStore(adapters: [adapter])
+
+        store._applyFrontmostForTesting(
+            app: AppIdentity(bundleId: "com.test.slow-refresh", name: "Slow", pid: 804, icon: nil),
+            window: WindowIdentity(title: "Slow", windowId: nil)
+        )
+        await store._awaitPendingAdapterSwapForTesting()
+
+        let refresh = Task { @MainActor in
+            await store.refreshForSubmit()
+        }
+        try? await Task.sleep(for: .milliseconds(20))
+        store._applyFrontmostForTesting(
+            app: AppIdentity(bundleId: "com.test.other", name: "Other", pid: 805, icon: nil),
+            window: WindowIdentity(title: "Other", windowId: nil)
+        )
+        await refresh.value
+
+        #expect(!store.context.behaviors.contains { $0.citationKey == "mock.signal:stale" })
+        #expect(store.context.app?.bundleId == "com.test.other")
+    }
+
+    @Test("Manual adapter refresh result is ignored after app switch")
+    func manualRefreshIgnoresAdapterResultAfterAppSwitch() async {
+        let adapter = SlowRefreshEmittingAdapter()
+        let store = await makeStore(adapters: [adapter])
+
+        store._applyFrontmostForTesting(
+            app: AppIdentity(bundleId: "com.test.slow-refresh", name: "Slow", pid: 806, icon: nil),
+            window: WindowIdentity(title: "Slow", windowId: nil)
+        )
+        await store._awaitPendingAdapterSwapForTesting()
+
+        store.refreshGeneralProbe()
+        try? await Task.sleep(for: .milliseconds(20))
+        store._applyFrontmostForTesting(
+            app: AppIdentity(bundleId: "com.test.other", name: "Other", pid: 807, icon: nil),
+            window: WindowIdentity(title: "Other", windowId: nil)
+        )
+        try? await Task.sleep(for: .milliseconds(140))
+
+        #expect(!store.context.behaviors.contains { $0.citationKey == "mock.signal:stale" })
+        #expect(store.context.app?.bundleId == "com.test.other")
     }
 
     @Test("Same-app window change clears stale behaviors and refreshes attached adapters")

@@ -16,7 +16,8 @@
 - `AdapterRegistry`、失败隔离、权限缺失路径
 - `FinderAdapter`（`finder.selection`）
 - `BrowserAdapter`（`browser.tab`）
-- e2e：Finder 选文件、Chrome 切 tab → 对应 envelope 实时出现
+- `PreviewAdapter`（`pdf.document`）
+- e2e：Finder 选文件、Chrome 切 tab、Preview 打开 PDF → 对应 envelope 实时出现
 
 ### Stage 3：视觉兜底（submit-time）
 - `ScreenMirror.captureNow(forPid:)` 单次捕获 API
@@ -41,8 +42,9 @@
 **Stage 2**：
 - Finder 选文件 → `general.selectedItems` 与 `finder.selection` 两个 envelope 同时出现（`finder.selection.payload.fileURLs` 初始为空）；点击 `finder.selection` chip 时（首次）触发 Automation 权限 prompt；授权后 `fileURLs` 填充
 - Chrome 切 tab → `browser.tab` envelope 的 `payload.url` 在 250ms 内更新
+- Preview 打开 PDF → `pdf.document` envelope 的 `payload.fileURL` 在 250ms 内更新；Preview 打开非 PDF 图片不输出 `pdf.document`
 - `BrowserAdapter` 抛错或 timeout → `browser.tab` envelope 缺失；`GeneralProbe` 与 `FinderAdapter` 不受影响
-- 静态检查：`Core/*` 任一文件不出现 `FinderAdapter` / `BrowserAdapter` / `finder.selection` / `browser.tab` 字面量
+- 静态检查：`Core/*` 任一文件不出现 `FinderAdapter` / `PreviewAdapter` / `BrowserAdapter` / `finder.selection` / `pdf.document` / `browser.tab` 字面量
 
 **Stage 3**：
 - Figma 前台、无 selection / input、screen-recording 已授权 → Notch 展开后 chip 出现 "Window snapshot"，但**不发生任何截图捕获**（Activity Monitor 验证 Notch Agent Shell 进程无 SCStream）

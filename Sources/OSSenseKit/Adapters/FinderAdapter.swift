@@ -71,8 +71,9 @@ public actor FinderAdapter: SenseAdapter {
         hub = nil
     }
 
-    public func refresh() async {
-        scheduleRefresh()
+    public func refresh() async -> [BehaviorEnvelope] {
+        refreshTask?.cancel()
+        return await readSelectionEnvelopes()
     }
 
     /// Converts Finder selection rows into the opaque behavior shape consumed
@@ -122,6 +123,25 @@ public actor FinderAdapter: SenseAdapter {
                 Self.logReadFailure(error)
                 self.emitSelection([])
             }
+        }
+    }
+
+    private func readAndEmitSelection() async {
+        let envelopes = await readSelectionEnvelopes()
+        continuation?.yield(envelopes)
+    }
+
+    private func readSelectionEnvelopes() async -> [BehaviorEnvelope] {
+        do {
+            try Task.checkCancellation()
+            let items = try await selectionReader.readSelection()
+            try Task.checkCancellation()
+            return Self.makeEnvelopes(from: items)
+        } catch is CancellationError {
+            return []
+        } catch {
+            Self.logReadFailure(error)
+            return []
         }
     }
 

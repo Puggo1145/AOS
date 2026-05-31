@@ -99,13 +99,16 @@ public protocol SenseAdapter: Actor {
     /// subscriptions / observers it holds via the hub.
     func detach() async
 
-    /// Re-read the adapter's current lightweight context on demand. Called
-    /// when the user opens OS Sense so app-specific adapters get the same
-    /// fresh snapshot chance as `GeneralProbe`, without requiring an app
-    /// switch or a new AX notification.
-    func refresh() async
+    /// Re-read and return the adapter's current lightweight context on
+    /// demand. Called when the user opens OS Sense or submits a prompt so
+    /// app-specific adapters get the same fresh snapshot chance as
+    /// `GeneralProbe`, without requiring an app switch or a new AX
+    /// notification. The returned complete envelope set is applied directly
+    /// by `SenseStore`; implementations must not rely on an AsyncStream
+    /// consumer to observe refresh results.
+    func refresh() async -> [BehaviorEnvelope]
 }
 
 public extension SenseAdapter {
-    func refresh() async {}
+    func refresh() async -> [BehaviorEnvelope] { [] }
 }

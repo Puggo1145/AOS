@@ -69,6 +69,11 @@ public final class SenseStore {
     /// Consumer tasks for each attached adapter's AsyncStream. Cancel +
     /// await on detach.
     private var adapterTasks: [AdapterID: Task<Void, Never>] = [:]
+    /// Monotonic token for the currently valid app/window adapter context.
+    /// Refresh calls capture this value and must still match it before
+    /// applying returned envelopes, so a slow refresh cannot resurrect stale
+    /// behavior after an app switch or same-app window change cleared it.
+    private var adapterContextGeneration: Int = 0
     /// Single in-flight adapter swap task. New swaps await the previous one
     /// before running so detach/attach pairs never interleave.
     private var pendingSwap: Task<Void, Never>?
@@ -156,10 +161,49 @@ public final class SenseStore {
     /// need to tell it to look again.
     public func refreshGeneralProbe() {
         generalProbe?.refresh()
-        let adapters = Array(attachedAdapters.values)
-        for adapter in adapters {
+        let generation = adapterContextGeneration
+        let entries = attachedAdapters.map { (id: $0.key, adapter: $0.value) }
+        for entry in entries {
             Task {
-                await adapter.refresh()
+                let envelopes = await entry.adapter.refresh()
+                await MainActor.run {
+                    self.applyAdapterRefreshIfCurrent(
+                        source: entry.id,
+                        generation: generation,
+                        envelopes: envelopes
+                    )
+                }
+            }
+        }
+    }
+
+    /// Force a best-effort synchronous context refresh before `agent.submit`
+    /// snapshots `context`. Passive AX notifications are not reliable enough
+    /// for send-time correctness: apps can miss scroll/page changes, and
+    /// adapter debounce tasks may still be pending. This method re-reads the
+    /// window mirror and general probe immediately, waits for the current
+    /// adapter swap, asks every attached adapter to refresh, then applies
+    /// returned adapter envelope sets directly before the caller projects
+    /// `context`.
+    public func refreshForSubmit() async {
+        windowMirror?.refresh()
+        generalProbe?.refresh()
+        await pendingSwap?.value
+        let generation = adapterContextGeneration
+        let entries = attachedAdapters.map { (id: $0.key, adapter: $0.value) }
+        await withTaskGroup(of: (AdapterID, Int, [BehaviorEnvelope]).self) { group in
+            for entry in entries {
+                group.addTask {
+                    let envelopes = await entry.adapter.refresh()
+                    return (entry.id, generation, envelopes)
+                }
+            }
+            for await (id, generation, envelopes) in group {
+                applyAdapterRefreshIfCurrent(
+                    source: id,
+                    generation: generation,
+                    envelopes: envelopes
+                )
             }
         }
     }
@@ -202,6 +246,7 @@ public final class SenseStore {
         // App changed: tear down all per-pid AX state and any adapter envelopes
         // that were associated with the old app.
         if oldPid != newPid {
+            adapterContextGeneration += 1
             generalProbe?.detach()
             if let oldPid {
                 hub.detach(pid: oldPid)
@@ -217,6 +262,7 @@ public final class SenseStore {
 
         let sameAppWindowChanged = oldPid == newPid && oldWindow != window
         if sameAppWindowChanged {
+            adapterContextGeneration += 1
             if !behaviorsBySource.isEmpty {
                 behaviorsBySource.removeAll()
                 applyBehaviorsRecompute()
@@ -247,6 +293,16 @@ public final class SenseStore {
             }
         }
         applyBehaviorsRecompute()
+    }
+
+    private func applyAdapterRefreshIfCurrent(
+        source: AdapterID,
+        generation: Int,
+        envelopes: [BehaviorEnvelope]
+    ) {
+        guard generation == adapterContextGeneration else { return }
+        guard attachedAdapters[source] != nil else { return }
+        applyBehaviors(source: source, envelopes: envelopes)
     }
 
     private func applyBehaviorsRecompute() {

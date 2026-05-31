@@ -231,6 +231,11 @@ protocol SenseAdapter: Actor {
 
     /// app 离开前台时调用，adapter 释放所有订阅。
     func detach() async
+
+    /// 立即重读当前轻量 context，并返回该 adapter 当前完整 envelope 集合。
+    /// `SenseStore` 会直接应用返回值；refresh 不能依赖 AsyncStream
+    /// consumer 之后再合并，否则 submit-time context 仍可能 stale。
+    func refresh() async -> [BehaviorEnvelope]
 }
 ```
 
@@ -293,10 +298,26 @@ emits `kind = "browser.tab"`，payload schema：
 }
 ```
 
-- `supportedBundleIds = ["com.google.Chrome", "com.apple.Safari", "company.thebrowser.Browser"]`
-- `requiredPermissions = [.accessibility]`（同 FinderAdapter 理由：通过 hub 消费 AX 通知必须声明）
-- attach 仅做 hub 订阅与 stream 准备：订阅 app 元素级别的轻量通知（如 `kAXFocusedUIElementChangedNotification` / `kAXMainWindowChangedNotification`）后立即返回 stream，**不在 attach 内做 AX 树遍历**。地址栏 `AXTextField` 的定位与对其 `kAXValueChangedNotification` 的订阅延后到首次 notification handler 内进行，与 `SenseAdapter.attach` 契约一致
-- 取不到地址栏时不输出 envelope
+- `supportedBundleIds = ["com.apple.Safari", "com.google.Chrome", "com.google.Chrome.canary", "com.microsoft.edgemac", "com.brave.Browser", "company.thebrowser.Browser", "com.vivaldi.Vivaldi", "com.operasoftware.Opera"]`
+- `requiredPermissions = [.accessibility, .automation]`（AX 负责 notification trigger；Apple Event 负责读取当前 tab URL/title）
+- attach 仅做 hub 订阅与 stream 准备：订阅 app 元素级别的轻量通知（如 `kAXFocusedUIElementChangedNotification` / `kAXMainWindowChangedNotification` / title/value changed）后立即返回 stream，**不在 attach 内做 AX 树遍历或 Apple Event 读取**。首次状态与后续 AX 通知都走同一条 debounce handler。
+- 取不到 tab URL 时不输出 envelope。浏览器打开 PDF 时，`payload.url` 是该 PDF 的稳定文档身份。
+
+### PreviewAdapter
+
+emits `kind = "pdf.document"`，payload schema：
+
+```ts
+{
+    title: string,
+    fileURL: string
+}
+```
+
+- `supportedBundleIds = ["com.apple.Preview"]`
+- `requiredPermissions = [.accessibility, .automation]`（AX 负责 notification trigger；Apple Event 负责读取 Preview front document `name/path`）
+- attach 仅做 hub 订阅与 stream 准备，订阅窗口/焦点/title 相关通知后立即返回 stream；首次状态与后续 AX 通知都走同一条 debounce handler。
+- 只对 `.pdf` 路径输出 envelope；Preview 打开的图片等非 PDF 文档不输出 `pdf.document`。
 
 其他所有 app 一律不写 adapter，依赖 GeneralProbe。
 
@@ -433,7 +454,7 @@ packages/
 - `OSSenseKit` 作为 Swift package 直接链接进 Shell，进程级单例
 - Shell 启动即 `SenseStore.start()`，常驻订阅 OS 事件
 - Notch UI 通过 `@Bindable` 直接绑定 `SenseStore.context`
-- 用户提交时，Shell 把勾选条目从 live `SenseContext` **投影**到 wire-only `CitedContext` object（schema 见 `designs/rpc-protocol.md`），再编码为 JSON 发给 Bun。`CitedContext` 是 object，不是裸 envelope 数组——`behaviors` 字段才是 `BehaviorEnvelope[]`，同时还会带 `app` / `window` / `visual` / `clipboard` 的引用快照
+- 用户提交时，Shell 先调用 `SenseStore.refreshForSubmit()`：同步重读 `WindowMirror` title、`GeneralProbe` focused element，并等待当前已 attach adapters 的 `refresh()` 返回值直接合并进 context；随后把勾选条目从 live `SenseContext` **投影**到 wire-only `CitedContext` object（schema 见 `designs/rpc-protocol.md`），再编码为 JSON 发给 Bun。`CitedContext` 是 object，不是裸 envelope 数组——`behaviors` 字段才是 `BehaviorEnvelope[]`，同时还会带 `app` / `window` / `visual` / `clipboard` 的引用快照
 - `BehaviorEnvelope` 的四字段 `kind` / `citationKey` / `displaySummary` / `payload` 中，`payload` 完全 opaque，Bun 持有、序列化进 prompt、转发给 LLM
 - LLM 凭 `kind` 与 `payload` 自行解读结构。Bun 不需要任何具体 Behavior 类型定义、不需要解码器
 - 未勾选条目永不离开 Shell 进程；live model 不直接参与序列化

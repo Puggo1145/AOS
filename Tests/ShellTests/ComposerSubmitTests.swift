@@ -13,7 +13,7 @@ struct ComposerSubmitTests {
         let harness = RPCServerHarness()
         harness.client.start()
         defer { harness.client.stop() }
-        let vm = makeViewModel(rpc: harness.client)
+        let vm = await makeViewModel(rpc: harness.client)
         vm.providerService._testSetProviders([
             ProviderService.Provider(
                 id: "deepseek",
@@ -63,9 +63,72 @@ struct ComposerSubmitTests {
         #expect(vm.composerInputModel.displayText == "")
     }
 
-    private func makeViewModel(rpc: RPCClient) -> NotchViewModel {
+    @Test("submit refreshes OS Sense before projecting citedContext")
+    func submitRefreshesOSSenseBeforeProjection() async throws {
+        let adapter = SubmitRefreshAdapter()
+        let harness = RPCServerHarness()
+        harness.client.start()
+        defer { harness.client.stop() }
+        let vm = await makeViewModel(rpc: harness.client, adapters: [adapter])
+        vm.providerService._testSetProviders([
+            ProviderService.Provider(
+                id: "deepseek",
+                name: "DeepSeek",
+                authMethod: .apiKey,
+                state: .ready
+            ),
+        ])
+        vm.providerService._testSetStatusLoaded(true)
+        vm.configService._testApply(
+            providers: [
+                ConfigProviderEntry(
+                    id: "deepseek",
+                    name: "DeepSeek",
+                    defaultModelId: "deepseek-chat",
+                    models: [
+                        ConfigModelEntry(
+                            id: "deepseek-chat",
+                            name: "DeepSeek Chat",
+                            supportedEfforts: [],
+                            defaultEffort: nil,
+                            supportsVision: false
+                        ),
+                    ]
+                ),
+            ],
+            selection: ConfigSelection(providerId: "deepseek", modelId: "deepseek-chat")
+        )
+        vm.senseStore._applyFrontmostForTesting(
+            app: AppIdentity(bundleId: "com.test.submit-refresh", name: "Preview", pid: 900, icon: nil),
+            window: WindowIdentity(title: "Preview", windowId: nil)
+        )
+        await vm.senseStore._awaitPendingAdapterSwapForTesting()
+        vm.composerInputModel._testSetPlainText("What page am I on?")
+
+        let server = Task {
+            let line = try await harness.readRequest(timeout: 2)
+            let request = try JSONDecoder().decode(RPCRequest<AgentSubmitParams>.self, from: line)
+            #expect(request.params.turnId.isEmpty == false)
+            #expect(request.params.citedContext.behaviors?.contains {
+                $0.citationKey == "mock.signal:fresh" && $0.displaySummary == "Fresh page 18"
+            } == true)
+            let response = RPCResponse(id: request.id, result: AgentSubmitResult(accepted: true))
+            try harness.write(response)
+        }
+
+        await vm.submitComposer(deselectedBehaviorKeys: [])
+        try await server.value
+    }
+
+    private func makeViewModel(
+        rpc: RPCClient,
+        adapters: [any SenseAdapter] = []
+    ) async -> NotchViewModel {
         let permissions = PermissionsService()
         let registry = AdapterRegistry()
+        for adapter in adapters {
+            await registry.register(adapter)
+        }
         let sense = SenseStore(permissionsService: permissions, registry: registry)
         let session = SessionService(rpc: rpc)
         let store = SessionStore(rpc: rpc, sessionService: session)
@@ -93,6 +156,38 @@ struct ComposerSubmitTests {
         )
     }
 }
+
+private actor SubmitRefreshAdapter: SenseAdapter {
+    static let id: AdapterID = "submit-refresh"
+    static var supportedBundleIds: Set<String> = ["com.test.submit-refresh"]
+    nonisolated let requiredPermissions: Set<Permission> = []
+
+    private var continuation: AsyncStream<[_OSSenseBehaviorEnvelope]>.Continuation?
+
+    func attach(hub: AXObserverHub, target: RunningApp) async -> AsyncStream<[_OSSenseBehaviorEnvelope]> {
+        AsyncStream { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func detach() async {
+        continuation?.finish()
+        continuation = nil
+    }
+
+    func refresh() async -> [_OSSenseBehaviorEnvelope] {
+        [
+            _OSSenseBehaviorEnvelope(
+                kind: "mock.signal",
+                citationKey: "mock.signal:fresh",
+                displaySummary: "Fresh page 18",
+                payload: .object([:])
+            ),
+        ]
+    }
+}
+
+private typealias _OSSenseBehaviorEnvelope = OSSenseKit.BehaviorEnvelope
 
 private final class RPCServerHarness: @unchecked Sendable {
     let client: RPCClient

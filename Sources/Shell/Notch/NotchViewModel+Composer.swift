@@ -62,7 +62,6 @@ extension NotchViewModel {
             return false
         }()
 
-        let snapshotCtx = senseStore.context
         let promptForTurn = snapshot.prompt
         let clipboardsForTurn = snapshot.clipboards
         let turnId = agentService.reserveSubmitTurnId(
@@ -71,6 +70,8 @@ extension NotchViewModel {
         )
         composerInputModel.clear()
 
+        await senseStore.refreshForSubmit()
+        let snapshotCtx = senseStore.context
         let visual: VisualMirror? = shouldCaptureVisual
             ? await senseStore.captureVisualSnapshot()
             : nil

@@ -239,6 +239,8 @@ public final class CompositionRoot {
     /// here where app wiring belongs.
     internal static func registerBuiltinSenseAdapters(into registry: AdapterRegistry) async {
         await registry.register(FinderAdapter())
+        await registry.register(PreviewAdapter())
+        await registry.register(BrowserAdapter())
     }
 
     /// Rebuild the notch window stack on screen change. Per
