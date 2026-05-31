@@ -22,21 +22,30 @@
 //   - missing optional fields with valid surrounding JSON → return without
 //     them populated (still treated as not-set).
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, chmodSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	renameSync,
+	writeFileSync,
+	chmodSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 
 function notchHome(): string {
-  return process.env.HOME && process.env.HOME.length > 0 ? process.env.HOME : homedir();
+	return process.env.HOME && process.env.HOME.length > 0
+		? process.env.HOME
+		: homedir();
 }
 
 export function userConfigPath(): string {
-  return join(notchHome(), ".notch-agent", "config.json");
+	return join(notchHome(), ".notch-agent", "config.json");
 }
 
 export interface ModelSelection {
-  providerId: string;
-  modelId: string;
+	providerId: string;
+	modelId: string;
 }
 
 export const DEFAULT_PERMISSION_LEVEL = "default" as const;
@@ -44,25 +53,25 @@ export const PERMISSION_LEVELS = ["default", "fullAccess"] as const;
 export type PermissionLevel = (typeof PERMISSION_LEVELS)[number];
 
 export interface UserConfig {
-  selection?: ModelSelection;
-  /// Global reasoning effort, stored as the wire `value` of one of the
-  /// currently-selected model's `supportedEfforts`. Per-model effort
-  /// vocabulary lives in the catalog; we do not validate the string
-  /// against a closed enum here — `effectiveEffort` decides whether the
-  /// saved pick is still usable for the active model and falls back to
-  /// the model's default otherwise.
-  effort?: string;
-  /// Onboarding completion gate. Flips `true` the first time the Shell
-  /// observes both runtime permissions granted AND a ready provider.
-  /// Once `true`, the Shell stops routing the user back to the onboard
-  /// panels even if a permission or provider drops — those failures
-  /// surface as inline warnings + Settings affordances instead. Cleared
-  /// only by deleting `~/.notch-agent/config.json`.
-  hasCompletedOnboarding?: boolean;
-  /// Agent tool permission mode. `default` uses the PermissionGateway
-  /// policy catalog and approval UI; `fullAccess` lets the gateway allow
-  /// tool calls without policy evaluation or Shell approval prompts.
-  permissionLevel?: PermissionLevel;
+	selection?: ModelSelection;
+	/// Global reasoning effort, stored as the wire `value` of one of the
+	/// currently-selected model's `supportedEfforts`. Per-model effort
+	/// vocabulary lives in the catalog; we do not validate the string
+	/// against a closed enum here — `effectiveEffort` decides whether the
+	/// saved pick is still usable for the active model and falls back to
+	/// the model's default otherwise.
+	effort?: string;
+	/// Onboarding completion gate. Flips `true` the first time the Shell
+	/// observes both runtime permissions granted AND a ready provider.
+	/// Once `true`, the Shell stops routing the user back to the onboard
+	/// panels even if a permission or provider drops — those failures
+	/// surface as inline warnings + Settings affordances instead. Cleared
+	/// only by deleting `~/.notch-agent/config.json`.
+	hasCompletedOnboarding?: boolean;
+	/// Agent tool permission mode. `default` uses the PermissionGateway
+	/// policy catalog and approval UI; `fullAccess` lets the gateway allow
+	/// tool calls without policy evaluation or Shell approval prompts.
+	permissionLevel?: PermissionLevel;
 }
 
 /// Raised when the on-disk config file exists but cannot be loaded.
@@ -74,130 +83,140 @@ export interface UserConfig {
 export type MalformedConfigKind = "read" | "parse" | "schema";
 
 export class MalformedConfigError extends Error {
-  constructor(
-    public readonly kind: MalformedConfigKind,
-    message: string,
-    public readonly cause?: unknown,
-  ) {
-    super(message);
-    this.name = "MalformedConfigError";
-  }
+	constructor(
+		public readonly kind: MalformedConfigKind,
+		message: string,
+		public readonly cause?: unknown,
+	) {
+		super(message);
+		this.name = "MalformedConfigError";
+	}
 }
 
 function ensureDir(path: string): void {
-  const dir = dirname(path);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-  }
+	const dir = dirname(path);
+	if (!existsSync(dir)) {
+		mkdirSync(dir, { recursive: true, mode: 0o700 });
+	}
 }
 
 export function readUserConfig(): UserConfig {
-  const path = userConfigPath();
-  if (!existsSync(path)) return {};
+	const path = userConfigPath();
+	if (!existsSync(path)) return {};
 
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf-8");
-  } catch (err) {
-    throw new MalformedConfigError(
-      "read",
-      `Failed to read config at ${path}: ${err instanceof Error ? err.message : String(err)}`,
-      err,
-    );
-  }
+	let raw: string;
+	try {
+		raw = readFileSync(path, "utf-8");
+	} catch (err) {
+		throw new MalformedConfigError(
+			"read",
+			`Failed to read config at ${path}: ${err instanceof Error ? err.message : String(err)}`,
+			err,
+		);
+	}
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    throw new MalformedConfigError(
-      "parse",
-      `Config file ${path} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
-      err,
-    );
-  }
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch (err) {
+		throw new MalformedConfigError(
+			"parse",
+			`Config file ${path} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+			err,
+		);
+	}
 
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new MalformedConfigError(
-      "schema",
-      `Config file ${path} must be a JSON object at the top level`,
-    );
-  }
+	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+		throw new MalformedConfigError(
+			"schema",
+			`Config file ${path} must be a JSON object at the top level`,
+		);
+	}
 
-  const obj = parsed as Record<string, unknown>;
-  const out: UserConfig = {};
+	const obj = parsed as Record<string, unknown>;
+	const out: UserConfig = {};
 
-  // selection: either undefined OR a fully-formed { providerId, modelId } object.
-  if (obj.selection !== undefined) {
-    const sel = obj.selection;
-    if (sel === null || typeof sel !== "object") {
-      throw new MalformedConfigError(
-        "schema",
-        `Config "selection" must be an object with { providerId, modelId }`,
-      );
-    }
-    const s = sel as Record<string, unknown>;
-    if (typeof s.providerId !== "string" || typeof s.modelId !== "string") {
-      throw new MalformedConfigError(
-        "schema",
-        `Config "selection" requires string providerId and modelId`,
-      );
-    }
-    out.selection = { providerId: s.providerId, modelId: s.modelId };
-  }
+	// selection: either undefined OR a fully-formed { providerId, modelId } object.
+	if (obj.selection !== undefined) {
+		const sel = obj.selection;
+		if (sel === null || typeof sel !== "object") {
+			throw new MalformedConfigError(
+				"schema",
+				`Config "selection" must be an object with { providerId, modelId }`,
+			);
+		}
+		const s = sel as Record<string, unknown>;
+		if (typeof s.providerId !== "string" || typeof s.modelId !== "string") {
+			throw new MalformedConfigError(
+				"schema",
+				`Config "selection" requires string providerId and modelId`,
+			);
+		}
+		out.selection = { providerId: s.providerId, modelId: s.modelId };
+	}
 
-  // effort: undefined OR an arbitrary non-empty string. The catalog,
-  // not this validator, decides which strings are meaningful for which
-  // model — see `effectiveEffort` in `models/effort.ts`.
-  if (obj.effort !== undefined) {
-    if (typeof obj.effort !== "string" || obj.effort.length === 0) {
-      throw new MalformedConfigError(
-        "schema",
-        `Config "effort" must be a non-empty string, got: ${JSON.stringify(obj.effort)}`,
-      );
-    }
-    out.effort = obj.effort;
-  }
+	// effort: undefined OR an arbitrary non-empty string. The catalog,
+	// not this validator, decides which strings are meaningful for which
+	// model — see `effectiveEffort` in `models/effort.ts`.
+	if (obj.effort !== undefined) {
+		if (typeof obj.effort !== "string" || obj.effort.length === 0) {
+			throw new MalformedConfigError(
+				"schema",
+				`Config "effort" must be a non-empty string, got: ${JSON.stringify(obj.effort)}`,
+			);
+		}
+		out.effort = obj.effort;
+	}
 
-  // hasCompletedOnboarding: undefined OR boolean.
-  if (obj.hasCompletedOnboarding !== undefined) {
-    if (typeof obj.hasCompletedOnboarding !== "boolean") {
-      throw new MalformedConfigError(
-        "schema",
-        `Config "hasCompletedOnboarding" must be boolean, got: ${JSON.stringify(obj.hasCompletedOnboarding)}`,
-      );
-    }
-    out.hasCompletedOnboarding = obj.hasCompletedOnboarding;
-  }
+	// hasCompletedOnboarding: undefined OR boolean.
+	if (obj.hasCompletedOnboarding !== undefined) {
+		if (typeof obj.hasCompletedOnboarding !== "boolean") {
+			throw new MalformedConfigError(
+				"schema",
+				`Config "hasCompletedOnboarding" must be boolean, got: ${JSON.stringify(obj.hasCompletedOnboarding)}`,
+			);
+		}
+		out.hasCompletedOnboarding = obj.hasCompletedOnboarding;
+	}
 
-  // permissionLevel: undefined OR one of the supported wire values.
-  if (obj.permissionLevel !== undefined) {
-    if (!isPermissionLevel(obj.permissionLevel)) {
-      throw new MalformedConfigError(
-        "schema",
-        `Config "permissionLevel" must be one of ${PERMISSION_LEVELS.join(", ")}, got: ${JSON.stringify(obj.permissionLevel)}`,
-      );
-    }
-    out.permissionLevel = obj.permissionLevel;
-  }
+	// permissionLevel: undefined OR one of the supported wire values.
+	if (obj.permissionLevel !== undefined) {
+		if (!isPermissionLevel(obj.permissionLevel)) {
+			throw new MalformedConfigError(
+				"schema",
+				`Config "permissionLevel" must be one of ${PERMISSION_LEVELS.join(", ")}, got: ${JSON.stringify(obj.permissionLevel)}`,
+			);
+		}
+		out.permissionLevel = obj.permissionLevel;
+	}
 
-  return out;
+	return out;
 }
 
 export function readPermissionLevel(): PermissionLevel {
-  return readUserConfig().permissionLevel ?? DEFAULT_PERMISSION_LEVEL;
+	return readUserConfig().permissionLevel ?? DEFAULT_PERMISSION_LEVEL;
 }
 
 export function isPermissionLevel(value: unknown): value is PermissionLevel {
-  return typeof value === "string" && (PERMISSION_LEVELS as readonly string[]).includes(value);
+	return (
+		typeof value === "string" &&
+		(PERMISSION_LEVELS as readonly string[]).includes(value)
+	);
 }
 
 export function writeUserConfig(cfg: UserConfig): void {
-  const path = userConfigPath();
-  ensureDir(path);
-  const tmp = path + ".tmp";
-  writeFileSync(tmp, JSON.stringify(cfg, null, 2), { encoding: "utf-8", mode: 0o600 });
-  try { chmodSync(tmp, 0o600); } catch {}
-  renameSync(tmp, path);
-  try { chmodSync(path, 0o600); } catch {}
+	const path = userConfigPath();
+	ensureDir(path);
+	const tmp = `${path}.tmp`;
+	writeFileSync(tmp, JSON.stringify(cfg, null, 2), {
+		encoding: "utf-8",
+		mode: 0o600,
+	});
+	try {
+		chmodSync(tmp, 0o600);
+	} catch {}
+	renameSync(tmp, path);
+	try {
+		chmodSync(path, 0o600);
+	} catch {}
 }

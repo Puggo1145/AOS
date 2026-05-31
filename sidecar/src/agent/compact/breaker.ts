@@ -16,62 +16,65 @@
 const FAILURE_LIMIT = 3;
 
 interface BreakerState {
-  consecutiveFailures: number;
-  disabled: boolean;
+	consecutiveFailures: number;
+	disabled: boolean;
 }
 
 const states = new Map<string, BreakerState>();
 
 function get(sessionId: string): BreakerState {
-  let s = states.get(sessionId);
-  if (!s) {
-    s = { consecutiveFailures: 0, disabled: false };
-    states.set(sessionId, s);
-  }
-  return s;
+	let s = states.get(sessionId);
+	if (!s) {
+		s = { consecutiveFailures: 0, disabled: false };
+		states.set(sessionId, s);
+	}
+	return s;
 }
 
 export const compactBreaker = {
-  /// Whether auto-compact should be skipped for this session. Manual
-  /// triggers (future RPC entry) must not call this — the breaker only
-  /// gates the implicit per-turn auto path.
-  isAutoDisabled(sessionId: string): boolean {
-    return get(sessionId).disabled;
-  },
+	/// Whether auto-compact should be skipped for this session. Manual
+	/// triggers (future RPC entry) must not call this — the breaker only
+	/// gates the implicit per-turn auto path.
+	isAutoDisabled(sessionId: string): boolean {
+		return get(sessionId).disabled;
+	},
 
-  recordSuccess(sessionId: string): void {
-    const s = get(sessionId);
-    s.consecutiveFailures = 0;
-    // Note: we do NOT auto-revive a tripped breaker on success — once it
-    // trips it stays tripped for the session's lifetime. A successful
-    // manual compact does not imply auto-compact is now safe (the auto
-    // path's failures usually come from a different cause: prompt size,
-    // not transient network).
-  },
+	recordSuccess(sessionId: string): void {
+		const s = get(sessionId);
+		s.consecutiveFailures = 0;
+		// Note: we do NOT auto-revive a tripped breaker on success — once it
+		// trips it stays tripped for the session's lifetime. A successful
+		// manual compact does not imply auto-compact is now safe (the auto
+		// path's failures usually come from a different cause: prompt size,
+		// not transient network).
+	},
 
-  recordFailure(sessionId: string): void {
-    const s = get(sessionId);
-    s.consecutiveFailures += 1;
-    if (s.consecutiveFailures >= FAILURE_LIMIT) s.disabled = true;
-  },
+	recordFailure(sessionId: string): void {
+		const s = get(sessionId);
+		s.consecutiveFailures += 1;
+		if (s.consecutiveFailures >= FAILURE_LIMIT) s.disabled = true;
+	},
 
-  /// Drop a session's tracked state. Called from `agent.reset` and
-  /// `session.delete` so a fresh session does not inherit a tripped
-  /// breaker from a previous run with the same id (test setup churn,
-  /// mainly).
-  forget(sessionId: string): void {
-    states.delete(sessionId);
-  },
+	/// Drop a session's tracked state. Called from `agent.reset` and
+	/// `session.delete` so a fresh session does not inherit a tripped
+	/// breaker from a previous run with the same id (test setup churn,
+	/// mainly).
+	forget(sessionId: string): void {
+		states.delete(sessionId);
+	},
 
-  /// Test-only: wipe all tracked sessions.
-  clear(): void {
-    states.clear();
-  },
+	/// Test-only: wipe all tracked sessions.
+	clear(): void {
+		states.clear();
+	},
 
-  /// Test-only: read current counter state.
-  inspect(sessionId: string): { consecutiveFailures: number; disabled: boolean } {
-    return { ...get(sessionId) };
-  },
+	/// Test-only: read current counter state.
+	inspect(sessionId: string): {
+		consecutiveFailures: number;
+		disabled: boolean;
+	} {
+		return { ...get(sessionId) };
+	},
 };
 
 export const COMPACT_FAILURE_LIMIT = FAILURE_LIMIT;

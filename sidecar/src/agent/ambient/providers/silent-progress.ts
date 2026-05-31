@@ -23,14 +23,14 @@ import type { Session } from "../../session/session";
 const SILENT_PROGRESS_REMIND_AT = 10;
 
 export const silentProgressAmbientProvider: AmbientProvider = {
-  name: "progressReminder",
-  render(session: Session): string | null {
-    const n = session.silentToolRounds;
-    if (n < SILENT_PROGRESS_REMIND_AT) return null;
-    return (
-      `You have just executed ${n} consecutive tool calls without sending any reply text to the user. ` +
-      `Pause and tell the user a short status update on what you've done so far and what's next, ` +
-      `then continue your work.`
-    );
-  },
+	name: "progressReminder",
+	render(session: Session): string | null {
+		const n = session.silentToolRounds;
+		if (n < SILENT_PROGRESS_REMIND_AT) return null;
+		return (
+			`You have just executed ${n} consecutive tool calls without sending any reply text to the user. ` +
+			`Pause and tell the user a short status update on what you've done so far and what's next, ` +
+			`then continue your work.`
+		);
+	},
 };

@@ -8,112 +8,116 @@ import { test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readUserConfig, writeUserConfig, MalformedConfigError } from "../src/config/storage";
+import {
+	readUserConfig,
+	writeUserConfig,
+	MalformedConfigError,
+} from "../src/config/storage";
 
 let originalHome: string | undefined;
 let tmpHome: string;
 
 beforeEach(() => {
-  originalHome = process.env.HOME;
-  tmpHome = mkdtempSync(join(tmpdir(), "notch-agent-config-test-"));
-  process.env.HOME = tmpHome;
+	originalHome = process.env.HOME;
+	tmpHome = mkdtempSync(join(tmpdir(), "notch-agent-config-test-"));
+	process.env.HOME = tmpHome;
 });
 
 afterEach(() => {
-  if (originalHome === undefined) delete process.env.HOME;
-  else process.env.HOME = originalHome;
-  rmSync(tmpHome, { recursive: true, force: true });
+	if (originalHome === undefined) delete process.env.HOME;
+	else process.env.HOME = originalHome;
+	rmSync(tmpHome, { recursive: true, force: true });
 });
 
 function configPath(): string {
-  return join(tmpHome, ".notch-agent", "config.json");
+	return join(tmpHome, ".notch-agent", "config.json");
 }
 
 function writeRaw(content: string): void {
-  mkdirSync(join(tmpHome, ".notch-agent"), { recursive: true });
-  writeFileSync(configPath(), content, "utf-8");
+	mkdirSync(join(tmpHome, ".notch-agent"), { recursive: true });
+	writeFileSync(configPath(), content, "utf-8");
 }
 
 test("missing config file returns empty object (documented first-run path)", () => {
-  expect(readUserConfig()).toEqual({});
+	expect(readUserConfig()).toEqual({});
 });
 
 test("malformed JSON throws MalformedConfigError", () => {
-  writeRaw("{ this is not valid json");
-  expect(() => readUserConfig()).toThrow(MalformedConfigError);
+	writeRaw("{ this is not valid json");
+	expect(() => readUserConfig()).toThrow(MalformedConfigError);
 });
 
 test("top-level non-object throws MalformedConfigError", () => {
-  writeRaw('"just a string"');
-  expect(() => readUserConfig()).toThrow(MalformedConfigError);
+	writeRaw('"just a string"');
+	expect(() => readUserConfig()).toThrow(MalformedConfigError);
 });
 
 test("selection with wrong types throws MalformedConfigError", () => {
-  writeRaw('{ "selection": { "providerId": 42, "modelId": "gpt-5.5" } }');
-  expect(() => readUserConfig()).toThrow(MalformedConfigError);
+	writeRaw('{ "selection": { "providerId": 42, "modelId": "gpt-5.5" } }');
+	expect(() => readUserConfig()).toThrow(MalformedConfigError);
 });
 
 test("effort accepts arbitrary strings (per-model vocab; effective resolution clamps to model default)", () => {
-  // The closed-enum gate moved out of the storage layer — each model's
-  // catalog declares its own effort vocabulary, and `effectiveEffort`
-  // falls back to the model default when the saved string isn't valid
-  // for the active model. Here we only assert storage no longer rejects
-  // it on the way in.
-  writeRaw('{ "effort": "ludicrous" }');
-  const cfg = readUserConfig();
-  expect(cfg.effort).toBe("ludicrous");
+	// The closed-enum gate moved out of the storage layer — each model's
+	// catalog declares its own effort vocabulary, and `effectiveEffort`
+	// falls back to the model default when the saved string isn't valid
+	// for the active model. Here we only assert storage no longer rejects
+	// it on the way in.
+	writeRaw('{ "effort": "ludicrous" }');
+	const cfg = readUserConfig();
+	expect(cfg.effort).toBe("ludicrous");
 });
 
 test("effort empty string throws MalformedConfigError", () => {
-  writeRaw('{ "effort": "" }');
-  expect(() => readUserConfig()).toThrow(MalformedConfigError);
+	writeRaw('{ "effort": "" }');
+	expect(() => readUserConfig()).toThrow(MalformedConfigError);
 });
 
 test("permissionLevel accepts default and fullAccess", () => {
-  writeRaw('{ "permissionLevel": "fullAccess" }');
-  expect(readUserConfig().permissionLevel).toBe("fullAccess");
+	writeRaw('{ "permissionLevel": "fullAccess" }');
+	expect(readUserConfig().permissionLevel).toBe("fullAccess");
 
-  writeRaw('{ "permissionLevel": "default" }');
-  expect(readUserConfig().permissionLevel).toBe("default");
+	writeRaw('{ "permissionLevel": "default" }');
+	expect(readUserConfig().permissionLevel).toBe("default");
 });
 
 test("permissionLevel with unknown value throws MalformedConfigError", () => {
-  writeRaw('{ "permissionLevel": "askEveryTime" }');
-  expect(() => readUserConfig()).toThrow(MalformedConfigError);
+	writeRaw('{ "permissionLevel": "askEveryTime" }');
+	expect(() => readUserConfig()).toThrow(MalformedConfigError);
 });
 
 test("valid round trip: writeUserConfig then readUserConfig", () => {
-  writeUserConfig({
-    selection: { providerId: "chatgpt-plan", modelId: "gpt-5.5" },
-    effort: "medium",
-    permissionLevel: "fullAccess",
-  });
-  expect(readUserConfig()).toEqual({
-    selection: { providerId: "chatgpt-plan", modelId: "gpt-5.5" },
-    effort: "medium",
-    permissionLevel: "fullAccess",
-  });
+	writeUserConfig({
+		selection: { providerId: "chatgpt-plan", modelId: "gpt-5.5" },
+		effort: "medium",
+		permissionLevel: "fullAccess",
+	});
+	expect(readUserConfig()).toEqual({
+		selection: { providerId: "chatgpt-plan", modelId: "gpt-5.5" },
+		effort: "medium",
+		permissionLevel: "fullAccess",
+	});
 });
 
 test("valid file with no selection / no effort returns empty object (still no fallback to catalog default)", () => {
-  writeRaw("{}");
-  expect(readUserConfig()).toEqual({});
+	writeRaw("{}");
+	expect(readUserConfig()).toEqual({});
 });
 
 test("hasCompletedOnboarding with non-boolean throws MalformedConfigError", () => {
-  writeRaw('{ "hasCompletedOnboarding": "yes" }');
-  expect(() => readUserConfig()).toThrow(MalformedConfigError);
+	writeRaw('{ "hasCompletedOnboarding": "yes" }');
+	expect(() => readUserConfig()).toThrow(MalformedConfigError);
 });
 
 test("valid round trip preserves hasCompletedOnboarding alongside selection/effort", () => {
-  writeUserConfig({
-    selection: { providerId: "chatgpt-plan", modelId: "gpt-5.5" },
-    effort: "medium",
-    hasCompletedOnboarding: true,
-  });
-  expect(readUserConfig()).toEqual({
-    selection: { providerId: "chatgpt-plan", modelId: "gpt-5.5" },
-    effort: "medium",
-    hasCompletedOnboarding: true,
-  });
+	writeUserConfig({
+		selection: { providerId: "chatgpt-plan", modelId: "gpt-5.5" },
+		effort: "medium",
+		hasCompletedOnboarding: true,
+	});
+	expect(readUserConfig()).toEqual({
+		selection: { providerId: "chatgpt-plan", modelId: "gpt-5.5" },
+		effort: "medium",
+		hasCompletedOnboarding: true,
+	});
 });

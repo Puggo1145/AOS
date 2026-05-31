@@ -12,8 +12,10 @@
 
 import type { SimpleStreamOptions, StreamOptions } from "../types";
 
-export function buildBaseOptions(simple: SimpleStreamOptions | undefined): StreamOptions {
-  if (!simple) return {};
-  const { reasoning: _r, ...base } = simple;
-  return base;
+export function buildBaseOptions(
+	simple: SimpleStreamOptions | undefined,
+): StreamOptions {
+	if (!simple) return {};
+	const { reasoning: _r, ...base } = simple;
+	return base;
 }

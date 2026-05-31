@@ -15,9 +15,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 export function workspaceDir(): string {
-  return join(homedir(), ".notch-agent", "workspace");
+	return join(homedir(), ".notch-agent", "workspace");
 }
 
 export function ensureWorkspace(): void {
-  mkdirSync(workspaceDir(), { recursive: true });
+	mkdirSync(workspaceDir(), { recursive: true });
 }

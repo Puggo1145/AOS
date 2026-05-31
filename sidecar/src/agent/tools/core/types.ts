@@ -16,14 +16,14 @@ import type { Api, Model, Tool, ToolResultContent } from "../../../llm/types";
 import type { ComputerUseAppSessionInfo } from "../../session/session";
 
 export interface ComputerUseToolRuntime {
-  readonly appSession?: ComputerUseAppSessionInfo;
+	readonly appSession?: ComputerUseAppSessionInfo;
 }
 
 export interface ToolRuntimeEffects {
-  readonly computerUse: {
-    setAppSession(info: ComputerUseAppSessionInfo): void;
-    clearAppSession(): void;
-  };
+	readonly computerUse: {
+		setAppSession(info: ComputerUseAppSessionInfo): void;
+		clearAppSession(): void;
+	};
 }
 
 /// Per-call context handed to a tool's `execute`. Carries the abort signal
@@ -39,14 +39,14 @@ export interface ToolRuntimeEffects {
 /// moment a new model is added. Use the `supportsX` predicates from
 /// `llm/models/capabilities`.
 export interface ToolExecContext {
-  sessionId: string;
-  turnId: string;
-  toolCallId: string;
-  model: Model<Api>;
-  computerUse?: ComputerUseToolRuntime;
-  /// Aborted when the parent turn is cancelled or reset. Tools MUST honor
-  /// it to avoid leaking subprocesses / file handles.
-  signal: AbortSignal;
+	sessionId: string;
+	turnId: string;
+	toolCallId: string;
+	model: Model<Api>;
+	computerUse?: ComputerUseToolRuntime;
+	/// Aborted when the parent turn is cancelled or reset. Tools MUST honor
+	/// it to avoid leaking subprocesses / file handles.
+	signal: AbortSignal;
 }
 
 /// Successful or recoverable-error tool output.
@@ -60,9 +60,9 @@ export interface ToolExecContext {
 ///     Handlers can either return `{ isError: true }` directly or throw a
 ///     `ToolUserError` — both reach the model as recoverable feedback.
 export interface ToolExecResult<TDetails = unknown> {
-  content: ToolResultContent[];
-  details?: TDetails;
-  isError: boolean;
+	content: ToolResultContent[];
+	details?: TDetails;
+	isError: boolean;
 }
 
 /// Recoverable failure that the model can be expected to fix on its next
@@ -80,26 +80,26 @@ export interface ToolExecResult<TDetails = unknown> {
 /// return `{ isError: true }`) when the failure is part of the tool's
 /// designed contract rather than a leaked exception.
 export class ToolUserError extends Error {
-  override readonly name = "ToolUserError";
-  constructor(message: string) {
-    super(message);
-  }
+	override readonly name = "ToolUserError";
 }
 
 /// A tool handler bundles the LLM-visible spec with the executable
 /// implementation. The registry stores these; the loop picks them by
 /// `spec.name` when an assistant emits a `toolCall`.
-export interface ToolHandler<TArgs = Record<string, unknown>, TDetails = unknown> {
-  /// Sidecar-facing argument schema. This is the single source of truth for
-  /// tool-call parameter validation; `spec.parameters` is generated from it
-  /// for the model-facing JSON Schema contract.
-  parameterSchema: z.ZodType<any, any, any>;
-  spec: Tool;
-  execute(args: TArgs, ctx: ToolExecContext): Promise<ToolExecResult<TDetails>>;
-  applyRuntimeEffects?(
-    result: ToolExecResult<TDetails>,
-    args: TArgs,
-    ctx: ToolExecContext,
-    effects: ToolRuntimeEffects,
-  ): void;
+export interface ToolHandler<
+	TArgs = Record<string, unknown>,
+	TDetails = unknown,
+> {
+	/// Sidecar-facing argument schema. This is the single source of truth for
+	/// tool-call parameter validation; `spec.parameters` is generated from it
+	/// for the model-facing JSON Schema contract.
+	parameterSchema: z.ZodType<any, any, any>;
+	spec: Tool;
+	execute(args: TArgs, ctx: ToolExecContext): Promise<ToolExecResult<TDetails>>;
+	applyRuntimeEffects?(
+		result: ToolExecResult<TDetails>,
+		args: TArgs,
+		ctx: ToolExecContext,
+		effects: ToolRuntimeEffects,
+	): void;
 }

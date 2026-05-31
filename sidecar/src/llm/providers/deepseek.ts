@@ -27,45 +27,45 @@
 //     `compat.reasoningField` + `supportsThinking(model)`.
 
 import type {
-  SimpleStreamFunction,
-  SimpleStreamOptions,
-  StreamFunction,
+	SimpleStreamFunction,
+	SimpleStreamOptions,
+	StreamFunction,
 } from "../types";
 import {
-  type OpenAICompletionsCompat,
-  type OpenAICompletionsOptions,
-  resolveCompat,
-  runCompletionsStream,
+	type OpenAICompletionsCompat,
+	type OpenAICompletionsOptions,
+	resolveCompat,
+	runCompletionsStream,
 } from "./openai-completions";
 import { buildBaseOptions } from "./simple-options";
 
 const DEEPSEEK_COMPAT_RAW: OpenAICompletionsCompat = {
-  supportsStore: false,
-  supportsDeveloperRole: false,
-  supportsReasoningEffort: true,
-  maxTokensField: "max_tokens",
-  reasoningField: "reasoning_content",
-  requiresToolResultName: false,
+	supportsStore: false,
+	supportsDeveloperRole: false,
+	supportsReasoningEffort: true,
+	maxTokensField: "max_tokens",
+	reasoningField: "reasoning_content",
+	requiresToolResultName: false,
 };
 
 const DEEPSEEK_COMPAT = resolveCompat(DEEPSEEK_COMPAT_RAW);
 
-export const streamDeepseek: StreamFunction<"deepseek", OpenAICompletionsOptions> = (
-  model,
-  context,
-  options,
-) => runCompletionsStream(model, context, options, DEEPSEEK_COMPAT);
+export const streamDeepseek: StreamFunction<
+	"deepseek",
+	OpenAICompletionsOptions
+> = (model, context, options) =>
+	runCompletionsStream(model, context, options, DEEPSEEK_COMPAT);
 
 export const streamSimpleDeepseek: SimpleStreamFunction<"deepseek"> = (
-  model,
-  context,
-  simple?: SimpleStreamOptions,
+	model,
+	context,
+	simple?: SimpleStreamOptions,
 ) => {
-  const base = buildBaseOptions(simple);
-  return runCompletionsStream(
-    model,
-    context,
-    { ...base, reasoningEffort: simple?.reasoning },
-    DEEPSEEK_COMPAT,
-  );
+	const base = buildBaseOptions(simple);
+	return runCompletionsStream(
+		model,
+		context,
+		{ ...base, reasoningEffort: simple?.reasoning },
+		DEEPSEEK_COMPAT,
+	);
 };

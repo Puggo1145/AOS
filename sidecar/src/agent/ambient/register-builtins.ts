@@ -11,8 +11,8 @@ import { silentProgressAmbientProvider } from "./providers/silent-progress";
 let registered = false;
 
 export function registerBuiltinAmbient(): void {
-  if (registered) return;
-  registered = true;
-  ambientRegistry.register(todosAmbientProvider);
-  ambientRegistry.register(silentProgressAmbientProvider);
+	if (registered) return;
+	registered = true;
+	ambientRegistry.register(todosAmbientProvider);
+	ambientRegistry.register(silentProgressAmbientProvider);
 }

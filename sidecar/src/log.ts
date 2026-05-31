@@ -8,12 +8,12 @@
 type Level = "info" | "warn" | "error";
 
 function log(level: Level, msg: string, extra?: Record<string, unknown>): void {
-  const line = JSON.stringify({ t: Date.now(), level, msg, ...extra });
-  process.stderr.write(line + "\n");
+	const line = JSON.stringify({ t: Date.now(), level, msg, ...extra });
+	process.stderr.write(`${line}\n`);
 }
 
 export const logger = {
-  info: (m: string, e?: Record<string, unknown>) => log("info", m, e),
-  warn: (m: string, e?: Record<string, unknown>) => log("warn", m, e),
-  error: (m: string, e?: Record<string, unknown>) => log("error", m, e),
+	info: (m: string, e?: Record<string, unknown>) => log("info", m, e),
+	warn: (m: string, e?: Record<string, unknown>) => log("warn", m, e),
+	error: (m: string, e?: Record<string, unknown>) => log("error", m, e),
 };

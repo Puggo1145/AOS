@@ -10,18 +10,18 @@ import type { Session } from "./session";
 export type SessionId = string;
 
 export interface SessionInfo {
-  /// Process-unique. `sess_<8-byte hex>`.
-  id: SessionId;
-  /// ms since epoch.
-  createdAt: number;
-  /// Default "New Conversation"; auto-derived from first user prompt (≤32 chars, first
-  /// non-empty line). Derivation runs once on first submit; not auto-overwritten.
-  title: string;
+	/// Process-unique. `sess_<8-byte hex>`.
+	id: SessionId;
+	/// ms since epoch.
+	createdAt: number;
+	/// Default "New Conversation"; auto-derived from first user prompt (≤32 chars, first
+	/// non-empty line). Derivation runs once on first submit; not auto-overwritten.
+	title: string;
 }
 
 /// Manager → sink events. These are runtime events; RPC handlers perform the
 /// wire projection at the dispatch edge.
 export type SessionEvent =
-  | { kind: "created"; session: Session }
-  | { kind: "activated"; sessionId: SessionId }
-  | { kind: "listChanged" };
+	| { kind: "created"; session: Session }
+	| { kind: "activated"; sessionId: SessionId }
+	| { kind: "listChanged" };

@@ -4,60 +4,94 @@
 // `SESSION_METHOD_KINDS` table guards direction; this module is the only
 // place that wires the manager's SessionEvent sink to the wire protocol.
 
-import { RPCErrorCode, RPCMethod, type SessionActivateParams, type SessionActivateResult, type SessionCreateParams, type SessionCreateResult, type SessionListResult } from "../../rpc/rpc-types";
-import { Dispatcher, RPCMethodError } from "../../rpc/dispatcher";
-import { conversationSnapshotToWire, sessionToListItem, sessionsToListItems } from "../rpc-projection";
+import {
+	RPCErrorCode,
+	RPCMethod,
+	type SessionActivateParams,
+	type SessionActivateResult,
+	type SessionCreateParams,
+	type SessionCreateResult,
+	type SessionListResult,
+} from "../../rpc/rpc-types";
+import { type Dispatcher, RPCMethodError } from "../../rpc/dispatcher";
+import {
+	conversationSnapshotToWire,
+	sessionToListItem,
+	sessionsToListItems,
+} from "../rpc-projection";
 import type { SessionManager } from "./manager";
 
-export function registerSessionHandlers(dispatcher: Dispatcher, manager: SessionManager): void {
-  // Bridge manager events → wire notifications. Single edge from internal
-  // SessionEvent type to RPC; everywhere else (loop.ts, etc.) goes through
-  // the manager API rather than calling `dispatcher.notify` for session.*.
-  manager.setSink((event) => {
-    switch (event.kind) {
-      case "created":
-        dispatcher.notify(RPCMethod.sessionCreated, { session: sessionToListItem(event.session) });
-        return;
-      case "activated":
-        dispatcher.notify(RPCMethod.sessionActivated, { sessionId: event.sessionId });
-        return;
-      case "listChanged":
-        dispatcher.notify(RPCMethod.sessionListChanged, {});
-        return;
-    }
-  });
+export function registerSessionHandlers(
+	dispatcher: Dispatcher,
+	manager: SessionManager,
+): void {
+	// Bridge manager events → wire notifications. Single edge from internal
+	// SessionEvent type to RPC; everywhere else (loop.ts, etc.) goes through
+	// the manager API rather than calling `dispatcher.notify` for session.*.
+	manager.setSink((event) => {
+		switch (event.kind) {
+			case "created":
+				dispatcher.notify(RPCMethod.sessionCreated, {
+					session: sessionToListItem(event.session),
+				});
+				return;
+			case "activated":
+				dispatcher.notify(RPCMethod.sessionActivated, {
+					sessionId: event.sessionId,
+				});
+				return;
+			case "listChanged":
+				dispatcher.notify(RPCMethod.sessionListChanged, {});
+				return;
+		}
+	});
 
-  dispatcher.registerRequest(RPCMethod.sessionCreate, async (raw): Promise<SessionCreateResult> => {
-    const params = (raw ?? {}) as SessionCreateParams;
-    const session = manager.create({ title: params.title });
-    return { session: sessionToListItem(session) };
-  });
+	dispatcher.registerRequest(
+		RPCMethod.sessionCreate,
+		async (raw): Promise<SessionCreateResult> => {
+			const params = (raw ?? {}) as SessionCreateParams;
+			const session = manager.create({ title: params.title });
+			return { session: sessionToListItem(session) };
+		},
+	);
 
-  dispatcher.registerRequest(RPCMethod.sessionList, async (): Promise<SessionListResult> => {
-    return {
-      activeId: manager.activeId,
-      sessions: sessionsToListItems(manager.list()),
-    };
-  });
+	dispatcher.registerRequest(
+		RPCMethod.sessionList,
+		async (): Promise<SessionListResult> => {
+			return {
+				activeId: manager.activeId,
+				sessions: sessionsToListItems(manager.list()),
+			};
+		},
+	);
 
-  dispatcher.registerRequest(RPCMethod.sessionActivate, async (raw): Promise<SessionActivateResult> => {
-    const { sessionId } = (raw ?? {}) as SessionActivateParams;
-    if (typeof sessionId !== "string") {
-      throw new RPCMethodError(RPCErrorCode.invalidParams, "session.activate requires { sessionId }");
-    }
-    const session = manager.get(sessionId);
-    if (!session) {
-      throw new RPCMethodError(RPCErrorCode.unknownSession, `unknown sessionId: ${sessionId}`);
-    }
-    manager.activate(sessionId);
-    const snapshot = conversationSnapshotToWire(session.conversation);
-    // s03: hydrate the Shell's todo panel for the freshly visible session.
-    // Sent regardless of whether the list is empty — the Shell mirror uses
-    // an empty list to clear any stale state from the previous session.
-    dispatcher.notify(RPCMethod.uiTodo, {
-      sessionId: session.id,
-      items: session.todos.snapshot(),
-    });
-    return { snapshot };
-  });
+	dispatcher.registerRequest(
+		RPCMethod.sessionActivate,
+		async (raw): Promise<SessionActivateResult> => {
+			const { sessionId } = (raw ?? {}) as SessionActivateParams;
+			if (typeof sessionId !== "string") {
+				throw new RPCMethodError(
+					RPCErrorCode.invalidParams,
+					"session.activate requires { sessionId }",
+				);
+			}
+			const session = manager.get(sessionId);
+			if (!session) {
+				throw new RPCMethodError(
+					RPCErrorCode.unknownSession,
+					`unknown sessionId: ${sessionId}`,
+				);
+			}
+			manager.activate(sessionId);
+			const snapshot = conversationSnapshotToWire(session.conversation);
+			// s03: hydrate the Shell's todo panel for the freshly visible session.
+			// Sent regardless of whether the list is empty — the Shell mirror uses
+			// an empty list to clear any stale state from the previous session.
+			dispatcher.notify(RPCMethod.uiTodo, {
+				sessionId: session.id,
+				items: session.todos.snapshot(),
+			});
+			return { snapshot };
+		},
+	);
 }

@@ -5,147 +5,153 @@
 // rendered back onto the UI wire.
 
 import type {
-  Api,
-  AssistantMessage,
-  Model,
-  ToolCall,
-  ToolResultContent,
+	Api,
+	AssistantMessage,
+	Model,
+	ToolCall,
+	ToolResultContent,
 } from "../../llm";
 import type { Dispatcher } from "../../rpc/dispatcher";
 import { RPCMethod } from "../../rpc/rpc-types";
 import type { Session } from "../session/session";
 import { validateToolArguments } from "../tools/core/schema";
 import {
-  ToolUserError,
-  type ToolExecContext,
-  type ToolExecResult,
-  type ToolHandler,
-  type ToolRuntimeEffects,
+	ToolUserError,
+	type ToolExecContext,
+	type ToolExecResult,
+	type ToolHandler,
+	type ToolRuntimeEffects,
 } from "../tools";
 
 export type ToolCallOutcome =
-  | { kind: "ready"; args: Record<string, unknown>; handler: ToolHandler<any, any> }
-  | { kind: "rejected"; errorMessage: string };
+	| {
+			kind: "ready";
+			args: Record<string, unknown>;
+			handler: ToolHandler<any, any>;
+	  }
+	| { kind: "rejected"; errorMessage: string };
 
 export type ToolDispatchCtx = ToolExecContext;
 
 export function extractToolCalls(msg: AssistantMessage): ToolCall[] {
-  const out: ToolCall[] = [];
-  for (const c of msg.content) {
-    if (c.type === "toolCall") out.push(c);
-  }
-  return out;
+	const out: ToolCall[] = [];
+	for (const c of msg.content) {
+		if (c.type === "toolCall") out.push(c);
+	}
+	return out;
 }
 
 export function assistantSpoke(msg: AssistantMessage): boolean {
-  return msg.content.some((c) => c.type === "text" && c.text.trim().length > 0);
+	return msg.content.some((c) => c.type === "text" && c.text.trim().length > 0);
 }
 
 export function prepareToolCall(
-  call: ToolCall,
-  byName: ReadonlyMap<string, ToolHandler<any, any>>,
+	call: ToolCall,
+	byName: ReadonlyMap<string, ToolHandler<any, any>>,
 ): ToolCallOutcome {
-  const handler = byName.get(call.name);
-  if (!handler) {
-    const known = Array.from(byName.keys()).join(", ") || "<none>";
-    return {
-      kind: "rejected",
-      errorMessage: `Unknown tool "${call.name}". Available tools: ${known}.`,
-    };
-  }
-  try {
-    const args = validateToolArguments(handler, call) as Record<string, unknown>;
-    return { kind: "ready", args, handler };
-  } catch (err) {
-    return {
-      kind: "rejected",
-      errorMessage: err instanceof Error ? err.message : String(err),
-    };
-  }
+	const handler = byName.get(call.name);
+	if (!handler) {
+		const known = Array.from(byName.keys()).join(", ") || "<none>";
+		return {
+			kind: "rejected",
+			errorMessage: `Unknown tool "${call.name}". Available tools: ${known}.`,
+		};
+	}
+	try {
+		const args = validateToolArguments(handler, call) as Record<
+			string,
+			unknown
+		>;
+		return { kind: "ready", args, handler };
+	} catch (err) {
+		return {
+			kind: "rejected",
+			errorMessage: err instanceof Error ? err.message : String(err),
+		};
+	}
 }
 
 export async function runTool(
-  handler: ToolHandler<any, any>,
-  args: Record<string, unknown>,
-  toolName: string,
-  ctx: ToolDispatchCtx,
-  effects: ToolRuntimeEffects,
+	handler: ToolHandler<any, any>,
+	args: Record<string, unknown>,
+	toolName: string,
+	ctx: ToolDispatchCtx,
+	effects: ToolRuntimeEffects,
 ): Promise<ToolExecResult> {
-  try {
-    const result = await handler.execute(args, ctx);
-    if (!result.isError) {
-      handler.applyRuntimeEffects?.(result, args, ctx, effects);
-    }
-    return result;
-  } catch (err) {
-    if (err instanceof ToolUserError) {
-      return {
-        content: [{ type: "text", text: err.message }],
-        isError: true,
-      };
-    }
-    if (ctx.signal.aborted) {
-      return {
-        content: [{ type: "text", text: `${toolName} cancelled` }],
-        isError: true,
-      };
-    }
-    const inner = err instanceof Error ? err : new Error(String(err));
-    const wrapped = new Error(`Tool "${toolName}" threw: ${inner.message}`);
-    (wrapped as Error & { cause?: unknown }).cause = inner;
-    throw wrapped;
-  }
+	try {
+		const result = await handler.execute(args, ctx);
+		if (!result.isError) {
+			handler.applyRuntimeEffects?.(result, args, ctx, effects);
+		}
+		return result;
+	} catch (err) {
+		if (err instanceof ToolUserError) {
+			return {
+				content: [{ type: "text", text: err.message }],
+				isError: true,
+			};
+		}
+		if (ctx.signal.aborted) {
+			return {
+				content: [{ type: "text", text: `${toolName} cancelled` }],
+				isError: true,
+			};
+		}
+		const inner = err instanceof Error ? err : new Error(String(err));
+		const wrapped = new Error(`Tool "${toolName}" threw: ${inner.message}`);
+		(wrapped as Error & { cause?: unknown }).cause = inner;
+		throw wrapped;
+	}
 }
 
 export function renderToolResultForWire(content: ToolResultContent[]): string {
-  const out: string[] = [];
-  for (const c of content) {
-    if (c.type === "text") out.push(c.text);
-    else if (c.type === "image") out.push(`[image ${c.mimeType}]`);
-  }
-  return out.join("\n");
+	const out: string[] = [];
+	for (const c of content) {
+		if (c.type === "text") out.push(c.text);
+		else if (c.type === "image") out.push(`[image ${c.mimeType}]`);
+	}
+	return out.join("\n");
 }
 
 export function toolDispatchContext(input: {
-  session: Session;
-  turnId: string;
-  toolCallId: string;
-  model: Model<Api>;
-  signal: AbortSignal;
+	session: Session;
+	turnId: string;
+	toolCallId: string;
+	model: Model<Api>;
+	signal: AbortSignal;
 }): ToolDispatchCtx {
-  const { session } = input;
-  return {
-    sessionId: session.id,
-    turnId: input.turnId,
-    toolCallId: input.toolCallId,
-    model: input.model,
-    computerUse: {
-      get appSession() {
-        return session.computerUseAppSession;
-      },
-    },
-    signal: input.signal,
-  };
+	const { session } = input;
+	return {
+		sessionId: session.id,
+		turnId: input.turnId,
+		toolCallId: input.toolCallId,
+		model: input.model,
+		computerUse: {
+			get appSession() {
+				return session.computerUseAppSession;
+			},
+		},
+		signal: input.signal,
+	};
 }
 
 export function toolRuntimeEffects(session: Session): ToolRuntimeEffects {
-  return {
-    computerUse: {
-      setAppSession: (info) => session.setComputerUseAppSession(info),
-      clearAppSession: () => session.clearComputerUseAppSession(),
-    },
-  };
+	return {
+		computerUse: {
+			setAppSession: (info) => session.setComputerUseAppSession(info),
+			clearAppSession: () => session.clearComputerUseAppSession(),
+		},
+	};
 }
 
 export async function finishToolRuntimeAfterTerminalAssistantReply(input: {
-  dispatcher: Dispatcher;
-  session: Session;
+	dispatcher: Dispatcher;
+	session: Session;
 }): Promise<void> {
-  const appSession = input.session.computerUseAppSession;
-  if (!appSession) return;
-  await input.dispatcher.request(
-    RPCMethod.computerUseStopAppSession,
-    { pid: appSession.pid },
-  );
-  input.session.clearComputerUseAppSession();
+	const appSession = input.session.computerUseAppSession;
+	if (!appSession) return;
+	await input.dispatcher.request(RPCMethod.computerUseStopAppSession, {
+		pid: appSession.pid,
+	});
+	input.session.clearComputerUseAppSession();
 }

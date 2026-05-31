@@ -1,25 +1,27 @@
 {
-  "name": "notch-agent-sidecar",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "lint": "biome lint .",
-    "lint:fix": "biome lint --write .",
-    "test": "bun test",
-    "typecheck": "tsc --noEmit"
-  },
-  "engines": {
-    "bun": ">=1.1.0"
-  },
-  "dependencies": {
-    "eventsource-parser": "^3.0.0",
-    "partial-json": "^0.1.7",
-    "zod": "^4.4.3"
-  },
-  "devDependencies": {
-    "@biomejs/biome": "^2.4.16",
-    "@types/bun": "latest",
-    "typescript": "^5.5.0"
-  }
+	"name": "notch-agent-sidecar",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"format": "biome format --write .",
+		"format:check": "biome format .",
+		"lint": "biome lint .",
+		"lint:fix": "biome lint --write .",
+		"test": "bun test",
+		"typecheck": "tsc --noEmit"
+	},
+	"engines": {
+		"bun": ">=1.1.0"
+	},
+	"dependencies": {
+		"eventsource-parser": "^3.0.0",
+		"partial-json": "^0.1.7",
+		"zod": "^4.4.3"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.4.16",
+		"@types/bun": "latest",
+		"typescript": "^5.5.0"
+	}
 }

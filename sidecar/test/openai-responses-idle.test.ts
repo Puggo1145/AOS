@@ -10,38 +10,46 @@ import { test, expect } from "bun:test";
 import { readWithIdleTimeout } from "../src/llm/providers/openai-responses";
 
 test("readWithIdleTimeout rejects when the underlying read never resolves", async () => {
-  const reader = {
-    read: () => new Promise<{ value?: Uint8Array; done: boolean }>(() => { /* never resolves */ }),
-  };
-  await expect(readWithIdleTimeout(reader, 30)).rejects.toThrow(/idle for 30ms/);
+	const reader = {
+		read: () =>
+			new Promise<{ value?: Uint8Array; done: boolean }>(() => {
+				/* never resolves */
+			}),
+	};
+	await expect(readWithIdleTimeout(reader, 30)).rejects.toThrow(
+		/idle for 30ms/,
+	);
 });
 
 test("readWithIdleTimeout returns the chunk when read resolves before the deadline", async () => {
-  const payload = new TextEncoder().encode("hello");
-  const reader = {
-    read: async () => ({ value: payload, done: false }),
-  };
-  const result = await readWithIdleTimeout(reader, 1000);
-  expect(result.done).toBe(false);
-  expect(result.value).toBe(payload);
+	const payload = new TextEncoder().encode("hello");
+	const reader = {
+		read: async () => ({ value: payload, done: false }),
+	};
+	const result = await readWithIdleTimeout(reader, 1000);
+	expect(result.done).toBe(false);
+	expect(result.value).toBe(payload);
 });
 
 test("readWithIdleTimeout propagates a normal stream end", async () => {
-  const reader = {
-    read: async () => ({ done: true }),
-  };
-  const result = await readWithIdleTimeout(reader, 1000);
-  expect(result.done).toBe(true);
+	const reader = {
+		read: async () => ({ done: true }),
+	};
+	const result = await readWithIdleTimeout(reader, 1000);
+	expect(result.done).toBe(true);
 });
 
 test("readWithIdleTimeout rejects immediately when the abort signal fires", async () => {
-  const controller = new AbortController();
-  const reader = {
-    read: () => new Promise<{ value?: Uint8Array; done: boolean }>(() => { /* never resolves */ }),
-  };
-  const start = performance.now();
-  const pending = readWithIdleTimeout(reader, 1000, controller.signal);
-  controller.abort();
-  await expect(pending).rejects.toThrow(/aborted/);
-  expect(performance.now() - start).toBeLessThan(200);
+	const controller = new AbortController();
+	const reader = {
+		read: () =>
+			new Promise<{ value?: Uint8Array; done: boolean }>(() => {
+				/* never resolves */
+			}),
+	};
+	const start = performance.now();
+	const pending = readWithIdleTimeout(reader, 1000, controller.signal);
+	controller.abort();
+	await expect(pending).rejects.toThrow(/aborted/);
+	expect(performance.now() - start).toBeLessThan(200);
 });

@@ -18,91 +18,107 @@ import { registerProviderHandlers } from "./auth/register";
 import { registerConfigHandlers } from "./config/handlers";
 import { readPermissionLevel } from "./config/storage";
 import {
-  registerBuiltinTools,
-  registerComputerUseTools,
-  registerTodoTool,
-  toolRegistry,
+	registerBuiltinTools,
+	registerComputerUseTools,
+	registerTodoTool,
+	toolRegistry,
 } from "./agent/tools";
 import { registerBuiltinAmbient } from "./agent/ambient";
 import {
-  assertRegisteredToolsMatchPermissionPolicies,
-  builtinPermissionPolicyCatalog,
-  PermissionGateway,
+	assertRegisteredToolsMatchPermissionPolicies,
+	builtinPermissionPolicyCatalog,
+	PermissionGateway,
 } from "./agent/permissions";
 import { ensureWorkspace } from "./agent/workspace";
 import { logger } from "./log";
-import { NOTCH_PROTOCOL_VERSION, RPCMethod, type HelloResult } from "./rpc/rpc-types";
+import {
+	NOTCH_PROTOCOL_VERSION,
+	RPCMethod,
+	type HelloResult,
+} from "./rpc/rpc-types";
 
 // Side-effect: triggers register-builtins (api providers + model catalog).
 import "./llm";
 
 async function main(): Promise<void> {
-  process.stderr.write(`[notch-agent-sidecar] starting; protocol ${NOTCH_PROTOCOL_VERSION}\n`);
+	process.stderr.write(
+		`[notch-agent-sidecar] starting; protocol ${NOTCH_PROTOCOL_VERSION}\n`,
+	);
 
-  // Side-effect bootstrap: ensure ~/.notch-agent/workspace/ exists (the agent's
-  // default scratch directory) and register every built-in tool into the
-  // global ToolRegistry before the agent loop ever runs.
-  ensureWorkspace();
-  registerBuiltinTools();
-  // Built-in ambient providers: today only the per-session todos block.
-  // Registered alongside the tool registry so every turn assembled below
-  // sees a populated ambient registry.
-  registerBuiltinAmbient();
+	// Side-effect bootstrap: ensure ~/.notch-agent/workspace/ exists (the agent's
+	// default scratch directory) and register every built-in tool into the
+	// global ToolRegistry before the agent loop ever runs.
+	ensureWorkspace();
+	registerBuiltinTools();
+	// Built-in ambient providers: today only the per-session todos block.
+	// Registered alongside the tool registry so every turn assembled below
+	// sees a populated ambient registry.
+	registerBuiltinAmbient();
 
-  const transport = new StdioTransport();
-  const dispatcher = new Dispatcher(transport);
-  registerComputerUseTools(toolRegistry, dispatcher);
+	const transport = new StdioTransport();
+	const dispatcher = new Dispatcher(transport);
+	registerComputerUseTools(toolRegistry, dispatcher);
 
-  // Single process-wide SessionManager. Manager starts EMPTY; the Shell
-  // issues `session.create` after `rpc.hello` to obtain its bootstrap
-  // sessionId. No implicit/default session — see docs/designs/session-management.md.
-  const sessions = new SessionManager();
-  // s03 TodoWrite tool — needs the SessionManager to resolve per-session
-  // todo state, so it registers AFTER the manager exists but BEFORE the
-  // agent loop attaches (the loop snapshots the tool registry per turn).
-  registerTodoTool(sessions);
-  assertRegisteredToolsMatchPermissionPolicies(toolRegistry.list(), builtinPermissionPolicyCatalog);
-  const permissionGateway = new PermissionGateway(dispatcher, builtinPermissionPolicyCatalog, readPermissionLevel);
-  registerSessionHandlers(dispatcher, sessions);
-  registerAgentHandlers(dispatcher, { manager: sessions, permissionGateway });
-  registerProviderHandlers(dispatcher);
-  registerConfigHandlers(dispatcher);
-  // rpc.ping handler — installed before the reader sees any inbound frames so
-  // the Shell can immediately health-check us after the handshake.
-  dispatcher.registerRequest(RPCMethod.rpcPing, async () => ({}));
+	// Single process-wide SessionManager. Manager starts EMPTY; the Shell
+	// issues `session.create` after `rpc.hello` to obtain its bootstrap
+	// sessionId. No implicit/default session — see docs/designs/session-management.md.
+	const sessions = new SessionManager();
+	// s03 TodoWrite tool — needs the SessionManager to resolve per-session
+	// todo state, so it registers AFTER the manager exists but BEFORE the
+	// agent loop attaches (the loop snapshots the tool registry per turn).
+	registerTodoTool(sessions);
+	assertRegisteredToolsMatchPermissionPolicies(
+		toolRegistry.list(),
+		builtinPermissionPolicyCatalog,
+	);
+	const permissionGateway = new PermissionGateway(
+		dispatcher,
+		builtinPermissionPolicyCatalog,
+		readPermissionLevel,
+	);
+	registerSessionHandlers(dispatcher, sessions);
+	registerAgentHandlers(dispatcher, { manager: sessions, permissionGateway });
+	registerProviderHandlers(dispatcher);
+	registerConfigHandlers(dispatcher);
+	// rpc.ping handler — installed before the reader sees any inbound frames so
+	// the Shell can immediately health-check us after the handshake.
+	dispatcher.registerRequest(RPCMethod.rpcPing, async () => ({}));
 
-  await dispatcher.start();
+	await dispatcher.start();
 
-  // rpc.hello — first frame Bun sends. 5s budget gives the Shell time to
-  // attach its reader after spawn.
-  try {
-    const result = await dispatcher.request<HelloResult>(
-      RPCMethod.rpcHello,
-      {
-        protocolVersion: NOTCH_PROTOCOL_VERSION,
-        clientInfo: { name: "notch-agent-sidecar", version: "0.1.0" },
-      },
-      { timeoutMs: 5_000 },
-    );
-    const remoteMajor = result.protocolVersion.split(".")[0];
-    const localMajor = NOTCH_PROTOCOL_VERSION.split(".")[0];
-    if (remoteMajor !== localMajor) {
-      logger.error("protocol major mismatch", { remote: result.protocolVersion, local: NOTCH_PROTOCOL_VERSION });
-      process.exit(2);
-    }
-    logger.info("rpc.hello ok", { protocolVersion: result.protocolVersion });
-  } catch (err) {
-    logger.error("rpc.hello failed", { err: String(err) });
-    process.exit(2);
-  }
+	// rpc.hello — first frame Bun sends. 5s budget gives the Shell time to
+	// attach its reader after spawn.
+	try {
+		const result = await dispatcher.request<HelloResult>(
+			RPCMethod.rpcHello,
+			{
+				protocolVersion: NOTCH_PROTOCOL_VERSION,
+				clientInfo: { name: "notch-agent-sidecar", version: "0.1.0" },
+			},
+			{ timeoutMs: 5_000 },
+		);
+		const remoteMajor = result.protocolVersion.split(".")[0];
+		const localMajor = NOTCH_PROTOCOL_VERSION.split(".")[0];
+		if (remoteMajor !== localMajor) {
+			logger.error("protocol major mismatch", {
+				remote: result.protocolVersion,
+				local: NOTCH_PROTOCOL_VERSION,
+			});
+			process.exit(2);
+		}
+		logger.info("rpc.hello ok", { protocolVersion: result.protocolVersion });
+	} catch (err) {
+		logger.error("rpc.hello failed", { err: String(err) });
+		process.exit(2);
+	}
 
-  // Keep the process alive — the dispatcher reader loop owns liveness.
-  await new Promise<void>(() => {
-    /* never resolves; process exits via signal or dispatcher reader EOF */
-  });
+	// Keep the process alive — the dispatcher reader loop owns liveness.
+	await new Promise<void>(() => {
+		/* never resolves; process exits via signal or dispatcher reader EOF */
+	});
 }
 
 main().catch((err) => {
-  logger.error("sidecar fatal", { err: String(err) });
-  process.exit(1);
+	logger.error("sidecar fatal", { err: String(err) });
+	process.exit(1);
 });

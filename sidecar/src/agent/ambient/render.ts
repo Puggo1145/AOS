@@ -22,12 +22,12 @@ import type { Session } from "../session/session";
 import { ambientRegistry } from "./registry";
 
 export function renderAmbient(session: Session): string | null {
-  const blocks: string[] = [];
-  for (const provider of ambientRegistry.list()) {
-    const inner = provider.render(session);
-    if (inner === null) continue;
-    blocks.push(`<${provider.name}>\n${inner}\n</${provider.name}>`);
-  }
-  if (blocks.length === 0) return null;
-  return `<ambient>\n${blocks.join("\n")}\n</ambient>`;
+	const blocks: string[] = [];
+	for (const provider of ambientRegistry.list()) {
+		const inner = provider.render(session);
+		if (inner === null) continue;
+		blocks.push(`<${provider.name}>\n${inner}\n</${provider.name}>`);
+	}
+	if (blocks.length === 0) return null;
+	return `<ambient>\n${blocks.join("\n")}\n</ambient>`;
 }

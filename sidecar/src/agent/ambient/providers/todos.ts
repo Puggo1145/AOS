@@ -13,9 +13,9 @@ import type { AmbientProvider } from "../provider";
 import type { Session } from "../../session/session";
 
 export const todosAmbientProvider: AmbientProvider = {
-  name: "todos",
-  render(session: Session): string | null {
-    if (session.todos.items.length === 0) return null;
-    return session.todos.render();
-  },
+	name: "todos",
+	render(session: Session): string | null {
+		if (session.todos.items.length === 0) return null;
+		return session.todos.render();
+	},
 };

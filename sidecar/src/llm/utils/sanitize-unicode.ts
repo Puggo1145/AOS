@@ -10,8 +10,8 @@ const LONE_LOW_SURROGATE = /(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 const BOM = /﻿/g;
 
 export function sanitizeSurrogates(input: string): string {
-  return input
-    .replace(LONE_HIGH_SURROGATE, "")
-    .replace(LONE_LOW_SURROGATE, "")
-    .replace(BOM, "");
+	return input
+		.replace(LONE_HIGH_SURROGATE, "")
+		.replace(LONE_LOW_SURROGATE, "")
+		.replace(BOM, "");
 }

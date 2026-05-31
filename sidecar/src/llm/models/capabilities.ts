@@ -9,12 +9,12 @@
 import type { Api, Model } from "../types";
 
 export {
-  supportsThinking,
-  supportsEffort,
-  supportedEfforts,
-  defaultEffort,
+	supportsThinking,
+	supportsEffort,
+	supportedEfforts,
+	defaultEffort,
 } from "./effort";
 
 export function supportsVision<TApi extends Api>(model: Model<TApi>): boolean {
-  return model.input.includes("image");
+	return model.input.includes("image");
 }

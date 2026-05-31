@@ -14,10 +14,10 @@
 import type { Session } from "../session/session";
 
 export interface AmbientProvider {
-  /// Block name used as the wrapping XML tag in the rendered ambient
-  /// payload. Must be a valid tag fragment — no whitespace, no `<` / `>`.
-  name: string;
-  /// Compute the inner content for this block. Returning `null` signals
-  /// "nothing to inject this round" and the registry omits the wrapper.
-  render(session: Session): string | null;
+	/// Block name used as the wrapping XML tag in the rendered ambient
+	/// payload. Must be a valid tag fragment — no whitespace, no `<` / `>`.
+	name: string;
+	/// Compute the inner content for this block. Returning `null` signals
+	/// "nothing to inject this round" and the registry omits the wrapper.
+	render(session: Session): string | null;
 }

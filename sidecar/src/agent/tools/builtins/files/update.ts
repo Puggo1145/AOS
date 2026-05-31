@@ -13,113 +13,137 @@
 
 import { promises as fs } from "node:fs";
 import {
-  FILE_TOOL_PATH_PARAMETER_DESCRIPTION,
-  FILE_TOOL_PATH_POLICY_TEXT,
-  resolveFileToolPath,
+	FILE_TOOL_PATH_PARAMETER_DESCRIPTION,
+	FILE_TOOL_PATH_POLICY_TEXT,
+	resolveFileToolPath,
 } from "./path-policy";
 import { defineTool } from "../../core/schema";
-import { ToolUserError, type ToolHandler, type ToolExecContext, type ToolExecResult } from "../../core/types";
+import {
+	ToolUserError,
+	type ToolHandler,
+	type ToolExecContext,
+	type ToolExecResult,
+} from "../../core/types";
 import { z } from "zod";
 
 interface UpdateArgs {
-  path: string;
-  old_text: string;
-  new_text: string;
+	path: string;
+	old_text: string;
+	new_text: string;
 }
 
 interface UpdateDetails {
-  resolvedPath: string;
-  bytesBefore: number;
-  bytesAfter: number;
+	resolvedPath: string;
+	bytesBefore: number;
+	bytesAfter: number;
 }
 
-const updateParameterSchema = z.object({
-  path: z.string().describe(FILE_TOOL_PATH_PARAMETER_DESCRIPTION),
-  old_text: z.string().describe("Exact substring to find. Must match verbatim and exactly once."),
-  new_text: z.string().describe("Replacement text. May be empty to delete `old_text`."),
-}).strict();
+const updateParameterSchema = z
+	.object({
+		path: z.string().describe(FILE_TOOL_PATH_PARAMETER_DESCRIPTION),
+		old_text: z
+			.string()
+			.describe(
+				"Exact substring to find. Must match verbatim and exactly once.",
+			),
+		new_text: z
+			.string()
+			.describe("Replacement text. May be empty to delete `old_text`."),
+	})
+	.strict();
 
 export function createUpdateTool(): ToolHandler<UpdateArgs, UpdateDetails> {
-  return defineTool({
-    name: "update",
-    description:
-      `Replace \`old_text\` with \`new_text\` in the file at \`path\`. \`old_text\` must ` +
-      `match exactly once (whitespace and indentation included); zero or multiple matches are ` +
-      `errors. Make \`old_text\` long enough to uniquely identify the edit site. ` +
-      FILE_TOOL_PATH_POLICY_TEXT,
-    parameters: updateParameterSchema,
-    execute: (args, ctx) => runUpdate(args, ctx),
-  });
+	return defineTool({
+		name: "update",
+		description:
+			`Replace \`old_text\` with \`new_text\` in the file at \`path\`. \`old_text\` must ` +
+			`match exactly once (whitespace and indentation included); zero or multiple matches are ` +
+			`errors. Make \`old_text\` long enough to uniquely identify the edit site. ` +
+			FILE_TOOL_PATH_POLICY_TEXT,
+		parameters: updateParameterSchema,
+		execute: (args, ctx) => runUpdate(args, ctx),
+	});
 }
 
-async function runUpdate(args: UpdateArgs, ctx: ToolExecContext): Promise<ToolExecResult<UpdateDetails>> {
-  if (args.old_text.length === 0) {
-    // Empty old_text would match at every byte position — replace().replace
-    // semantics with an empty needle is a footgun, not a feature. Force the
-    // model to be explicit about the edit site.
-    throw new ToolUserError(`update: \`old_text\` must be non-empty.`);
-  }
+async function runUpdate(
+	args: UpdateArgs,
+	ctx: ToolExecContext,
+): Promise<ToolExecResult<UpdateDetails>> {
+	if (args.old_text.length === 0) {
+		// Empty old_text would match at every byte position — replace().replace
+		// semantics with an empty needle is a footgun, not a feature. Force the
+		// model to be explicit about the edit site.
+		throw new ToolUserError(`update: \`old_text\` must be non-empty.`);
+	}
 
-  const resolved = resolveFileToolPath(args.path);
+	const resolved = resolveFileToolPath(args.path);
 
-  let original: string;
-  try {
-    original = await fs.readFile(resolved, { encoding: "utf-8", signal: ctx.signal });
-  } catch (err) {
-    throw new ToolUserError(`update: ${(err as Error).message}`);
-  }
+	let original: string;
+	try {
+		original = await fs.readFile(resolved, {
+			encoding: "utf-8",
+			signal: ctx.signal,
+		});
+	} catch (err) {
+		throw new ToolUserError(`update: ${(err as Error).message}`);
+	}
 
-  const occurrences = countOccurrences(original, args.old_text);
-  if (occurrences === 0) {
-    throw new ToolUserError(
-      `update: \`old_text\` not found in ${resolved}. The substring must match verbatim.`,
-    );
-  }
-  if (occurrences > 1) {
-    throw new ToolUserError(
-      `update: \`old_text\` matched ${occurrences} times in ${resolved}; ` +
-        `make it longer or more specific so exactly one site matches.`,
-    );
-  }
+	const occurrences = countOccurrences(original, args.old_text);
+	if (occurrences === 0) {
+		throw new ToolUserError(
+			`update: \`old_text\` not found in ${resolved}. The substring must match verbatim.`,
+		);
+	}
+	if (occurrences > 1) {
+		throw new ToolUserError(
+			`update: \`old_text\` matched ${occurrences} times in ${resolved}; ` +
+				`make it longer or more specific so exactly one site matches.`,
+		);
+	}
 
-  const idx = original.indexOf(args.old_text);
-  const updated =
-    original.slice(0, idx) + args.new_text + original.slice(idx + args.old_text.length);
+	const idx = original.indexOf(args.old_text);
+	const updated =
+		original.slice(0, idx) +
+		args.new_text +
+		original.slice(idx + args.old_text.length);
 
-  if (ctx.signal.aborted) {
-    throw new ToolUserError(`update: aborted before write.`);
-  }
+	if (ctx.signal.aborted) {
+		throw new ToolUserError(`update: aborted before write.`);
+	}
 
-  try {
-    await fs.writeFile(resolved, updated, { encoding: "utf-8", signal: ctx.signal });
-  } catch (err) {
-    throw new ToolUserError(`update: ${(err as Error).message}`);
-  }
+	try {
+		await fs.writeFile(resolved, updated, {
+			encoding: "utf-8",
+			signal: ctx.signal,
+		});
+	} catch (err) {
+		throw new ToolUserError(`update: ${(err as Error).message}`);
+	}
 
-  const bytesBefore = Buffer.byteLength(original, "utf-8");
-  const bytesAfter = Buffer.byteLength(updated, "utf-8");
+	const bytesBefore = Buffer.byteLength(original, "utf-8");
+	const bytesAfter = Buffer.byteLength(updated, "utf-8");
 
-  return {
-    content: [
-      {
-        type: "text",
-        text: `Updated ${resolved} (${bytesBefore} → ${bytesAfter} bytes).`,
-      },
-    ],
-    details: { resolvedPath: resolved, bytesBefore, bytesAfter },
-    isError: false,
-  };
+	return {
+		content: [
+			{
+				type: "text",
+				text: `Updated ${resolved} (${bytesBefore} → ${bytesAfter} bytes).`,
+			},
+		],
+		details: { resolvedPath: resolved, bytesBefore, bytesAfter },
+		isError: false,
+	};
 }
 
 function countOccurrences(haystack: string, needle: string): number {
-  if (needle.length === 0) return 0;
-  let count = 0;
-  let from = 0;
-  while (true) {
-    const i = haystack.indexOf(needle, from);
-    if (i === -1) break;
-    count += 1;
-    from = i + needle.length;
-  }
-  return count;
+	if (needle.length === 0) return 0;
+	let count = 0;
+	let from = 0;
+	while (true) {
+		const i = haystack.indexOf(needle, from);
+		if (i === -1) break;
+		count += 1;
+		from = i + needle.length;
+	}
+	return count;
 }

@@ -13,10 +13,10 @@ import { createWriteTool } from "./files/write";
 let registered = false;
 
 export function registerBuiltinTools(): void {
-  if (registered) return;
-  registered = true;
-  toolRegistry.register(createBashTool());
-  toolRegistry.register(createReadTool());
-  toolRegistry.register(createWriteTool());
-  toolRegistry.register(createUpdateTool());
+	if (registered) return;
+	registered = true;
+	toolRegistry.register(createBashTool());
+	toolRegistry.register(createReadTool());
+	toolRegistry.register(createWriteTool());
+	toolRegistry.register(createUpdateTool());
 }

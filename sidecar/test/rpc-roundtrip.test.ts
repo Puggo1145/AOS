@@ -15,47 +15,47 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import {
-  NOTCH_PROTOCOL_VERSION,
-  RPCMethod,
-  type RPCRequest,
-  type RPCNotification,
-  type HelloParams,
-  type PingParams,
-  type AgentSubmitParams,
-  type AgentCancelParams,
-  type AgentResetParams,
-  type ConversationTurnStartedParams,
-  type ConversationResetParams,
-  type ConfigGetParams,
-  type ConfigSetParams,
-  type ConfigSetEffortParams,
-  type ConfigSetPermissionLevelParams,
-  type UITokenParams,
-  type UIThinkingParams,
-  type UIToolCallParams,
-  type UIStatusParams,
-  type UIErrorParams,
-  type UIUsageParams,
-  type ProviderStatusParams,
-  type ProviderStartLoginParams,
-  type ProviderCancelLoginParams,
-  type ProviderLoginStatusParams,
-  type ProviderStatusChangedParams,
-  type ProviderSetApiKeyParams,
-  type ProviderClearApiKeyParams,
-  type ProviderLogoutParams,
-  type PermissionRequestApprovalParams,
-  type PermissionApprovalCancelledParams,
-  type DevContextGetParams,
-  type DevContextChangedParams,
-  type UITodoParams,
-  type UICompactParams,
-  type SessionCreateParams,
-  type SessionListParams,
-  type SessionActivateParams,
-  type SessionCreatedNotificationParams,
-  type SessionActivatedNotificationParams,
-  type SessionListChangedNotificationParams,
+	NOTCH_PROTOCOL_VERSION,
+	RPCMethod,
+	type RPCRequest,
+	type RPCNotification,
+	type HelloParams,
+	type PingParams,
+	type AgentSubmitParams,
+	type AgentCancelParams,
+	type AgentResetParams,
+	type ConversationTurnStartedParams,
+	type ConversationResetParams,
+	type ConfigGetParams,
+	type ConfigSetParams,
+	type ConfigSetEffortParams,
+	type ConfigSetPermissionLevelParams,
+	type UITokenParams,
+	type UIThinkingParams,
+	type UIToolCallParams,
+	type UIStatusParams,
+	type UIErrorParams,
+	type UIUsageParams,
+	type ProviderStatusParams,
+	type ProviderStartLoginParams,
+	type ProviderCancelLoginParams,
+	type ProviderLoginStatusParams,
+	type ProviderStatusChangedParams,
+	type ProviderSetApiKeyParams,
+	type ProviderClearApiKeyParams,
+	type ProviderLogoutParams,
+	type PermissionRequestApprovalParams,
+	type PermissionApprovalCancelledParams,
+	type DevContextGetParams,
+	type DevContextChangedParams,
+	type UITodoParams,
+	type UICompactParams,
+	type SessionCreateParams,
+	type SessionListParams,
+	type SessionActivateParams,
+	type SessionCreatedNotificationParams,
+	type SessionActivatedNotificationParams,
+	type SessionListChangedNotificationParams,
 } from "../src/rpc/rpc-types";
 
 // Resolve repo root by walking up from this test file.
@@ -64,9 +64,9 @@ const repoRoot = join(here, "..", "..");
 const fixturesDir = join(repoRoot, "tests", "rpc-fixtures");
 
 function loadFixture(name: string): { raw: string; parsed: unknown } {
-  const raw = readFileSync(join(fixturesDir, name), "utf8");
-  const parsed = JSON.parse(raw);
-  return { raw, parsed };
+	const raw = readFileSync(join(fixturesDir, name), "utf8");
+	const parsed = JSON.parse(raw);
+	return { raw, parsed };
 }
 
 /**
@@ -74,439 +74,439 @@ function loadFixture(name: string): { raw: string; parsed: unknown } {
  * and no whitespace. Matches Swift `JSONEncoder` with `.sortedKeys`.
  */
 function canonicalize(value: unknown): string {
-  return JSON.stringify(sortKeys(value));
+	return JSON.stringify(sortKeys(value));
 }
 
 function sortKeys(value: unknown): unknown {
-  if (value === null) return null;
-  if (Array.isArray(value)) {
-    return value.map(sortKeys);
-  }
-  if (typeof value === "object") {
-    const obj = value as Record<string, unknown>;
-    const sorted: Record<string, unknown> = {};
-    for (const key of Object.keys(obj).sort()) {
-      sorted[key] = sortKeys(obj[key]);
-    }
-    return sorted;
-  }
-  return value;
+	if (value === null) return null;
+	if (Array.isArray(value)) {
+		return value.map(sortKeys);
+	}
+	if (typeof value === "object") {
+		const obj = value as Record<string, unknown>;
+		const sorted: Record<string, unknown> = {};
+		for (const key of Object.keys(obj).sort()) {
+			sorted[key] = sortKeys(obj[key]);
+		}
+		return sorted;
+	}
+	return value;
 }
 
 function assertRoundtrip(name: string) {
-  const { raw, parsed } = loadFixture(name);
-  const reSerialized = canonicalize(parsed);
-  expect(reSerialized).toBe(raw);
+	const { raw, parsed } = loadFixture(name);
+	const reSerialized = canonicalize(parsed);
+	expect(reSerialized).toBe(raw);
 }
 
 test("rpc.hello fixture roundtrips byte-equal", () => {
-  assertRoundtrip("rpc.hello.json");
-  // Type-level assertion: fixture decodes into the declared shape.
-  const { parsed } = loadFixture("rpc.hello.json");
-  const req = parsed as RPCRequest<HelloParams>;
-  expect(req.method).toBe(RPCMethod.rpcHello);
-  expect(req.params.protocolVersion).toBe(NOTCH_PROTOCOL_VERSION);
-  expect(req.params.clientInfo.name).toBe("notch-agent-sidecar");
+	assertRoundtrip("rpc.hello.json");
+	// Type-level assertion: fixture decodes into the declared shape.
+	const { parsed } = loadFixture("rpc.hello.json");
+	const req = parsed as RPCRequest<HelloParams>;
+	expect(req.method).toBe(RPCMethod.rpcHello);
+	expect(req.params.protocolVersion).toBe(NOTCH_PROTOCOL_VERSION);
+	expect(req.params.clientInfo.name).toBe("notch-agent-sidecar");
 });
 
 test("rpc.ping fixture roundtrips byte-equal", () => {
-  assertRoundtrip("rpc.ping.json");
-  const { parsed } = loadFixture("rpc.ping.json");
-  const req = parsed as RPCRequest<PingParams>;
-  expect(req.method).toBe(RPCMethod.rpcPing);
+	assertRoundtrip("rpc.ping.json");
+	const { parsed } = loadFixture("rpc.ping.json");
+	const req = parsed as RPCRequest<PingParams>;
+	expect(req.method).toBe(RPCMethod.rpcPing);
 });
 
 test("agent.submit fixture roundtrips byte-equal", () => {
-  assertRoundtrip("agent.submit.json");
-  const { parsed } = loadFixture("agent.submit.json");
-  const req = parsed as RPCRequest<AgentSubmitParams>;
-  expect(req.method).toBe(RPCMethod.agentSubmit);
-  expect(req.params.citedContext.app?.bundleId).toBe("com.apple.Safari");
-  expect(req.params.citedContext.behaviors?.length).toBe(1);
-  expect(req.params.citedContext.clipboards?.[0]?.kind).toBe("text");
+	assertRoundtrip("agent.submit.json");
+	const { parsed } = loadFixture("agent.submit.json");
+	const req = parsed as RPCRequest<AgentSubmitParams>;
+	expect(req.method).toBe(RPCMethod.agentSubmit);
+	expect(req.params.citedContext.app?.bundleId).toBe("com.apple.Safari");
+	expect(req.params.citedContext.behaviors?.length).toBe(1);
+	expect(req.params.citedContext.clipboards?.[0]?.kind).toBe("text");
 });
 
 test("agent.cancel fixture roundtrips byte-equal", () => {
-  assertRoundtrip("agent.cancel.json");
-  const { parsed } = loadFixture("agent.cancel.json");
-  const req = parsed as RPCRequest<AgentCancelParams>;
-  expect(req.method).toBe(RPCMethod.agentCancel);
-  expect(typeof req.params.turnId).toBe("string");
+	assertRoundtrip("agent.cancel.json");
+	const { parsed } = loadFixture("agent.cancel.json");
+	const req = parsed as RPCRequest<AgentCancelParams>;
+	expect(req.method).toBe(RPCMethod.agentCancel);
+	expect(typeof req.params.turnId).toBe("string");
 });
 
 test("agent.reset fixture roundtrips byte-equal", () => {
-  assertRoundtrip("agent.reset.json");
-  const { parsed } = loadFixture("agent.reset.json");
-  const req = parsed as RPCRequest<AgentResetParams>;
-  expect(req.method).toBe(RPCMethod.agentReset);
+	assertRoundtrip("agent.reset.json");
+	const { parsed } = loadFixture("agent.reset.json");
+	const req = parsed as RPCRequest<AgentResetParams>;
+	expect(req.method).toBe(RPCMethod.agentReset);
 });
 
 test("conversation.turnStarted fixture roundtrips byte-equal", () => {
-  assertRoundtrip("conversation.turnStarted.json");
-  const { parsed } = loadFixture("conversation.turnStarted.json");
-  const note = parsed as RPCNotification<ConversationTurnStartedParams>;
-  expect(note.method).toBe(RPCMethod.conversationTurnStarted);
-  expect(note.params.turn.status).toBe("working");
+	assertRoundtrip("conversation.turnStarted.json");
+	const { parsed } = loadFixture("conversation.turnStarted.json");
+	const note = parsed as RPCNotification<ConversationTurnStartedParams>;
+	expect(note.method).toBe(RPCMethod.conversationTurnStarted);
+	expect(note.params.turn.status).toBe("working");
 });
 
 test("conversation.reset fixture roundtrips byte-equal", () => {
-  assertRoundtrip("conversation.reset.json");
-  const { parsed } = loadFixture("conversation.reset.json");
-  const note = parsed as RPCNotification<ConversationResetParams>;
-  expect(note.method).toBe(RPCMethod.conversationReset);
+	assertRoundtrip("conversation.reset.json");
+	const { parsed } = loadFixture("conversation.reset.json");
+	const note = parsed as RPCNotification<ConversationResetParams>;
+	expect(note.method).toBe(RPCMethod.conversationReset);
 });
 
 test("config.get fixture roundtrips byte-equal", () => {
-  assertRoundtrip("config.get.json");
-  const { parsed } = loadFixture("config.get.json");
-  const req = parsed as RPCRequest<ConfigGetParams>;
-  expect(req.method).toBe(RPCMethod.configGet);
+	assertRoundtrip("config.get.json");
+	const { parsed } = loadFixture("config.get.json");
+	const req = parsed as RPCRequest<ConfigGetParams>;
+	expect(req.method).toBe(RPCMethod.configGet);
 });
 
 test("config.set fixture roundtrips byte-equal", () => {
-  assertRoundtrip("config.set.json");
-  const { parsed } = loadFixture("config.set.json");
-  const req = parsed as RPCRequest<ConfigSetParams>;
-  expect(req.method).toBe(RPCMethod.configSet);
-  expect(req.params.providerId).toBe("chatgpt-plan");
-  expect(req.params.modelId).toBe("gpt-5.5");
+	assertRoundtrip("config.set.json");
+	const { parsed } = loadFixture("config.set.json");
+	const req = parsed as RPCRequest<ConfigSetParams>;
+	expect(req.method).toBe(RPCMethod.configSet);
+	expect(req.params.providerId).toBe("chatgpt-plan");
+	expect(req.params.modelId).toBe("gpt-5.5");
 });
 
 test("config.setEffort fixture roundtrips byte-equal", () => {
-  assertRoundtrip("config.setEffort.json");
-  const { parsed } = loadFixture("config.setEffort.json");
-  const req = parsed as RPCRequest<ConfigSetEffortParams>;
-  expect(req.method).toBe(RPCMethod.configSetEffort);
-  expect(req.params.effort).toBe("medium");
+	assertRoundtrip("config.setEffort.json");
+	const { parsed } = loadFixture("config.setEffort.json");
+	const req = parsed as RPCRequest<ConfigSetEffortParams>;
+	expect(req.method).toBe(RPCMethod.configSetEffort);
+	expect(req.params.effort).toBe("medium");
 });
 
 test("config.setPermissionLevel fixture roundtrips byte-equal", () => {
-  assertRoundtrip("config.setPermissionLevel.json");
-  const { parsed } = loadFixture("config.setPermissionLevel.json");
-  const req = parsed as RPCRequest<ConfigSetPermissionLevelParams>;
-  expect(req.method).toBe(RPCMethod.configSetPermissionLevel);
-  expect(req.params.permissionLevel).toBe("fullAccess");
+	assertRoundtrip("config.setPermissionLevel.json");
+	const { parsed } = loadFixture("config.setPermissionLevel.json");
+	const req = parsed as RPCRequest<ConfigSetPermissionLevelParams>;
+	expect(req.method).toBe(RPCMethod.configSetPermissionLevel);
+	expect(req.params.permissionLevel).toBe("fullAccess");
 });
 
 test("ui.token fixture roundtrips byte-equal", () => {
-  assertRoundtrip("ui.token.json");
-  const { parsed } = loadFixture("ui.token.json");
-  const note = parsed as RPCNotification<UITokenParams>;
-  expect(note.method).toBe(RPCMethod.uiToken);
-  expect(typeof note.params.delta).toBe("string");
+	assertRoundtrip("ui.token.json");
+	const { parsed } = loadFixture("ui.token.json");
+	const note = parsed as RPCNotification<UITokenParams>;
+	expect(note.method).toBe(RPCMethod.uiToken);
+	expect(typeof note.params.delta).toBe("string");
 });
 
 test("ui.thinking.delta fixture roundtrips byte-equal", () => {
-  assertRoundtrip("ui.thinking.delta.json");
-  const { parsed } = loadFixture("ui.thinking.delta.json");
-  const note = parsed as RPCNotification<UIThinkingParams>;
-  expect(note.method).toBe(RPCMethod.uiThinking);
-  expect(note.params.kind).toBe("delta");
-  if (note.params.kind === "delta") {
-    expect(typeof note.params.delta).toBe("string");
-  }
+	assertRoundtrip("ui.thinking.delta.json");
+	const { parsed } = loadFixture("ui.thinking.delta.json");
+	const note = parsed as RPCNotification<UIThinkingParams>;
+	expect(note.method).toBe(RPCMethod.uiThinking);
+	expect(note.params.kind).toBe("delta");
+	if (note.params.kind === "delta") {
+		expect(typeof note.params.delta).toBe("string");
+	}
 });
 
 test("ui.thinking.end fixture roundtrips byte-equal", () => {
-  assertRoundtrip("ui.thinking.end.json");
-  const { parsed } = loadFixture("ui.thinking.end.json");
-  const note = parsed as RPCNotification<UIThinkingParams>;
-  expect(note.method).toBe(RPCMethod.uiThinking);
-  expect(note.params.kind).toBe("end");
-  // `end` variant must not carry a `delta` field.
-  expect("delta" in note.params).toBe(false);
+	assertRoundtrip("ui.thinking.end.json");
+	const { parsed } = loadFixture("ui.thinking.end.json");
+	const note = parsed as RPCNotification<UIThinkingParams>;
+	expect(note.method).toBe(RPCMethod.uiThinking);
+	expect(note.params.kind).toBe("end");
+	// `end` variant must not carry a `delta` field.
+	expect("delta" in note.params).toBe(false);
 });
 
 test("ui.toolCall.called fixture roundtrips byte-equal", () => {
-  assertRoundtrip("ui.toolCall.called.json");
-  const { parsed } = loadFixture("ui.toolCall.called.json");
-  const note = parsed as RPCNotification<UIToolCallParams>;
-  expect(note.method).toBe(RPCMethod.uiToolCall);
-  expect(note.params.phase).toBe("called");
-  if (note.params.phase === "called") {
-    expect(note.params.toolName).toBe("bash");
-    expect(typeof note.params.args).toBe("object");
-  }
-  // `result`-only fields must not be on a called frame.
-  expect("isError" in note.params).toBe(false);
-  expect("outputText" in note.params).toBe(false);
+	assertRoundtrip("ui.toolCall.called.json");
+	const { parsed } = loadFixture("ui.toolCall.called.json");
+	const note = parsed as RPCNotification<UIToolCallParams>;
+	expect(note.method).toBe(RPCMethod.uiToolCall);
+	expect(note.params.phase).toBe("called");
+	if (note.params.phase === "called") {
+		expect(note.params.toolName).toBe("bash");
+		expect(typeof note.params.args).toBe("object");
+	}
+	// `result`-only fields must not be on a called frame.
+	expect("isError" in note.params).toBe(false);
+	expect("outputText" in note.params).toBe(false);
 });
 
 test("ui.toolCall.result fixture roundtrips byte-equal", () => {
-  assertRoundtrip("ui.toolCall.result.json");
-  const { parsed } = loadFixture("ui.toolCall.result.json");
-  const note = parsed as RPCNotification<UIToolCallParams>;
-  expect(note.method).toBe(RPCMethod.uiToolCall);
-  expect(note.params.phase).toBe("result");
-  if (note.params.phase === "result") {
-    expect(note.params.isError).toBe(false);
-    expect(typeof note.params.outputText).toBe("string");
-  }
-  expect("args" in note.params).toBe(false);
+	assertRoundtrip("ui.toolCall.result.json");
+	const { parsed } = loadFixture("ui.toolCall.result.json");
+	const note = parsed as RPCNotification<UIToolCallParams>;
+	expect(note.method).toBe(RPCMethod.uiToolCall);
+	expect(note.params.phase).toBe("result");
+	if (note.params.phase === "result") {
+		expect(note.params.isError).toBe(false);
+		expect(typeof note.params.outputText).toBe("string");
+	}
+	expect("args" in note.params).toBe(false);
 });
 
 test("ui.toolCall.rejected fixture roundtrips byte-equal", () => {
-  assertRoundtrip("ui.toolCall.rejected.json");
-  const { parsed } = loadFixture("ui.toolCall.rejected.json");
-  const note = parsed as RPCNotification<UIToolCallParams>;
-  expect(note.method).toBe(RPCMethod.uiToolCall);
-  expect(note.params.phase).toBe("rejected");
-  if (note.params.phase === "rejected") {
-    expect(note.params.toolName).toBe("bash");
-    expect(typeof note.params.errorMessage).toBe("string");
-    expect(typeof note.params.args).toBe("object");
-  }
-  // `result`-only fields must not appear on a rejected frame — phase is the
-  // failure signal.
-  expect("isError" in note.params).toBe(false);
-  expect("outputText" in note.params).toBe(false);
+	assertRoundtrip("ui.toolCall.rejected.json");
+	const { parsed } = loadFixture("ui.toolCall.rejected.json");
+	const note = parsed as RPCNotification<UIToolCallParams>;
+	expect(note.method).toBe(RPCMethod.uiToolCall);
+	expect(note.params.phase).toBe("rejected");
+	if (note.params.phase === "rejected") {
+		expect(note.params.toolName).toBe("bash");
+		expect(typeof note.params.errorMessage).toBe("string");
+		expect(typeof note.params.args).toBe("object");
+	}
+	// `result`-only fields must not appear on a rejected frame — phase is the
+	// failure signal.
+	expect("isError" in note.params).toBe(false);
+	expect("outputText" in note.params).toBe(false);
 });
 
 test("ui.toolCall.permissionDenied fixture roundtrips byte-equal", () => {
-  assertRoundtrip("ui.toolCall.permissionDenied.json");
-  const { parsed } = loadFixture("ui.toolCall.permissionDenied.json");
-  const note = parsed as RPCNotification<UIToolCallParams>;
-  expect(note.method).toBe(RPCMethod.uiToolCall);
-  expect(note.params.phase).toBe("permissionDenied");
-  if (note.params.phase === "permissionDenied") {
-    expect(note.params.toolName).toBe("write");
-    expect(typeof note.params.errorMessage).toBe("string");
-    expect(typeof note.params.args).toBe("object");
-  }
-  expect("isError" in note.params).toBe(false);
-  expect("outputText" in note.params).toBe(false);
+	assertRoundtrip("ui.toolCall.permissionDenied.json");
+	const { parsed } = loadFixture("ui.toolCall.permissionDenied.json");
+	const note = parsed as RPCNotification<UIToolCallParams>;
+	expect(note.method).toBe(RPCMethod.uiToolCall);
+	expect(note.params.phase).toBe("permissionDenied");
+	if (note.params.phase === "permissionDenied") {
+		expect(note.params.toolName).toBe("write");
+		expect(typeof note.params.errorMessage).toBe("string");
+		expect(typeof note.params.args).toBe("object");
+	}
+	expect("isError" in note.params).toBe(false);
+	expect("outputText" in note.params).toBe(false);
 });
 
 test("ui.status fixture roundtrips byte-equal", () => {
-  assertRoundtrip("ui.status.json");
-  const { parsed } = loadFixture("ui.status.json");
-  const note = parsed as RPCNotification<UIStatusParams>;
-  expect(note.method).toBe(RPCMethod.uiStatus);
-  expect(["working", "waiting", "awaitingPermission", "done"]).toContain(
-    note.params.status
-  );
+	assertRoundtrip("ui.status.json");
+	const { parsed } = loadFixture("ui.status.json");
+	const note = parsed as RPCNotification<UIStatusParams>;
+	expect(note.method).toBe(RPCMethod.uiStatus);
+	expect(["working", "waiting", "awaitingPermission", "done"]).toContain(
+		note.params.status,
+	);
 });
 
 test("ui.status.awaitingPermission fixture roundtrips byte-equal", () => {
-  assertRoundtrip("ui.status.awaitingPermission.json");
-  const { parsed } = loadFixture("ui.status.awaitingPermission.json");
-  const note = parsed as RPCNotification<UIStatusParams>;
-  expect(note.method).toBe(RPCMethod.uiStatus);
-  expect(note.params.status).toBe("awaitingPermission");
+	assertRoundtrip("ui.status.awaitingPermission.json");
+	const { parsed } = loadFixture("ui.status.awaitingPermission.json");
+	const note = parsed as RPCNotification<UIStatusParams>;
+	expect(note.method).toBe(RPCMethod.uiStatus);
+	expect(note.params.status).toBe("awaitingPermission");
 });
 
 test("ui.error fixture roundtrips byte-equal", () => {
-  assertRoundtrip("ui.error.json");
-  const { parsed } = loadFixture("ui.error.json");
-  const note = parsed as RPCNotification<UIErrorParams>;
-  expect(note.method).toBe(RPCMethod.uiError);
-  expect(typeof note.params.code).toBe("number");
+	assertRoundtrip("ui.error.json");
+	const { parsed } = loadFixture("ui.error.json");
+	const note = parsed as RPCNotification<UIErrorParams>;
+	expect(note.method).toBe(RPCMethod.uiError);
+	expect(typeof note.params.code).toBe("number");
 });
 
 test("ui.usage fixture roundtrips byte-equal", () => {
-  assertRoundtrip("ui.usage.json");
-  const { parsed } = loadFixture("ui.usage.json");
-  const note = parsed as RPCNotification<UIUsageParams>;
-  expect(note.method).toBe(RPCMethod.uiUsage);
-  expect(typeof note.params.inputTokens).toBe("number");
-  expect(typeof note.params.outputTokens).toBe("number");
-  expect(typeof note.params.cacheReadTokens).toBe("number");
-  expect(typeof note.params.cacheWriteTokens).toBe("number");
-  expect(typeof note.params.totalTokens).toBe("number");
-  expect(typeof note.params.contextWindow).toBe("number");
-  expect(typeof note.params.modelId).toBe("string");
-  expect(note.params.contextWindow).toBeGreaterThan(0);
+	assertRoundtrip("ui.usage.json");
+	const { parsed } = loadFixture("ui.usage.json");
+	const note = parsed as RPCNotification<UIUsageParams>;
+	expect(note.method).toBe(RPCMethod.uiUsage);
+	expect(typeof note.params.inputTokens).toBe("number");
+	expect(typeof note.params.outputTokens).toBe("number");
+	expect(typeof note.params.cacheReadTokens).toBe("number");
+	expect(typeof note.params.cacheWriteTokens).toBe("number");
+	expect(typeof note.params.totalTokens).toBe("number");
+	expect(typeof note.params.contextWindow).toBe("number");
+	expect(typeof note.params.modelId).toBe("string");
+	expect(note.params.contextWindow).toBeGreaterThan(0);
 });
 
 test("ui.todo fixture roundtrips byte-equal", () => {
-  assertRoundtrip("ui.todo.json");
-  const { parsed } = loadFixture("ui.todo.json");
-  const note = parsed as RPCNotification<UITodoParams>;
-  expect(note.method).toBe(RPCMethod.uiTodo);
-  expect(typeof note.params.sessionId).toBe("string");
-  expect(Array.isArray(note.params.items)).toBe(true);
-  for (const item of note.params.items) {
-    expect(typeof item.id).toBe("string");
-    expect(typeof item.text).toBe("string");
-    expect(["pending", "in_progress", "completed"]).toContain(item.status);
-  }
+	assertRoundtrip("ui.todo.json");
+	const { parsed } = loadFixture("ui.todo.json");
+	const note = parsed as RPCNotification<UITodoParams>;
+	expect(note.method).toBe(RPCMethod.uiTodo);
+	expect(typeof note.params.sessionId).toBe("string");
+	expect(Array.isArray(note.params.items)).toBe(true);
+	for (const item of note.params.items) {
+		expect(typeof item.id).toBe("string");
+		expect(typeof item.text).toBe("string");
+		expect(["pending", "in_progress", "completed"]).toContain(item.status);
+	}
 });
 
 test("ui.compact.started fixture roundtrips byte-equal", () => {
-  assertRoundtrip("ui.compact.started.json");
-  const { parsed } = loadFixture("ui.compact.started.json");
-  const note = parsed as RPCNotification<UICompactParams>;
-  expect(note.method).toBe(RPCMethod.uiCompact);
-  expect(note.params.phase).toBe("started");
-  expect(note.params.compactedTurnCount).toBeUndefined();
-  expect(note.params.errorMessage).toBeUndefined();
+	assertRoundtrip("ui.compact.started.json");
+	const { parsed } = loadFixture("ui.compact.started.json");
+	const note = parsed as RPCNotification<UICompactParams>;
+	expect(note.method).toBe(RPCMethod.uiCompact);
+	expect(note.params.phase).toBe("started");
+	expect(note.params.compactedTurnCount).toBeUndefined();
+	expect(note.params.errorMessage).toBeUndefined();
 });
 
 test("ui.compact.done fixture roundtrips byte-equal", () => {
-  assertRoundtrip("ui.compact.done.json");
-  const { parsed } = loadFixture("ui.compact.done.json");
-  const note = parsed as RPCNotification<UICompactParams>;
-  expect(note.method).toBe(RPCMethod.uiCompact);
-  expect(note.params.phase).toBe("done");
-  expect(typeof note.params.compactedTurnCount).toBe("number");
+	assertRoundtrip("ui.compact.done.json");
+	const { parsed } = loadFixture("ui.compact.done.json");
+	const note = parsed as RPCNotification<UICompactParams>;
+	expect(note.method).toBe(RPCMethod.uiCompact);
+	expect(note.params.phase).toBe("done");
+	expect(typeof note.params.compactedTurnCount).toBe("number");
 });
 
 test("ui.compact.failed fixture roundtrips byte-equal", () => {
-  assertRoundtrip("ui.compact.failed.json");
-  const { parsed } = loadFixture("ui.compact.failed.json");
-  const note = parsed as RPCNotification<UICompactParams>;
-  expect(note.method).toBe(RPCMethod.uiCompact);
-  expect(note.params.phase).toBe("failed");
-  expect(typeof note.params.errorMessage).toBe("string");
+	assertRoundtrip("ui.compact.failed.json");
+	const { parsed } = loadFixture("ui.compact.failed.json");
+	const note = parsed as RPCNotification<UICompactParams>;
+	expect(note.method).toBe(RPCMethod.uiCompact);
+	expect(note.params.phase).toBe("failed");
+	expect(typeof note.params.errorMessage).toBe("string");
 });
 
 test("provider.status fixture roundtrips byte-equal", () => {
-  assertRoundtrip("provider.status.json");
-  const { parsed } = loadFixture("provider.status.json");
-  const req = parsed as RPCRequest<ProviderStatusParams>;
-  expect(req.method).toBe(RPCMethod.providerStatus);
+	assertRoundtrip("provider.status.json");
+	const { parsed } = loadFixture("provider.status.json");
+	const req = parsed as RPCRequest<ProviderStatusParams>;
+	expect(req.method).toBe(RPCMethod.providerStatus);
 });
 
 test("permission.requestApproval fixture roundtrips byte-equal", () => {
-  assertRoundtrip("permission.requestApproval.json");
-  const { parsed } = loadFixture("permission.requestApproval.json");
-  const req = parsed as RPCRequest<PermissionRequestApprovalParams>;
-  expect(req.method).toBe(RPCMethod.permissionRequestApproval);
-  expect(req.params.risk).toBe("high");
-  expect(req.params.capabilities[0]?.capability).toBe("process.spawn");
+	assertRoundtrip("permission.requestApproval.json");
+	const { parsed } = loadFixture("permission.requestApproval.json");
+	const req = parsed as RPCRequest<PermissionRequestApprovalParams>;
+	expect(req.method).toBe(RPCMethod.permissionRequestApproval);
+	expect(req.params.risk).toBe("high");
+	expect(req.params.capabilities[0]?.capability).toBe("process.spawn");
 });
 
 test("permission.approvalCancelled fixture roundtrips byte-equal", () => {
-  assertRoundtrip("permission.approvalCancelled.json");
-  const { parsed } = loadFixture("permission.approvalCancelled.json");
-  const note = parsed as RPCNotification<PermissionApprovalCancelledParams>;
-  expect(note.method).toBe(RPCMethod.permissionApprovalCancelled);
-  expect(note.params.toolCallId).toBe("tc_01HBASH");
+	assertRoundtrip("permission.approvalCancelled.json");
+	const { parsed } = loadFixture("permission.approvalCancelled.json");
+	const note = parsed as RPCNotification<PermissionApprovalCancelledParams>;
+	expect(note.method).toBe(RPCMethod.permissionApprovalCancelled);
+	expect(note.params.toolCallId).toBe("tc_01HBASH");
 });
 
 test("provider.startLogin fixture roundtrips byte-equal", () => {
-  assertRoundtrip("provider.startLogin.json");
-  const { parsed } = loadFixture("provider.startLogin.json");
-  const req = parsed as RPCRequest<ProviderStartLoginParams>;
-  expect(req.method).toBe(RPCMethod.providerStartLogin);
-  expect(req.params.providerId).toBe("chatgpt-plan");
+	assertRoundtrip("provider.startLogin.json");
+	const { parsed } = loadFixture("provider.startLogin.json");
+	const req = parsed as RPCRequest<ProviderStartLoginParams>;
+	expect(req.method).toBe(RPCMethod.providerStartLogin);
+	expect(req.params.providerId).toBe("chatgpt-plan");
 });
 
 test("provider.cancelLogin fixture roundtrips byte-equal", () => {
-  assertRoundtrip("provider.cancelLogin.json");
-  const { parsed } = loadFixture("provider.cancelLogin.json");
-  const req = parsed as RPCRequest<ProviderCancelLoginParams>;
-  expect(req.method).toBe(RPCMethod.providerCancelLogin);
-  expect(typeof req.params.loginId).toBe("string");
+	assertRoundtrip("provider.cancelLogin.json");
+	const { parsed } = loadFixture("provider.cancelLogin.json");
+	const req = parsed as RPCRequest<ProviderCancelLoginParams>;
+	expect(req.method).toBe(RPCMethod.providerCancelLogin);
+	expect(typeof req.params.loginId).toBe("string");
 });
 
 test("provider.loginStatus fixture roundtrips byte-equal", () => {
-  assertRoundtrip("provider.loginStatus.json");
-  const { parsed } = loadFixture("provider.loginStatus.json");
-  const note = parsed as RPCNotification<ProviderLoginStatusParams>;
-  expect(note.method).toBe(RPCMethod.providerLoginStatus);
-  expect(["awaitingCallback", "exchanging", "success", "failed"]).toContain(
-    note.params.state
-  );
+	assertRoundtrip("provider.loginStatus.json");
+	const { parsed } = loadFixture("provider.loginStatus.json");
+	const note = parsed as RPCNotification<ProviderLoginStatusParams>;
+	expect(note.method).toBe(RPCMethod.providerLoginStatus);
+	expect(["awaitingCallback", "exchanging", "success", "failed"]).toContain(
+		note.params.state,
+	);
 });
 
 test("provider.statusChanged fixture roundtrips byte-equal", () => {
-  assertRoundtrip("provider.statusChanged.json");
-  const { parsed } = loadFixture("provider.statusChanged.json");
-  const note = parsed as RPCNotification<ProviderStatusChangedParams>;
-  expect(note.method).toBe(RPCMethod.providerStatusChanged);
-  expect(["ready", "unauthenticated"]).toContain(note.params.state);
+	assertRoundtrip("provider.statusChanged.json");
+	const { parsed } = loadFixture("provider.statusChanged.json");
+	const note = parsed as RPCNotification<ProviderStatusChangedParams>;
+	expect(note.method).toBe(RPCMethod.providerStatusChanged);
+	expect(["ready", "unauthenticated"]).toContain(note.params.state);
 });
 
 test("provider.setApiKey fixture roundtrips byte-equal", () => {
-  assertRoundtrip("provider.setApiKey.json");
-  const { parsed } = loadFixture("provider.setApiKey.json");
-  const req = parsed as RPCRequest<ProviderSetApiKeyParams>;
-  expect(req.method).toBe(RPCMethod.providerSetApiKey);
-  expect(typeof req.params.providerId).toBe("string");
-  expect(typeof req.params.apiKey).toBe("string");
-  expect(req.params.apiKey.length).toBeGreaterThan(0);
+	assertRoundtrip("provider.setApiKey.json");
+	const { parsed } = loadFixture("provider.setApiKey.json");
+	const req = parsed as RPCRequest<ProviderSetApiKeyParams>;
+	expect(req.method).toBe(RPCMethod.providerSetApiKey);
+	expect(typeof req.params.providerId).toBe("string");
+	expect(typeof req.params.apiKey).toBe("string");
+	expect(req.params.apiKey.length).toBeGreaterThan(0);
 });
 
 test("provider.clearApiKey fixture roundtrips byte-equal", () => {
-  assertRoundtrip("provider.clearApiKey.json");
-  const { parsed } = loadFixture("provider.clearApiKey.json");
-  const req = parsed as RPCRequest<ProviderClearApiKeyParams>;
-  expect(req.method).toBe(RPCMethod.providerClearApiKey);
-  expect(typeof req.params.providerId).toBe("string");
+	assertRoundtrip("provider.clearApiKey.json");
+	const { parsed } = loadFixture("provider.clearApiKey.json");
+	const req = parsed as RPCRequest<ProviderClearApiKeyParams>;
+	expect(req.method).toBe(RPCMethod.providerClearApiKey);
+	expect(typeof req.params.providerId).toBe("string");
 });
 
 test("provider.logout fixture roundtrips byte-equal", () => {
-  assertRoundtrip("provider.logout.json");
-  const { parsed } = loadFixture("provider.logout.json");
-  const req = parsed as RPCRequest<ProviderLogoutParams>;
-  expect(req.method).toBe(RPCMethod.providerLogout);
-  expect(typeof req.params.providerId).toBe("string");
+	assertRoundtrip("provider.logout.json");
+	const { parsed } = loadFixture("provider.logout.json");
+	const req = parsed as RPCRequest<ProviderLogoutParams>;
+	expect(req.method).toBe(RPCMethod.providerLogout);
+	expect(typeof req.params.providerId).toBe("string");
 });
 
 test("dev.context.get fixture roundtrips byte-equal", () => {
-  assertRoundtrip("dev.context.get.json");
-  const { parsed } = loadFixture("dev.context.get.json");
-  const req = parsed as RPCRequest<DevContextGetParams>;
-  expect(req.method).toBe(RPCMethod.devContextGet);
+	assertRoundtrip("dev.context.get.json");
+	const { parsed } = loadFixture("dev.context.get.json");
+	const req = parsed as RPCRequest<DevContextGetParams>;
+	expect(req.method).toBe(RPCMethod.devContextGet);
 });
 
 test("dev.context.changed fixture roundtrips byte-equal", () => {
-  assertRoundtrip("dev.context.changed.json");
-  const { parsed } = loadFixture("dev.context.changed.json");
-  const note = parsed as RPCNotification<DevContextChangedParams>;
-  expect(note.method).toBe(RPCMethod.devContextChanged);
-  expect(note.params.snapshot.modelId).toBe("gpt-5.5");
-  expect(note.params.snapshot.providerId).toBe("chatgpt-plan");
-  expect(note.params.snapshot.effort).toBe("medium");
-  expect(typeof note.params.snapshot.messagesJson).toBe("string");
+	assertRoundtrip("dev.context.changed.json");
+	const { parsed } = loadFixture("dev.context.changed.json");
+	const note = parsed as RPCNotification<DevContextChangedParams>;
+	expect(note.method).toBe(RPCMethod.devContextChanged);
+	expect(note.params.snapshot.modelId).toBe("gpt-5.5");
+	expect(note.params.snapshot.providerId).toBe("chatgpt-plan");
+	expect(note.params.snapshot.effort).toBe("medium");
+	expect(typeof note.params.snapshot.messagesJson).toBe("string");
 });
 
 test("session.create fixture roundtrips byte-equal", () => {
-  assertRoundtrip("session.create.json");
-  const { parsed } = loadFixture("session.create.json");
-  const req = parsed as RPCRequest<SessionCreateParams>;
-  expect(req.method).toBe(RPCMethod.sessionCreate);
+	assertRoundtrip("session.create.json");
+	const { parsed } = loadFixture("session.create.json");
+	const req = parsed as RPCRequest<SessionCreateParams>;
+	expect(req.method).toBe(RPCMethod.sessionCreate);
 });
 
 test("session.list fixture roundtrips byte-equal", () => {
-  assertRoundtrip("session.list.json");
-  const { parsed } = loadFixture("session.list.json");
-  const req = parsed as RPCRequest<SessionListParams>;
-  expect(req.method).toBe(RPCMethod.sessionList);
+	assertRoundtrip("session.list.json");
+	const { parsed } = loadFixture("session.list.json");
+	const req = parsed as RPCRequest<SessionListParams>;
+	expect(req.method).toBe(RPCMethod.sessionList);
 });
 
 test("session.activate fixture roundtrips byte-equal", () => {
-  assertRoundtrip("session.activate.json");
-  const { parsed } = loadFixture("session.activate.json");
-  const req = parsed as RPCRequest<SessionActivateParams>;
-  expect(req.method).toBe(RPCMethod.sessionActivate);
-  expect(typeof req.params.sessionId).toBe("string");
+	assertRoundtrip("session.activate.json");
+	const { parsed } = loadFixture("session.activate.json");
+	const req = parsed as RPCRequest<SessionActivateParams>;
+	expect(req.method).toBe(RPCMethod.sessionActivate);
+	expect(typeof req.params.sessionId).toBe("string");
 });
 
 test("session.created fixture roundtrips byte-equal", () => {
-  assertRoundtrip("session.created.json");
-  const { parsed } = loadFixture("session.created.json");
-  const note = parsed as RPCNotification<SessionCreatedNotificationParams>;
-  expect(note.method).toBe(RPCMethod.sessionCreated);
-  expect(typeof note.params.session.id).toBe("string");
-  expect(note.params.session.turnCount).toBe(0);
+	assertRoundtrip("session.created.json");
+	const { parsed } = loadFixture("session.created.json");
+	const note = parsed as RPCNotification<SessionCreatedNotificationParams>;
+	expect(note.method).toBe(RPCMethod.sessionCreated);
+	expect(typeof note.params.session.id).toBe("string");
+	expect(note.params.session.turnCount).toBe(0);
 });
 
 test("session.activated fixture roundtrips byte-equal", () => {
-  assertRoundtrip("session.activated.json");
-  const { parsed } = loadFixture("session.activated.json");
-  const note = parsed as RPCNotification<SessionActivatedNotificationParams>;
-  expect(note.method).toBe(RPCMethod.sessionActivated);
+	assertRoundtrip("session.activated.json");
+	const { parsed } = loadFixture("session.activated.json");
+	const note = parsed as RPCNotification<SessionActivatedNotificationParams>;
+	expect(note.method).toBe(RPCMethod.sessionActivated);
 });
 
 test("session.listChanged fixture roundtrips byte-equal", () => {
-  assertRoundtrip("session.listChanged.json");
-  const { parsed } = loadFixture("session.listChanged.json");
-  const note = parsed as RPCNotification<SessionListChangedNotificationParams>;
-  expect(note.method).toBe(RPCMethod.sessionListChanged);
+	assertRoundtrip("session.listChanged.json");
+	const { parsed } = loadFixture("session.listChanged.json");
+	const note = parsed as RPCNotification<SessionListChangedNotificationParams>;
+	expect(note.method).toBe(RPCMethod.sessionListChanged);
 });
 
 test("NOTCH_PROTOCOL_VERSION equals 2.0.0", () => {
-  expect(NOTCH_PROTOCOL_VERSION).toBe("2.0.0");
+	expect(NOTCH_PROTOCOL_VERSION).toBe("2.0.0");
 });

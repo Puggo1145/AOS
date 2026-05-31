@@ -6,60 +6,61 @@
 // removed when the turn finishes (success, error, or cancellation).
 
 export class TurnRegistry {
-  private readonly turns = new Map<string, AbortController>();
+	private readonly turns = new Map<string, AbortController>();
 
-  /// Allocate a new controller. Throws if turnId is already active — callers
-  /// (the agent.submit handler) should reject the request before this point.
-  add(turnId: string): AbortController {
-    if (this.turns.has(turnId)) {
-      throw new Error(`turnId already active: ${turnId}`);
-    }
-    const c = new AbortController();
-    this.turns.set(turnId, c);
-    return c;
-  }
+	/// Allocate a new controller. Throws if turnId is already active — callers
+	/// (the agent.submit handler) should reject the request before this point.
+	add(turnId: string): AbortController {
+		if (this.turns.has(turnId)) {
+			throw new Error(`turnId already active: ${turnId}`);
+		}
+		const c = new AbortController();
+		this.turns.set(turnId, c);
+		return c;
+	}
 
-  get(turnId: string): AbortController | undefined {
-    return this.turns.get(turnId);
-  }
+	get(turnId: string): AbortController | undefined {
+		return this.turns.get(turnId);
+	}
 
-  /// Abort the turn if active. Returns true iff a live turn was aborted.
-  abort(turnId: string): boolean {
-    const c = this.turns.get(turnId);
-    if (!c) return false;
-    c.abort();
-    return true;
-  }
+	/// Abort the turn if active. Returns true iff a live turn was aborted.
+	abort(turnId: string): boolean {
+		const c = this.turns.get(turnId);
+		if (!c) return false;
+		c.abort();
+		return true;
+	}
 
-  remove(turnId: string): void {
-    this.turns.delete(turnId);
-  }
+	remove(turnId: string): void {
+		this.turns.delete(turnId);
+	}
 
-  /// Move the sole active controller to a new turn id when an in-flight
-  /// agent loop materializes a queued steer prompt as the next visible turn.
-  /// Fails loudly on missing source or duplicate destination; those both
-  /// indicate a broken loop/registry invariant.
-  replace(oldTurnId: string, newTurnId: string): void {
-    const c = this.turns.get(oldTurnId);
-    if (!c) throw new Error(`turnId not active: ${oldTurnId}`);
-    if (this.turns.has(newTurnId)) throw new Error(`turnId already active: ${newTurnId}`);
-    this.turns.delete(oldTurnId);
-    this.turns.set(newTurnId, c);
-  }
+	/// Move the sole active controller to a new turn id when an in-flight
+	/// agent loop materializes a queued steer prompt as the next visible turn.
+	/// Fails loudly on missing source or duplicate destination; those both
+	/// indicate a broken loop/registry invariant.
+	replace(oldTurnId: string, newTurnId: string): void {
+		const c = this.turns.get(oldTurnId);
+		if (!c) throw new Error(`turnId not active: ${oldTurnId}`);
+		if (this.turns.has(newTurnId))
+			throw new Error(`turnId already active: ${newTurnId}`);
+		this.turns.delete(oldTurnId);
+		this.turns.set(newTurnId, c);
+	}
 
-  clear(): void {
-    this.turns.clear();
-  }
+	clear(): void {
+		this.turns.clear();
+	}
 
-  /// Abort every live turn. Used by `agent.reset` to ensure no stream
-  /// continues writing into a conversation that's about to be wiped.
-  abortAll(): void {
-    for (const c of this.turns.values()) c.abort();
-    this.turns.clear();
-  }
+	/// Abort every live turn. Used by `agent.reset` to ensure no stream
+	/// continues writing into a conversation that's about to be wiped.
+	abortAll(): void {
+		for (const c of this.turns.values()) c.abort();
+		this.turns.clear();
+	}
 
-  /// Test helper.
-  get size(): number {
-    return this.turns.size;
-  }
+	/// Test helper.
+	get size(): number {
+		return this.turns.size;
+	}
 }

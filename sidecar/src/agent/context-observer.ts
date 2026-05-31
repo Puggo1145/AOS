@@ -26,56 +26,56 @@
 import type { Message } from "../llm/types";
 
 export interface DevContextSnapshot {
-  /// Milliseconds since epoch when this snapshot was captured.
-  capturedAt: number;
-  /// Session that issued this turn. Per docs/designs/session-management.md
-  /// `ContextObserver` keeps a *global latest* (not per-session) — Dev Mode
-  /// renders the sessionId + an "active?" badge so background turns are
-  /// distinguishable.
-  sessionId: string;
-  turnId: string;
-  modelId: string;
-  providerId: string;
-  /// Reasoning effort selected for this turn, or null for non-reasoning models.
-  effort: string | null;
-  systemPrompt: string;
-  /// Pretty-printed JSON of the `Message[]` array passed to `streamSimple`.
-  /// Pre-rendered into a single string so the Shell can show a faithful raw
-  /// view without re-deriving formatting; the Sidecar is the only side that
-  /// owns Message shape knowledge.
-  messagesJson: string;
+	/// Milliseconds since epoch when this snapshot was captured.
+	capturedAt: number;
+	/// Session that issued this turn. Per docs/designs/session-management.md
+	/// `ContextObserver` keeps a *global latest* (not per-session) — Dev Mode
+	/// renders the sessionId + an "active?" badge so background turns are
+	/// distinguishable.
+	sessionId: string;
+	turnId: string;
+	modelId: string;
+	providerId: string;
+	/// Reasoning effort selected for this turn, or null for non-reasoning models.
+	effort: string | null;
+	systemPrompt: string;
+	/// Pretty-printed JSON of the `Message[]` array passed to `streamSimple`.
+	/// Pre-rendered into a single string so the Shell can show a faithful raw
+	/// view without re-deriving formatting; the Sidecar is the only side that
+	/// owns Message shape knowledge.
+	messagesJson: string;
 }
 
 export type ContextObserverSink = (snapshot: DevContextSnapshot) => void;
 
 export class ContextObserver {
-  private _latest: DevContextSnapshot | null = null;
-  private _sink: ContextObserverSink | null = null;
+	private _latest: DevContextSnapshot | null = null;
+	private _sink: ContextObserverSink | null = null;
 
-  setSink(sink: ContextObserverSink | null): void {
-    this._sink = sink;
-  }
+	setSink(sink: ContextObserverSink | null): void {
+		this._sink = sink;
+	}
 
-  latest(): DevContextSnapshot | null {
-    return this._latest;
-  }
+	latest(): DevContextSnapshot | null {
+		return this._latest;
+	}
 
-  publish(snapshot: DevContextSnapshot): void {
-    this._latest = snapshot;
-    const sink = this._sink;
-    if (!sink) return;
-    sink(snapshot);
-  }
+	publish(snapshot: DevContextSnapshot): void {
+		this._latest = snapshot;
+		const sink = this._sink;
+		if (!sink) return;
+		sink(snapshot);
+	}
 
-  /// Render a `Message[]` to the canonical raw-display string. Centralized
-  /// so the wire format the Dev Mode window sees is one knob, edited here.
-  static renderMessages(messages: ReadonlyArray<Message>): string {
-    return JSON.stringify(messages, null, 2);
-  }
+	/// Render a `Message[]` to the canonical raw-display string. Centralized
+	/// so the wire format the Dev Mode window sees is one knob, edited here.
+	static renderMessages(messages: ReadonlyArray<Message>): string {
+		return JSON.stringify(messages, null, 2);
+	}
 
-  reset(): void {
-    this._latest = null;
-  }
+	reset(): void {
+		this._latest = null;
+	}
 }
 
 /// Singleton: Notch Agent Stage 0 has exactly one agent loop. Tests can construct

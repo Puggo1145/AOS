@@ -13,47 +13,50 @@
 import type { AmbientProvider } from "./provider";
 
 interface RegistryEntry {
-  provider: AmbientProvider;
-  sourceId: string;
+	provider: AmbientProvider;
+	sourceId: string;
 }
 
 const DEFAULT_SOURCE_ID = "builtin";
 
 class AmbientRegistry {
-  private readonly entries = new Map<string, RegistryEntry>();
+	private readonly entries = new Map<string, RegistryEntry>();
 
-  register(provider: AmbientProvider, sourceId: string = DEFAULT_SOURCE_ID): void {
-    const name = provider.name;
-    if (this.entries.has(name)) {
-      // Re-registration is a programmer error (overlapping plugins, double
-      // boot). Match `tools/core/registry.ts`: fail loud rather than silently
-      // overwrite — the renderer would otherwise pick whichever copy won
-      // the race and downstream debugging gets murky.
-      throw new Error(`ambient provider already registered: "${name}"`);
-    }
-    this.entries.set(name, { provider, sourceId });
-  }
+	register(
+		provider: AmbientProvider,
+		sourceId: string = DEFAULT_SOURCE_ID,
+	): void {
+		const name = provider.name;
+		if (this.entries.has(name)) {
+			// Re-registration is a programmer error (overlapping plugins, double
+			// boot). Match `tools/core/registry.ts`: fail loud rather than silently
+			// overwrite — the renderer would otherwise pick whichever copy won
+			// the race and downstream debugging gets murky.
+			throw new Error(`ambient provider already registered: "${name}"`);
+		}
+		this.entries.set(name, { provider, sourceId });
+	}
 
-  unregister(name: string): void {
-    this.entries.delete(name);
-  }
+	unregister(name: string): void {
+		this.entries.delete(name);
+	}
 
-  unregisterBySource(sourceId: string): void {
-    for (const [name, entry] of this.entries) {
-      if (entry.sourceId === sourceId) this.entries.delete(name);
-    }
-  }
+	unregisterBySource(sourceId: string): void {
+		for (const [name, entry] of this.entries) {
+			if (entry.sourceId === sourceId) this.entries.delete(name);
+		}
+	}
 
-  /// Test helper: drop every registration regardless of source.
-  clear(): void {
-    this.entries.clear();
-  }
+	/// Test helper: drop every registration regardless of source.
+	clear(): void {
+		this.entries.clear();
+	}
 
-  /// Snapshot in registration order. Callers (`renderAmbient`) iterate this
-  /// once per LLM round.
-  list(): AmbientProvider[] {
-    return Array.from(this.entries.values(), (e) => e.provider);
-  }
+	/// Snapshot in registration order. Callers (`renderAmbient`) iterate this
+	/// once per LLM round.
+	list(): AmbientProvider[] {
+		return Array.from(this.entries.values(), (e) => e.provider);
+	}
 }
 
 export const ambientRegistry = new AmbientRegistry();
