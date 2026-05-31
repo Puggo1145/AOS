@@ -30,10 +30,10 @@ import AppKit
 // foreground.
 //
 // `refcon` plumbing: AXObserverAddNotification takes a `void *` refcon that
-// is passed back to the C callback. We allocate one heap-managed
-// `RefconBox` per registration (not per subscription) and hand its raw
-// pointer to AX. The static callback unwraps the box, finds the
-// registration, and dispatches every handler. This keeps Swift closures
+// is passed back to the C callback. We pass a small opaque id, not a Swift
+// object pointer. The callback maps that id through `activeRefcons` before
+// touching Swift state, so queued callbacks that arrive after teardown can
+// no-op without dereferencing retired heap objects. This keeps Swift closures
 // from leaking into the C ABI seam (function pointers must be non-capturing).
 
 @MainActor
@@ -42,10 +42,17 @@ public final class AXObserverHub {
 
     private var observers: [pid_t: AXObserver] = [:]
     /// Registered AX notifications, keyed by triple. Each entry holds the
-    /// AX-level state (refcon) plus the fan-out handler table.
+    /// AX-level refcon id plus the fan-out handler table.
     private var registrations: [RegistrationKey: Registration] = [:]
     /// Reverse map so `unsubscribe(_:)` can find its registration in O(1).
     private var tokenIndex: [Token: RegistrationKey] = [:]
+    /// AX may deliver a callback that was already queued before
+    /// `AXObserverRemoveNotification` returned. Do not pass Swift object
+    /// addresses through refcon: retired object pointers can be dereferenced by
+    /// those stale callbacks. Instead, pass a small opaque id and look it up in
+    /// this active table.
+    private static var nextRefconID: Int = 1
+    private static var activeRefcons: [Int: RefconBox] = [:]
 
     public init() {}
 
@@ -83,17 +90,18 @@ public final class AXObserverHub {
             element: element,
             notification: notification
         )
-        let unmanaged = Unmanaged.passRetained(RefconBox(hub: self, key: key))
-        registration.refcon = unmanaged
+        let refconID = Self.activateRefcon(hub: self, key: key)
+        registration.refconID = refconID
 
         let addErr = AXObserverAddNotification(
             observer,
             element,
             notification as CFString,
-            unmanaged.toOpaque()
+            Self.refconPointer(for: refconID)
         )
         guard addErr == .success else {
-            unmanaged.release()
+            Self.deactivateRefcon(id: refconID)
+            registration.refconID = nil
             // If we just spun up the observer for this pid, retire it so the
             // observers map stays honest.
             retireObserverIfUnused(pid: pid)
@@ -124,8 +132,7 @@ public final class AXObserverHub {
                 registration.notification as CFString
             )
         }
-        registration.refcon?.release()
-        registration.refcon = nil
+        deactivateRefcon(for: registration)
         registrations.removeValue(forKey: key)
         retireObserverIfUnused(pid: key.pid)
     }
@@ -153,8 +160,7 @@ public final class AXObserverHub {
                     registration.notification as CFString
                 )
             }
-            registration.refcon?.release()
-            registration.refcon = nil
+            deactivateRefcon(for: registration)
         }
         retireObserverIfUnused(pid: pid)
     }
@@ -210,6 +216,44 @@ public final class AXObserverHub {
         return token
     }
 
+    /// Test-only: create a registration with the same refcon shape used by the
+    /// production AX registration path, but without calling into AX. This lets
+    /// tests drive stale-callback lifecycle behavior deterministically.
+    internal func _subscribeWithCallbackRefconForTesting(
+        pid: pid_t,
+        element: AXUIElement,
+        notification: String,
+        handler: @escaping @MainActor () -> Void
+    ) -> Token {
+        let key = RegistrationKey(pid: pid, element: element, notification: notification)
+        let token = Token()
+        if let existing = registrations[key] {
+            existing.handlers[token] = handler
+            tokenIndex[token] = key
+            return token
+        }
+        let registration = Registration(pid: pid, element: element, notification: notification)
+        registration.refconID = Self.activateRefcon(hub: self, key: key)
+        registration.handlers[token] = handler
+        registrations[key] = registration
+        tokenIndex[token] = key
+        return token
+    }
+
+    internal func _refconForTesting(
+        pid: pid_t,
+        element: AXUIElement,
+        notification: String
+    ) -> UnsafeMutableRawPointer? {
+        let key = RegistrationKey(pid: pid, element: element, notification: notification)
+        guard let id = registrations[key]?.refconID else { return nil }
+        return Self.refconPointer(for: id)
+    }
+
+    internal static func _dispatchCallbackForTesting(refcon: UnsafeMutableRawPointer?) {
+        dispatchCallback(refcon: refcon)
+    }
+
     // MARK: - Internals
 
     private func ensureObserver(forPid pid: pid_t) -> AXObserver? {
@@ -234,6 +278,30 @@ public final class AXObserverHub {
             AXObserverGetRunLoopSource(observer),
             .defaultMode
         )
+    }
+
+    private func deactivateRefcon(for registration: Registration) {
+        guard let id = registration.refconID else { return }
+        Self.deactivateRefcon(id: id)
+        registration.refconID = nil
+    }
+
+    private static func activateRefcon(hub: AXObserverHub, key: RegistrationKey) -> Int {
+        let id = nextRefconID
+        nextRefconID += 1
+        activeRefcons[id] = RefconBox(hub: hub, key: key)
+        return id
+    }
+
+    private static func deactivateRefcon(id: Int) {
+        activeRefcons.removeValue(forKey: id)
+    }
+
+    private static func refconPointer(for id: Int) -> UnsafeMutableRawPointer {
+        guard let pointer = UnsafeMutableRawPointer(bitPattern: id) else {
+            preconditionFailure("AXObserverHub refcon id must never be zero")
+        }
+        return pointer
     }
 
     /// Keys an AX registration by its triple. AXUIElement is a CF-bridged
@@ -263,9 +331,10 @@ public final class AXObserverHub {
         let element: AXUIElement
         let notification: String
         var handlers: [Token: @MainActor () -> Void] = [:]
-        /// Retained for the lifetime of the AX-level registration. Released
-        /// exactly once when the last handler goes away.
-        var refcon: Unmanaged<RefconBox>?
+        /// Opaque id passed through AX's `void *` refcon. The id is removed
+        /// from `activeRefcons` when the AX registration is retired, so stale
+        /// callbacks cannot dereference released Swift objects.
+        var refconID: Int?
 
         init(pid: pid_t, element: AXUIElement, notification: String) {
             self.pid = pid
@@ -288,12 +357,17 @@ public final class AXObserverHub {
     /// the main thread (already where we are: the observer source was added
     /// to the main runloop).
     private static let axCallback: AXObserverCallback = { _, _, _, refcon in
+        dispatchCallback(refcon: refcon)
+    }
+
+    private nonisolated static func dispatchCallback(refcon: UnsafeMutableRawPointer?) {
         guard let refcon else { return }
-        let box = Unmanaged<RefconBox>.fromOpaque(refcon).takeUnretainedValue()
         // We're on the main runloop because that's where the observer source
         // was registered. assumeIsolated avoids a Task hop that would lose
         // the synchronous "callback fires before AX returns" ordering.
         MainActor.assumeIsolated {
+            let id = Int(bitPattern: refcon)
+            guard let box = activeRefcons[id] else { return }
             guard let hub = box.hub,
                   let registration = hub.registrations[box.key] else { return }
             for handler in registration.handlers.values {

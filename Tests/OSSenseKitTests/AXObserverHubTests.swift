@@ -113,6 +113,126 @@ struct AXObserverHubTests {
         #expect(hub.subscriptionCount == 0)
     }
 
+    @Test("Callback delivered after unsubscribe ignores the stale refcon")
+    func staleCallbackAfterUnsubscribeIsIgnored() {
+        let hub = AXObserverHub()
+        let target = selfTarget()
+        let note = kAXSelectedTextChangedNotification as String
+        var hits = 0
+
+        let token = hub._subscribeWithCallbackRefconForTesting(
+            pid: target.pid,
+            element: target.element,
+            notification: note
+        ) { hits += 1 }
+        let refcon = hub._refconForTesting(
+            pid: target.pid,
+            element: target.element,
+            notification: note
+        )
+
+        hub.unsubscribe(token)
+        AXObserverHub._dispatchCallbackForTesting(refcon: refcon)
+
+        #expect(hits == 0)
+        #expect(hub.registrationCount == 0)
+        #expect(hub.subscriptionCount == 0)
+    }
+
+    @Test("Stale callback cannot dispatch to a later live registration")
+    func staleCallbackDoesNotDispatchToLaterRegistration() {
+        let hub = AXObserverHub()
+        let target = selfTarget()
+        let firstNote = kAXSelectedTextChangedNotification as String
+        let secondNote = kAXValueChangedNotification as String
+        var secondHits = 0
+
+        let firstToken = hub._subscribeWithCallbackRefconForTesting(
+            pid: target.pid,
+            element: target.element,
+            notification: firstNote
+        ) { }
+        let staleRefcon = hub._refconForTesting(
+            pid: target.pid,
+            element: target.element,
+            notification: firstNote
+        )
+        hub.unsubscribe(firstToken)
+
+        let secondToken = hub._subscribeWithCallbackRefconForTesting(
+            pid: target.pid,
+            element: target.element,
+            notification: secondNote
+        ) { secondHits += 1 }
+
+        AXObserverHub._dispatchCallbackForTesting(refcon: staleRefcon)
+
+        #expect(secondHits == 0)
+        hub.unsubscribe(secondToken)
+    }
+
+    @Test("Callback delivered after detach ignores the stale refcon")
+    func staleCallbackAfterDetachIsIgnored() {
+        let hub = AXObserverHub()
+        let target = selfTarget()
+        let note = kAXSelectedTextChangedNotification as String
+        var hits = 0
+
+        _ = hub._subscribeWithCallbackRefconForTesting(
+            pid: target.pid,
+            element: target.element,
+            notification: note
+        ) { hits += 1 }
+        let refcon = hub._refconForTesting(
+            pid: target.pid,
+            element: target.element,
+            notification: note
+        )
+
+        hub.detach(pid: target.pid)
+        AXObserverHub._dispatchCallbackForTesting(refcon: refcon)
+
+        #expect(hits == 0)
+        #expect(hub.registrationCount == 0)
+        #expect(hub.subscriptionCount == 0)
+    }
+
+    @Test("Retired callback refcon cannot alias a later registration")
+    func retiredRefconDoesNotAliasLaterRegistration() {
+        let hub = AXObserverHub()
+        let target = selfTarget()
+        let firstNote = kAXSelectedTextChangedNotification as String
+        let secondNote = kAXValueChangedNotification as String
+
+        let firstToken = hub._subscribeWithCallbackRefconForTesting(
+            pid: target.pid,
+            element: target.element,
+            notification: firstNote
+        ) { }
+        let firstRefcon = hub._refconForTesting(
+            pid: target.pid,
+            element: target.element,
+            notification: firstNote
+        )
+        hub.unsubscribe(firstToken)
+
+        let secondToken = hub._subscribeWithCallbackRefconForTesting(
+            pid: target.pid,
+            element: target.element,
+            notification: secondNote
+        ) { }
+        let secondRefcon = hub._refconForTesting(
+            pid: target.pid,
+            element: target.element,
+            notification: secondNote
+        )
+
+        #expect(firstRefcon != nil)
+        #expect(secondRefcon != nil)
+        #expect(firstRefcon != secondRefcon)
+        hub.unsubscribe(secondToken)
+    }
+
     @Test("Element identity uses CFEqual so re-reads of the same UI element coalesce")
     func elementIdentityViaCFEqual() {
         let hub = AXObserverHub()
