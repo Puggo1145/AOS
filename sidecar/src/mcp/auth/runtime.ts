@@ -449,7 +449,9 @@ function oauthAuthMaterialChanged(
 
 function oauthAuthMaterialKey(server: McpServerConfig): string {
 	if (server.transport.type !== "streamableHttp" || !server.transport.auth) {
-		throw new McpAuthError("OAuth auth material requested for non-OAuth server");
+		throw new McpAuthError(
+			"OAuth auth material requested for non-OAuth server",
+		);
 	}
 	return JSON.stringify({
 		url: server.transport.url,

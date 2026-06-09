@@ -267,7 +267,10 @@ function buildRawServerConfig(
 		} else if (authType === "headers") {
 			transport.headers = input.headers ?? {};
 		} else if (authType === "none") {
-			if (input.headers !== undefined && Object.keys(input.headers).length > 0) {
+			if (
+				input.headers !== undefined &&
+				Object.keys(input.headers).length > 0
+			) {
 				throw schemaError(
 					"MCP streamableHttp authType none cannot include headers",
 				);

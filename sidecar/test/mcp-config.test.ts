@@ -415,7 +415,8 @@ test("updateMcpServerConfig preserves advanced OAuth auth when auth stays OAuth"
 							},
 							registration: {
 								type: "clientIdMetadataDocument",
-								clientId: "https://client.example.com/oauth/client-metadata.json",
+								clientId:
+									"https://client.example.com/oauth/client-metadata.json",
 							},
 						},
 					},
