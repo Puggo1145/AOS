@@ -6,7 +6,8 @@ export type CapabilityId =
 	| "process.spawn"
 	| "computer.read"
 	| "computer.actuate"
-	| "computer.cleanup";
+	| "computer.cleanup"
+	| "mcp.execute";
 
 export type PermissionGroupId = "computer-use";
 export type PermissionRisk = "low" | "medium" | "high";
@@ -24,6 +25,9 @@ export const INTERNAL_TOOL_NAMES = [
 	"use_keyboard",
 	"perform_AX_action",
 	"todo_write",
+	"mcp_search_tools",
+	"mcp_get_tool_details",
+	"mcp_call_tool",
 ] as const;
 
 export type InternalToolName = (typeof INTERNAL_TOOL_NAMES)[number];

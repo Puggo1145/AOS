@@ -66,6 +66,26 @@ test("method-level semantics distinguish request and notification routes inside 
 		direction: "shellToBun",
 		kind: "request",
 	});
+	expect(rpcMethodSemantics(RPCMethod.mcpStatus)).toMatchObject({
+		direction: "shellToBun",
+		kind: "request",
+	});
+	expect(rpcMethodSemantics(RPCMethod.mcpGetConfig)).toMatchObject({
+		direction: "shellToBun",
+		kind: "request",
+	});
+	expect(rpcMethodSemantics(RPCMethod.mcpAdd)).toMatchObject({
+		direction: "shellToBun",
+		kind: "request",
+	});
+	expect(rpcMethodSemantics(RPCMethod.mcpUpdate)).toMatchObject({
+		direction: "shellToBun",
+		kind: "request",
+	});
+	expect(rpcMethodSemantics(RPCMethod.mcpStatusChanged)).toMatchObject({
+		direction: "bunToShell",
+		kind: "notification",
+	});
 	expect(rpcMethodSemantics(RPCMethod.permissionRequestApproval)).toMatchObject(
 		{
 			direction: "bunToShell",
@@ -97,6 +117,18 @@ test("timeout and fast-path metadata live on the same method semantic entries", 
 		kind: "request",
 		direction: "shellToBun",
 		inboundTimeoutMs: 130_000,
+		fastPath: false,
+	});
+	expect(rpcMethodSemantics(RPCMethod.mcpAuthStartLogin)).toMatchObject({
+		kind: "request",
+		direction: "shellToBun",
+		inboundTimeoutMs: 30_000,
+		fastPath: false,
+	});
+	expect(rpcMethodSemantics(RPCMethod.mcpConnect)).toMatchObject({
+		kind: "request",
+		direction: "shellToBun",
+		inboundTimeoutMs: 30_000,
 		fastPath: false,
 	});
 	expect(rpcMethodSemantics(RPCMethod.sessionCreate)).toMatchObject({

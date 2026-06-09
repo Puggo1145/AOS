@@ -198,6 +198,149 @@ struct SettingsPermissionsSummaryRow: View {
     }
 }
 
+struct SettingsMcpSummaryRow: View {
+    let configuredCount: Int
+    let connectedCount: Int
+    let onOpen: () -> Void
+
+    var body: some View {
+        Button(action: onOpen) {
+            HStack(spacing: 10) {
+                Image(systemName: "point.3.connected.trianglepath.dotted")
+                    .notchFont(size: 12, weight: .semibold)
+                    .foregroundStyle(.white.opacity(0.7))
+                    .frame(width: 16)
+                Text("MCP")
+                    .notchFont(size: 13, weight: .medium)
+                    .foregroundStyle(.white.opacity(0.92))
+                Spacer(minLength: 8)
+                Text(summary)
+                    .notchFont(size: 11)
+                    .notchForeground(.secondary)
+                    .lineLimit(1)
+                Image(systemName: "chevron.right")
+                    .notchFont(size: 10, weight: .semibold)
+                    .notchForeground(.secondary)
+            }
+            .settingsRowBackground()
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("MCP, \(summary)"))
+    }
+
+    private var summary: String {
+        if configuredCount == 0 { return "None configured" }
+        return "\(connectedCount)/\(configuredCount) connected"
+    }
+}
+
+struct SettingsMcpAddButton: View {
+    let onOpen: () -> Void
+
+    var body: some View {
+        Button(action: onOpen) {
+            HStack(spacing: 8) {
+                Image(systemName: "plus.circle.fill")
+                    .notchFont(size: 12, weight: .semibold)
+                    .foregroundStyle(Color.accentColor.opacity(0.9))
+                Text("Add MCP")
+                    .notchFont(size: 12, weight: .semibold)
+                    .foregroundStyle(.white.opacity(0.92))
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .notchFont(size: 10, weight: .semibold)
+                    .notchForeground(.secondary)
+            }
+            .settingsRowBackground()
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("Add MCP server"))
+    }
+}
+
+struct SettingsMcpServerCard: View {
+    let server: McpServerStatusInfo
+    let loginSession: McpAuthLoginStatusParams?
+    let isWorking: Bool
+    let onConnect: () -> Void
+    let onDisconnect: () -> Void
+    let onEdit: () -> Void
+    let onDelete: () -> Void
+
+    private var isConnected: Bool {
+        server.connectionState == .connected
+    }
+
+    private var hasActiveLogin: Bool {
+        guard let loginSession else { return false }
+        switch loginSession.state {
+        case .starting, .awaitingBrowser, .awaitingCallback, .exchanging:
+            return true
+        case .success, .failed, .cancelled:
+            return false
+        }
+    }
+
+    private var actionTitle: String {
+        if isWorking { return "Working…" }
+        if hasActiveLogin { return "Retry" }
+        return isConnected ? "Disconnect" : "Connect"
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(server.name)
+                    .notchFont(size: 13, weight: .semibold)
+                    .foregroundStyle(.white.opacity(0.94))
+                    .lineLimit(1)
+                Text(server.description)
+                    .notchFont(size: 11)
+                    .notchForeground(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Button {
+                isConnected ? onDisconnect() : onConnect()
+            } label: {
+                Text(actionTitle)
+                    .notchFont(size: 11, weight: .semibold)
+                    .foregroundStyle(.white.opacity(0.9))
+                    .frame(width: 76)
+                    .padding(.vertical, 7)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(isConnected ? Color.white.opacity(0.08) : Color.accentColor.opacity(0.85))
+                    )
+            }
+            .buttonStyle(.plain)
+            .disabled(isWorking)
+            .accessibilityLabel(Text("\(actionTitle) \(server.name)"))
+
+            Menu {
+                Button(action: onEdit) {
+                    Label("Edit", systemImage: "pencil")
+                }
+                Button(role: .destructive, action: onDelete) {
+                    Label("Delete", systemImage: "trash")
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .notchFont(size: 13, weight: .semibold)
+                    .foregroundStyle(.white.opacity(0.75))
+                    .frame(width: 26, height: 26)
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .accessibilityLabel(Text("More actions for \(server.name)"))
+        }
+        .settingsRowBackground()
+        .accessibilityElement(children: .contain)
+    }
+}
+
 struct SettingsDisplayModeRow: View {
     let displayMode: ConversationDisplayMode
     let onOpen: () -> Void

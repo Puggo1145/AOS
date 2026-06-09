@@ -408,6 +408,7 @@ public final class NotchViewModel {
     public let sessionService: SessionService
     public let providerService: ProviderService
     public let configService: ConfigService
+    public let mcpService: McpService
     public let permissionsService: PermissionsService
     public let visualCapturePolicyStore: VisualCapturePolicyStore
     public let permissionApprovalService: PermissionApprovalService?
@@ -449,6 +450,7 @@ public final class NotchViewModel {
         sessionService: SessionService,
         providerService: ProviderService,
         configService: ConfigService,
+        mcpService: McpService,
         permissionsService: PermissionsService,
         visualCapturePolicyStore: VisualCapturePolicyStore,
         permissionApprovalService: PermissionApprovalService? = nil,
@@ -460,6 +462,7 @@ public final class NotchViewModel {
         self.sessionService = sessionService
         self.providerService = providerService
         self.configService = configService
+        self.mcpService = mcpService
         self.permissionsService = permissionsService
         self.visualCapturePolicyStore = visualCapturePolicyStore
         self.permissionApprovalService = permissionApprovalService

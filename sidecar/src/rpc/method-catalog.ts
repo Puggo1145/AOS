@@ -170,6 +170,64 @@ const RPC_METHOD_CATALOG = {
 		"request",
 	),
 
+	[RPCMethod.mcpStatus]: method(RPCMethod.mcpStatus, "shellToBun", "request"),
+	[RPCMethod.mcpGetConfig]: method(
+		RPCMethod.mcpGetConfig,
+		"shellToBun",
+		"request",
+	),
+	[RPCMethod.mcpAdd]: method(RPCMethod.mcpAdd, "shellToBun", "request"),
+	[RPCMethod.mcpUpdate]: method(RPCMethod.mcpUpdate, "shellToBun", "request"),
+	[RPCMethod.mcpConnect]: method(
+		RPCMethod.mcpConnect,
+		"shellToBun",
+		"request",
+		{ inboundTimeoutMs: 30_000 },
+	),
+	[RPCMethod.mcpDisconnect]: method(
+		RPCMethod.mcpDisconnect,
+		"shellToBun",
+		"request",
+	),
+	[RPCMethod.mcpDelete]: method(RPCMethod.mcpDelete, "shellToBun", "request"),
+	[RPCMethod.mcpStatusChanged]: method(
+		RPCMethod.mcpStatusChanged,
+		"bunToShell",
+		"notification",
+	),
+
+	[RPCMethod.mcpAuthStatus]: method(
+		RPCMethod.mcpAuthStatus,
+		"shellToBun",
+		"request",
+	),
+	[RPCMethod.mcpAuthStartLogin]: method(
+		RPCMethod.mcpAuthStartLogin,
+		"shellToBun",
+		"request",
+		{ inboundTimeoutMs: 30_000 },
+	),
+	[RPCMethod.mcpAuthCancelLogin]: method(
+		RPCMethod.mcpAuthCancelLogin,
+		"shellToBun",
+		"request",
+	),
+	[RPCMethod.mcpAuthLogout]: method(
+		RPCMethod.mcpAuthLogout,
+		"shellToBun",
+		"request",
+	),
+	[RPCMethod.mcpAuthLoginStatus]: method(
+		RPCMethod.mcpAuthLoginStatus,
+		"bunToShell",
+		"notification",
+	),
+	[RPCMethod.mcpAuthStatusChanged]: method(
+		RPCMethod.mcpAuthStatusChanged,
+		"bunToShell",
+		"notification",
+	),
+
 	[RPCMethod.configGet]: method(RPCMethod.configGet, "shellToBun", "request"),
 	[RPCMethod.configSet]: method(RPCMethod.configSet, "shellToBun", "request"),
 	[RPCMethod.configSetEffort]: method(

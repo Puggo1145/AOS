@@ -44,6 +44,20 @@ import {
 	type ProviderSetApiKeyParams,
 	type ProviderClearApiKeyParams,
 	type ProviderLogoutParams,
+	type McpStatusParams,
+	type McpGetConfigParams,
+	type McpAddParams,
+	type McpUpdateParams,
+	type McpConnectParams,
+	type McpDisconnectParams,
+	type McpDeleteParams,
+	type McpStatusChangedParams,
+	type McpAuthStatusParams,
+	type McpAuthStartLoginParams,
+	type McpAuthCancelLoginParams,
+	type McpAuthLogoutParams,
+	type McpAuthLoginStatusParams,
+	type McpAuthStatusChangedParams,
 	type PermissionRequestApprovalParams,
 	type PermissionApprovalCancelledParams,
 	type DevContextGetParams,
@@ -442,6 +456,116 @@ test("provider.logout fixture roundtrips byte-equal", () => {
 	const req = parsed as RPCRequest<ProviderLogoutParams>;
 	expect(req.method).toBe(RPCMethod.providerLogout);
 	expect(typeof req.params.providerId).toBe("string");
+});
+
+test("mcp.status fixture roundtrips byte-equal", () => {
+	assertRoundtrip("mcp.status.json");
+	const { parsed } = loadFixture("mcp.status.json");
+	const req = parsed as RPCRequest<McpStatusParams>;
+	expect(req.method).toBe(RPCMethod.mcpStatus);
+});
+
+test("mcp.getConfig fixture roundtrips byte-equal", () => {
+	assertRoundtrip("mcp.getConfig.json");
+	const { parsed } = loadFixture("mcp.getConfig.json");
+	const req = parsed as RPCRequest<McpGetConfigParams>;
+	expect(req.method).toBe(RPCMethod.mcpGetConfig);
+	expect(req.params.serverId).toBe("filesystem");
+});
+
+test("mcp.add fixture roundtrips byte-equal", () => {
+	assertRoundtrip("mcp.add.json");
+	const { parsed } = loadFixture("mcp.add.json");
+	const req = parsed as RPCRequest<McpAddParams>;
+	expect(req.method).toBe(RPCMethod.mcpAdd);
+	expect(req.params.serverId).toBe("filesystem");
+	expect(req.params.transportType).toBe("stdio");
+});
+
+test("mcp.update fixture roundtrips byte-equal", () => {
+	assertRoundtrip("mcp.update.json");
+	const { parsed } = loadFixture("mcp.update.json");
+	const req = parsed as RPCRequest<McpUpdateParams>;
+	expect(req.method).toBe(RPCMethod.mcpUpdate);
+	expect(req.params.serverId).toBe("filesystem");
+	expect(req.params.command).toBe("node");
+});
+
+test("mcp.connect fixture roundtrips byte-equal", () => {
+	assertRoundtrip("mcp.connect.json");
+	const { parsed } = loadFixture("mcp.connect.json");
+	const req = parsed as RPCRequest<McpConnectParams>;
+	expect(req.method).toBe(RPCMethod.mcpConnect);
+	expect(req.params.serverId).toBe("linear");
+});
+
+test("mcp.disconnect fixture roundtrips byte-equal", () => {
+	assertRoundtrip("mcp.disconnect.json");
+	const { parsed } = loadFixture("mcp.disconnect.json");
+	const req = parsed as RPCRequest<McpDisconnectParams>;
+	expect(req.method).toBe(RPCMethod.mcpDisconnect);
+	expect(req.params.serverId).toBe("linear");
+});
+
+test("mcp.delete fixture roundtrips byte-equal", () => {
+	assertRoundtrip("mcp.delete.json");
+	const { parsed } = loadFixture("mcp.delete.json");
+	const req = parsed as RPCRequest<McpDeleteParams>;
+	expect(req.method).toBe(RPCMethod.mcpDelete);
+	expect(req.params.serverId).toBe("linear");
+});
+
+test("mcp.statusChanged fixture roundtrips byte-equal", () => {
+	assertRoundtrip("mcp.statusChanged.json");
+	const { parsed } = loadFixture("mcp.statusChanged.json");
+	const note = parsed as RPCNotification<McpStatusChangedParams>;
+	expect(note.method).toBe(RPCMethod.mcpStatusChanged);
+	expect(note.params.server.connectionState).toBe("connected");
+});
+
+test("mcp.auth.status fixture roundtrips byte-equal", () => {
+	assertRoundtrip("mcp.auth.status.json");
+	const { parsed } = loadFixture("mcp.auth.status.json");
+	const req = parsed as RPCRequest<McpAuthStatusParams>;
+	expect(req.method).toBe(RPCMethod.mcpAuthStatus);
+});
+
+test("mcp.auth.startLogin fixture roundtrips byte-equal", () => {
+	assertRoundtrip("mcp.auth.startLogin.json");
+	const { parsed } = loadFixture("mcp.auth.startLogin.json");
+	const req = parsed as RPCRequest<McpAuthStartLoginParams>;
+	expect(req.method).toBe(RPCMethod.mcpAuthStartLogin);
+	expect(req.params.serverId).toBe("linear");
+});
+
+test("mcp.auth.cancelLogin fixture roundtrips byte-equal", () => {
+	assertRoundtrip("mcp.auth.cancelLogin.json");
+	const { parsed } = loadFixture("mcp.auth.cancelLogin.json");
+	const req = parsed as RPCRequest<McpAuthCancelLoginParams>;
+	expect(req.method).toBe(RPCMethod.mcpAuthCancelLogin);
+});
+
+test("mcp.auth.logout fixture roundtrips byte-equal", () => {
+	assertRoundtrip("mcp.auth.logout.json");
+	const { parsed } = loadFixture("mcp.auth.logout.json");
+	const req = parsed as RPCRequest<McpAuthLogoutParams>;
+	expect(req.method).toBe(RPCMethod.mcpAuthLogout);
+});
+
+test("mcp.auth.loginStatus fixture roundtrips byte-equal", () => {
+	assertRoundtrip("mcp.auth.loginStatus.json");
+	const { parsed } = loadFixture("mcp.auth.loginStatus.json");
+	const note = parsed as RPCNotification<McpAuthLoginStatusParams>;
+	expect(note.method).toBe(RPCMethod.mcpAuthLoginStatus);
+	expect(note.params.state).toBe("awaitingBrowser");
+});
+
+test("mcp.auth.statusChanged fixture roundtrips byte-equal", () => {
+	assertRoundtrip("mcp.auth.statusChanged.json");
+	const { parsed } = loadFixture("mcp.auth.statusChanged.json");
+	const note = parsed as RPCNotification<McpAuthStatusChangedParams>;
+	expect(note.method).toBe(RPCMethod.mcpAuthStatusChanged);
+	expect(note.params.reason).toBe("loginRequired");
 });
 
 test("dev.context.get fixture roundtrips byte-equal", () => {

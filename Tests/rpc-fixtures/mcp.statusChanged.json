@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","method":"mcp.statusChanged","params":{"server":{"authState":"ready","authType":"oauth","connectionState":"connected","description":"Issue tracker","name":"Linear","serverId":"linear","transportType":"streamableHttp"}}}

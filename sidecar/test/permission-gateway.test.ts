@@ -117,6 +117,38 @@ test("ask policy sends approval request without timeout and allows on user appro
 	});
 });
 
+test("MCP call sends approval request with remote tool context", async () => {
+	const { gateway, calls } = createGateway(["allow"]);
+
+	const decision = await gateway.authorize(
+		authInput("mcp_call_tool", {
+			name: "linear.create_issue",
+			arguments: { title: "Bug" },
+		}),
+	);
+
+	expect(decision).toEqual({ kind: "allowed" });
+	expect(calls).toHaveLength(1);
+	expect(calls[0]?.params).toMatchObject({
+		toolName: "mcp_call_tool",
+		title: "Allow MCP tool?",
+		risk: "high",
+		capabilities: [
+			{
+				capability: "mcp.execute",
+				action: "Execute MCP tool",
+				target: "linear.create_issue",
+				details: {
+					serverId: "linear",
+					toolName: "create_issue",
+					canonicalName: "linear.create_issue",
+					argumentsSummary: '{"title":"Bug"}',
+				},
+			},
+		],
+	});
+});
+
 test("fullAccess permission level allows ask policies without Shell approval", async () => {
 	const { gateway, calls } = createGatewayWithPermissionLevel("fullAccess", [
 		"deny",
@@ -125,6 +157,22 @@ test("fullAccess permission level allows ask policies without Shell approval", a
 
 	const decision = await gateway.authorize(
 		authInput("write", { path, content: "hello" }),
+	);
+
+	expect(decision).toEqual({ kind: "allowed" });
+	expect(calls).toHaveLength(0);
+});
+
+test("fullAccess permission level allows MCP calls without Shell approval", async () => {
+	const { gateway, calls } = createGatewayWithPermissionLevel("fullAccess", [
+		"deny",
+	]);
+
+	const decision = await gateway.authorize(
+		authInput("mcp_call_tool", {
+			name: "linear.create_issue",
+			arguments: { title: "Bug" },
+		}),
 	);
 
 	expect(decision).toEqual({ kind: "allowed" });

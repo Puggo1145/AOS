@@ -130,6 +130,24 @@ struct RoundtripTests {
         FixtureRow(name: "provider.clearApiKey.json") { try assertRoundtrip(fixture: "provider.clearApiKey.json", as: RPCRequest<ProviderClearApiKeyParams>.self) },
         FixtureRow(name: "provider.logout.json") { try assertRoundtrip(fixture: "provider.logout.json", as: RPCRequest<ProviderLogoutParams>.self) },
 
+        // mcp.*
+        FixtureRow(name: "mcp.status.json") { try assertRoundtrip(fixture: "mcp.status.json", as: RPCRequest<McpStatusParams>.self) },
+        FixtureRow(name: "mcp.getConfig.json") { try assertRoundtrip(fixture: "mcp.getConfig.json", as: RPCRequest<McpGetConfigParams>.self) },
+        FixtureRow(name: "mcp.add.json") { try assertRoundtrip(fixture: "mcp.add.json", as: RPCRequest<McpAddParams>.self) },
+        FixtureRow(name: "mcp.update.json") { try assertRoundtrip(fixture: "mcp.update.json", as: RPCRequest<McpUpdateParams>.self) },
+        FixtureRow(name: "mcp.connect.json") { try assertRoundtrip(fixture: "mcp.connect.json", as: RPCRequest<McpConnectParams>.self) },
+        FixtureRow(name: "mcp.disconnect.json") { try assertRoundtrip(fixture: "mcp.disconnect.json", as: RPCRequest<McpDisconnectParams>.self) },
+        FixtureRow(name: "mcp.delete.json") { try assertRoundtrip(fixture: "mcp.delete.json", as: RPCRequest<McpDeleteParams>.self) },
+        FixtureRow(name: "mcp.statusChanged.json") { try assertRoundtrip(fixture: "mcp.statusChanged.json", as: RPCNotification<McpStatusChangedParams>.self) },
+
+        // mcp.auth.*
+        FixtureRow(name: "mcp.auth.status.json") { try assertRoundtrip(fixture: "mcp.auth.status.json", as: RPCRequest<McpAuthStatusParams>.self) },
+        FixtureRow(name: "mcp.auth.startLogin.json") { try assertRoundtrip(fixture: "mcp.auth.startLogin.json", as: RPCRequest<McpAuthStartLoginParams>.self) },
+        FixtureRow(name: "mcp.auth.cancelLogin.json") { try assertRoundtrip(fixture: "mcp.auth.cancelLogin.json", as: RPCRequest<McpAuthCancelLoginParams>.self) },
+        FixtureRow(name: "mcp.auth.logout.json") { try assertRoundtrip(fixture: "mcp.auth.logout.json", as: RPCRequest<McpAuthLogoutParams>.self) },
+        FixtureRow(name: "mcp.auth.loginStatus.json") { try assertRoundtrip(fixture: "mcp.auth.loginStatus.json", as: RPCNotification<McpAuthLoginStatusParams>.self) },
+        FixtureRow(name: "mcp.auth.statusChanged.json") { try assertRoundtrip(fixture: "mcp.auth.statusChanged.json", as: RPCNotification<McpAuthStatusChangedParams>.self) },
+
         // dev.*
         FixtureRow(name: "dev.context.get.json") { try assertRoundtrip(fixture: "dev.context.get.json", as: RPCRequest<DevContextGetParams>.self) },
         FixtureRow(name: "dev.context.changed.json") { try assertRoundtrip(fixture: "dev.context.changed.json", as: RPCNotification<DevContextChangedParams>.self) },

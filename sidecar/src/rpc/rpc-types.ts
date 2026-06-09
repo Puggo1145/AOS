@@ -131,6 +131,20 @@ export const RPCMethod = {
 	providerSetApiKey: "provider.setApiKey",
 	providerClearApiKey: "provider.clearApiKey",
 	providerLogout: "provider.logout",
+	mcpStatus: "mcp.status",
+	mcpGetConfig: "mcp.getConfig",
+	mcpAdd: "mcp.add",
+	mcpUpdate: "mcp.update",
+	mcpConnect: "mcp.connect",
+	mcpDisconnect: "mcp.disconnect",
+	mcpDelete: "mcp.delete",
+	mcpStatusChanged: "mcp.statusChanged",
+	mcpAuthStatus: "mcp.auth.status",
+	mcpAuthStartLogin: "mcp.auth.startLogin",
+	mcpAuthCancelLogin: "mcp.auth.cancelLogin",
+	mcpAuthLogout: "mcp.auth.logout",
+	mcpAuthLoginStatus: "mcp.auth.loginStatus",
+	mcpAuthStatusChanged: "mcp.auth.statusChanged",
 	configGet: "config.get",
 	configSet: "config.set",
 	configSetEffort: "config.setEffort",
@@ -850,6 +864,195 @@ export interface ProviderLogoutParams {
 export interface ProviderLogoutResult {
 	/// `false` when nothing was cleared (no token / no key on disk).
 	cleared: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// mcp.* — Shell ↔ Bun. Configured MCP Host server lifecycle surface.
+// ---------------------------------------------------------------------------
+
+export type McpConnectionState = "disconnected" | "connected" | "failed";
+export type McpTransportType = "stdio" | "streamableHttp";
+
+export interface McpServerStatusInfo {
+	serverId: string;
+	name: string;
+	description: string;
+	transportType: McpTransportType;
+	connectionState: McpConnectionState;
+	authState: McpAuthServerState;
+	authType: McpAuthType;
+	message?: string;
+}
+
+export type McpStatusParams = Record<string, never>;
+
+export interface McpStatusResult {
+	servers: McpServerStatusInfo[];
+}
+
+export interface McpServerConfigInfo {
+	serverId: string;
+	description: string;
+	transportType: McpTransportType;
+	authType?: McpAuthType;
+	autoConnect?: boolean;
+	command?: string;
+	args?: string[];
+	env?: Record<string, string>;
+	url?: string;
+	headers?: Record<string, string>;
+}
+
+export interface McpGetConfigParams {
+	serverId: string;
+}
+
+export interface McpGetConfigResult {
+	config: McpServerConfigInfo;
+}
+
+export interface McpAddParams {
+	serverId: string;
+	description: string;
+	transportType: McpTransportType;
+	authType?: McpAuthType;
+	autoConnect?: boolean;
+	command?: string;
+	args?: string[];
+	env?: Record<string, string>;
+	url?: string;
+	headers?: Record<string, string>;
+}
+
+export interface McpAddResult {
+	server: McpServerStatusInfo;
+}
+
+export interface McpUpdateParams {
+	serverId: string;
+	description: string;
+	transportType: McpTransportType;
+	authType?: McpAuthType;
+	autoConnect?: boolean;
+	command?: string;
+	args?: string[];
+	env?: Record<string, string>;
+	url?: string;
+	headers?: Record<string, string>;
+}
+
+export interface McpUpdateResult {
+	server: McpServerStatusInfo;
+}
+
+export interface McpConnectParams {
+	serverId: string;
+}
+
+export interface McpConnectResult {
+	server: McpServerStatusInfo;
+}
+
+export interface McpDisconnectParams {
+	serverId: string;
+}
+
+export interface McpDisconnectResult {
+	server: McpServerStatusInfo;
+}
+
+export interface McpDeleteParams {
+	serverId: string;
+}
+
+export interface McpDeleteResult {
+	deleted: boolean;
+}
+
+export interface McpStatusChangedParams {
+	server: McpServerStatusInfo;
+}
+
+// ---------------------------------------------------------------------------
+// mcp.auth.* — Shell ↔ Bun. Server-scoped MCP OAuth Host surface.
+// ---------------------------------------------------------------------------
+
+export type McpAuthServerState =
+	| "notConfigured"
+	| "unauthenticated"
+	| "authenticating"
+	| "ready"
+	| "failed";
+export type McpAuthType = "none" | "headers" | "oauth";
+export type McpAuthLoginState =
+	| "starting"
+	| "awaitingBrowser"
+	| "awaitingCallback"
+	| "exchanging"
+	| "success"
+	| "failed"
+	| "cancelled";
+export type McpAuthStatusReason =
+	| "loginRequired"
+	| "authInvalidated"
+	| "insufficientScope"
+	| "loggedOut";
+
+export interface McpAuthServerInfo {
+	serverId: string;
+	state: McpAuthServerState;
+	authType: McpAuthType;
+	authorizationServerUrl?: string;
+	resource?: string;
+	scopes?: string[];
+	message?: string;
+}
+
+export type McpAuthStatusParams = Record<string, never>;
+
+export interface McpAuthStatusResult {
+	servers: McpAuthServerInfo[];
+}
+
+export interface McpAuthStartLoginParams {
+	serverId: string;
+	scope?: string;
+}
+
+export interface McpAuthStartLoginResult {
+	loginId: string;
+	authorizeUrl: string;
+}
+
+export interface McpAuthCancelLoginParams {
+	loginId: string;
+}
+
+export interface McpAuthCancelLoginResult {
+	cancelled: boolean;
+}
+
+export interface McpAuthLogoutParams {
+	serverId: string;
+}
+
+export interface McpAuthLogoutResult {
+	cleared: boolean;
+}
+
+export interface McpAuthLoginStatusParams {
+	loginId: string;
+	serverId: string;
+	state: McpAuthLoginState;
+	authorizeUrl?: string;
+	message?: string;
+}
+
+export interface McpAuthStatusChangedParams {
+	serverId: string;
+	state: "unauthenticated" | "authenticating" | "ready" | "failed";
+	reason?: McpAuthStatusReason;
+	message?: string;
 }
 
 // ---------------------------------------------------------------------------

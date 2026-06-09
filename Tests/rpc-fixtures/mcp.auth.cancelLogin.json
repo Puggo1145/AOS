@@ -1,0 +1,1 @@
+{"id":53,"jsonrpc":"2.0","method":"mcp.auth.cancelLogin","params":{"loginId":"mcp-login-abc"}}

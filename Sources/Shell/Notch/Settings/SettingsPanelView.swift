@@ -23,8 +23,11 @@ import OSSenseKit
 // if already on .main).
 
 struct SettingsPanelView: View {
+    private let mainRowsScrollMaxHeight: CGFloat = 220
+
     let configService: ConfigService
     let providerService: ProviderService
+    let mcpService: McpService
     let permissionsService: PermissionsService
     let topSafeInset: CGFloat
     let onClose: () -> Void
@@ -33,6 +36,8 @@ struct SettingsPanelView: View {
     @State private var apiKeyDraft: String = ""
     @State private var apiKeySaveError: String? = nil
     @State private var apiKeySaving: Bool = false
+    @State private var mcpDraft = McpServerDraft()
+    @State private var mcpAddError: String? = nil
     @State private var permissionRequestError: String? = nil
     @AppStorage("notch-agent.conversationDisplayMode") private var displayModeRaw: String = ConversationDisplayMode.history.rawValue
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -45,6 +50,8 @@ struct SettingsPanelView: View {
         case permissionLevel
         case displayMode
         case permissions
+        case mcp
+        case mcpAdd
         case apiKey
     }
 
@@ -100,6 +107,20 @@ struct SettingsPanelView: View {
                         insertion: .move(edge: .trailing).combined(with: .opacity),
                         removal: .move(edge: .trailing).combined(with: .opacity)
                     ))
+            case .mcp:
+                mcpPage
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .trailing).combined(with: .opacity),
+                        removal: .move(edge: .trailing).combined(with: .opacity)
+                    ))
+            case .mcpAdd:
+                mcpAddPage
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .trailing).combined(with: .opacity),
+                        removal: .move(edge: .trailing).combined(with: .opacity)
+                    ))
             case .apiKey:
                 apiKeyPage
                     .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -110,6 +131,7 @@ struct SettingsPanelView: View {
             }
         }
         .task {
+            await mcpService.refreshStatus()
             // While Settings is open, poll so toggling in System
             // Settings is reflected immediately. The probe is async on
             // purpose — the screen recording arm uses
@@ -172,35 +194,42 @@ struct SettingsPanelView: View {
                 }
             }
 
-            // API key row appears only for apiKey-auth providers (e.g. DeepSeek).
-            // Hidden for OAuth providers — chatgpt-plan handles auth via the
-            // separate Onboard panel.
-            if let p = currentRuntimeProvider, p.authMethod == .apiKey {
-                SettingsAPIKeyRow(provider: p) {
-                    openApiKeyPage(provider: p)
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 14) {
+                    // API key row appears only for apiKey-auth providers (e.g. DeepSeek).
+                    // Hidden for OAuth providers — chatgpt-plan handles auth via the
+                    // separate Onboard panel.
+                    if let p = currentRuntimeProvider, p.authMethod == .apiKey {
+                        SettingsAPIKeyRow(provider: p) {
+                            openApiKeyPage(provider: p)
+                        }
+                    }
+
+                    // OAuth row mirrors the apiKey row's contract: always present
+                    // for OAuth-auth providers so the user can sign in (when not
+                    // authed) or re-authenticate (when already signed in). Without
+                    // a re-auth path, a stale token + no UI surface means the user
+                    // has to nuke `~/.notch-agent/auth/` by hand.
+                    if let p = currentRuntimeProvider, p.authMethod == .oauth {
+                        SettingsOAuthRow(
+                            provider: p,
+                            providerService: providerService,
+                            onError: { apiKeySaveError = $0 }
+                        )
+                    }
+
+                    permissionsRow
+
+                    mcpRow
+
+                    permissionLevelRow
+
+                    displayModeRow
+
+                    devModeRow
                 }
             }
-
-            // OAuth row mirrors the apiKey row's contract: always present
-            // for OAuth-auth providers so the user can sign in (when not
-            // authed) or re-authenticate (when already signed in). Without
-            // a re-auth path, a stale token + no UI surface means the user
-            // has to nuke `~/.notch-agent/auth/` by hand.
-            if let p = currentRuntimeProvider, p.authMethod == .oauth {
-                SettingsOAuthRow(
-                    provider: p,
-                    providerService: providerService,
-                    onError: { apiKeySaveError = $0 }
-                )
-            }
-
-            permissionsRow
-
-            permissionLevelRow
-
-            displayModeRow
-
-            devModeRow
+            .frame(maxHeight: mainRowsScrollMaxHeight)
 
             quitButton
         }
@@ -429,6 +458,244 @@ struct SettingsPanelView: View {
         }
     }
 
+    // MARK: - MCP servers
+
+    private var mcpRow: some View {
+        SettingsMcpSummaryRow(
+            configuredCount: mcpService.servers.count,
+            connectedCount: mcpService.servers.filter { $0.connectionState == .connected }.count
+        ) {
+            page = .mcp
+        }
+    }
+
+    private var mcpPage: some View {
+        pickerPage(title: "MCP") {
+            VStack(alignment: .leading, spacing: 8) {
+                SettingsMcpAddButton {
+                    resetMcpDraft()
+                    page = .mcpAdd
+                }
+
+                if mcpService.servers.isEmpty {
+                    Text(mcpService.loaded ? "No MCP servers configured." : "Loading…")
+                        .notchFont(size: 12)
+                        .notchForeground(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.vertical, 24)
+                } else {
+                    ForEach(mcpService.servers) { server in
+                        SettingsMcpServerCard(
+                            server: server,
+                            loginSession: mcpService.loginSessions[server.serverId],
+                            isWorking: mcpService.actionServerIds.contains(server.serverId),
+                            onConnect: {
+                                Task { await mcpService.connect(serverId: server.serverId) }
+                            },
+                            onDisconnect: {
+                                Task { await mcpService.disconnect(serverId: server.serverId) }
+                            },
+                            onEdit: {
+                                openMcpEditPage(serverId: server.serverId)
+                            },
+                            onDelete: {
+                                Task { await mcpService.delete(serverId: server.serverId) }
+                            }
+                        )
+                    }
+                }
+                if let error = mcpService.statusError {
+                    Text(error)
+                        .notchFont(size: 11)
+                        .foregroundStyle(.red.opacity(0.9))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private var mcpAddPage: some View {
+        pickerPage(title: mcpDraft.isEditing ? "Edit MCP" : "Add MCP", backPage: .mcp) {
+            VStack(alignment: .leading, spacing: 10) {
+                mcpTextField(
+                    label: "Server ID",
+                    placeholder: "filesystem",
+                    text: $mcpDraft.serverId,
+                    monospaced: true,
+                    isEnabled: !mcpDraft.isEditing
+                )
+                mcpTextField(
+                    label: "Description",
+                    placeholder: "Local filesystem tools",
+                    text: $mcpDraft.description
+                )
+
+                Picker("Transport", selection: $mcpDraft.transportType) {
+                    Text("stdio").tag(McpTransportType.stdio)
+                    Text("HTTP").tag(McpTransportType.streamableHttp)
+                }
+                .pickerStyle(.segmented)
+
+                Toggle(isOn: $mcpDraft.autoConnect) {
+                    Text("Auto Connect")
+                        .notchFont(size: 12, weight: .medium)
+                        .notchForeground(.primary)
+                }
+                .toggleStyle(.switch)
+                .accessibilityLabel(Text("Auto connect MCP server on startup"))
+
+                if mcpDraft.transportType == .stdio {
+                    mcpTextField(
+                        label: "Command",
+                        placeholder: "npx",
+                        text: $mcpDraft.command,
+                        monospaced: true
+                    )
+                    mcpTextField(
+                        label: "Args JSON",
+                        placeholder: "[\"-y\", \"@modelcontextprotocol/server-filesystem\", \"/tmp\"]",
+                        text: $mcpDraft.argsJSON,
+                        monospaced: true
+                    )
+                    mcpTextField(
+                        label: "Env JSON",
+                        placeholder: "{\"TOKEN\":\"${TOKEN}\"}",
+                        text: $mcpDraft.envJSON,
+                        monospaced: true
+                    )
+                } else {
+                    mcpTextField(
+                        label: "URL",
+                        placeholder: "https://example.com/mcp",
+                        text: $mcpDraft.url,
+                        monospaced: true
+                    )
+                    Picker("Auth", selection: $mcpDraft.authType) {
+                        Text("None").tag(McpAuthType.none)
+                        Text("OAuth").tag(McpAuthType.oauth)
+                        Text("Headers").tag(McpAuthType.headers)
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityLabel(Text("MCP auth type"))
+
+                    if mcpDraft.authType == .headers {
+                        mcpTextField(
+                            label: "Headers JSON",
+                            placeholder: "{\"Authorization\":\"Bearer token\"}",
+                            text: $mcpDraft.headersJSON,
+                            monospaced: true
+                        )
+                    }
+                }
+
+                if let error = mcpAddError ?? mcpService.statusError {
+                    Text(error)
+                        .notchFont(size: 11)
+                        .foregroundStyle(.red.opacity(0.9))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                HStack(spacing: 8) {
+                    Button {
+                        Task { await saveMcpServer() }
+                    } label: {
+                        Text(mcpService.addSaving ? "Saving…" : "Save")
+                            .notchFont(size: 12, weight: .semibold)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(Color.accentColor.opacity(0.9))
+                            )
+                            .foregroundStyle(.white)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(mcpService.addSaving || !mcpDraft.canSave)
+
+                    Button {
+                        resetMcpDraft()
+                        page = .mcp
+                    } label: {
+                        Text("Cancel")
+                            .notchFont(size: 12, weight: .semibold)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(Color.white.opacity(0.08))
+                            )
+                            .foregroundStyle(.white.opacity(0.85))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(mcpService.addSaving)
+                }
+            }
+        }
+    }
+
+    private func saveMcpServer() async {
+        do {
+            mcpAddError = nil
+            let saved: Bool
+            if mcpDraft.isEditing {
+                saved = await mcpService.update(try mcpDraft.buildUpdateParams())
+            } else {
+                saved = await mcpService.add(try mcpDraft.buildAddParams())
+            }
+            if saved {
+                resetMcpDraft()
+                page = .mcp
+            } else {
+                mcpAddError = mcpService.statusError
+            }
+        } catch {
+            mcpAddError = SettingsValidationError.message(for: error)
+        }
+    }
+
+    private func openMcpEditPage(serverId: String) {
+        Task {
+            do {
+                mcpAddError = nil
+                let config = try await mcpService.config(serverId: serverId)
+                mcpDraft.load(config)
+                page = .mcpAdd
+            } catch {
+                mcpAddError = McpService.message(for: error)
+            }
+        }
+    }
+
+    private func resetMcpDraft() {
+        mcpDraft.reset()
+        mcpAddError = nil
+    }
+
+    private func mcpTextField(
+        label: String,
+        placeholder: String,
+        text: Binding<String>,
+        monospaced: Bool = false,
+        isEnabled: Bool = true
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(label)
+                .notchFont(size: 11, weight: .medium)
+                .notchForeground(.secondary)
+            TextField(placeholder, text: text)
+                .textFieldStyle(.plain)
+                .notchFont(size: 12, design: monospaced ? .monospaced : .default)
+                .foregroundStyle(.white.opacity(0.95))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.white.opacity(0.06))
+                )
+                .disabled(!isEnabled)
+        }
+    }
+
     // MARK: - Conversation display mode
 
     private var displayMode: ConversationDisplayMode {
@@ -562,11 +829,12 @@ struct SettingsPanelView: View {
     @ViewBuilder
     private func pickerPage<Content: View>(
         title: String,
+        backPage: Page = .main,
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Button {
-                page = .main
+                page = backPage
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "chevron.left")
@@ -613,5 +881,31 @@ struct SettingsPanelView: View {
     private func handleProviderChange(_ newProviderId: String) async {
         guard let target = configService.providers.first(where: { $0.id == newProviderId }) else { return }
         await configService.selectModel(providerId: target.id, modelId: target.defaultModelId)
+    }
+}
+
+struct SettingsValidationError: LocalizedError {
+    let message: String
+
+    init(_ message: String) {
+        self.message = message
+    }
+
+    var errorDescription: String? {
+        message
+    }
+
+    static func message(for error: Error) -> String {
+        if let localized = error as? LocalizedError,
+           let message = localized.errorDescription {
+            return message
+        }
+        return String(describing: error)
+    }
+}
+
+extension String {
+    var trimmedForSettings: String {
+        trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

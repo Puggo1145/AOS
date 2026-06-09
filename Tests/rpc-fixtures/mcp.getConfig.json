@@ -1,0 +1,1 @@
+{"id":60,"jsonrpc":"2.0","method":"mcp.getConfig","params":{"serverId":"filesystem"}}

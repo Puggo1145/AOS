@@ -1,0 +1,1 @@
+{"id":61,"jsonrpc":"2.0","method":"mcp.update","params":{"args":["--root","/Users/puggo"],"command":"node","description":"Local project files","env":{"MCP_MODE":"edit"},"serverId":"filesystem","transportType":"stdio"}}

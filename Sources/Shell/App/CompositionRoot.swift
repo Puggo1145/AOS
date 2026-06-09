@@ -48,6 +48,7 @@ public final class CompositionRoot {
     public private(set) var sessionService: SessionService?
     public private(set) var providerService: ProviderService?
     public private(set) var configService: ConfigService?
+    public private(set) var mcpService: McpService?
     private(set) var computerUseRPCService: ComputerUseRPCService?
     private(set) var permissionApprovalService: PermissionApprovalService?
     public private(set) var devContextService: DevContextService?
@@ -121,6 +122,8 @@ public final class CompositionRoot {
         self.providerService = provider
         let config = ConfigService(rpc: client)
         self.configService = config
+        let mcp = McpService(rpc: client)
+        self.mcpService = mcp
         let shellComputerUseClient = LiveShellComputerUseClient(core: computerUseCore)
         self.computerUseRPCService = ComputerUseRPCService(
             rpc: client,
@@ -221,12 +224,13 @@ public final class CompositionRoot {
         //    can flip to either the "ready" branch (input panel) or the
         //    actual onboard cards. Failure is logged only — UI stays on the
         //    loading affordance, which is the right signal in that case.
-        //    Pull config in parallel so the settings panel has data on first
-        //    open (catalog snapshot + saved selection).
+        //    Pull config and MCP status in parallel so Settings has data on
+        //    first open.
         bootState = .refreshingServices
         async let providerRefresh: () = provider.refreshStatus()
         async let configRefresh: () = config.refresh()
-        _ = await (providerRefresh, configRefresh)
+        async let mcpRefresh: () = mcp.refreshStatus()
+        _ = await (providerRefresh, configRefresh, mcpRefresh)
 
         // 8. Start global event monitors (closed/popping/opened state machine).
         EventMonitors.shared.start()
@@ -268,7 +272,8 @@ public final class CompositionRoot {
         guard let agent = agentService,
               let session = sessionService,
               let provider = providerService,
-              let config = configService else {
+              let config = configService,
+              let mcp = mcpService else {
             // mountWindow may be called before agent/provider/config services are
             // built (sidecar failed to spawn). Skip rather than partially
             // render — the boot path surfaces the error via fatalBootError.
@@ -280,6 +285,7 @@ public final class CompositionRoot {
             sessionService: session,
             providerService: provider,
             configService: config,
+            mcpService: mcp,
             permissionsService: permissionsService,
             visualCapturePolicyStore: visualCapturePolicyStore,
             permissionApprovalService: permissionApprovalService,
@@ -342,6 +348,7 @@ public final class CompositionRoot {
         rpcClient = nil
         providerService = nil
         configService = nil
+        mcpService = nil
         computerUseRPCService = nil
         permissionApprovalService?.failAllPendingRequests(message: "permission approval service stopped")
         permissionApprovalService = nil

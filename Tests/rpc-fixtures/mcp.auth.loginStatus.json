@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","method":"mcp.auth.loginStatus","params":{"authorizeUrl":"https://auth.example.com/authorize","loginId":"mcp-login-abc","serverId":"linear","state":"awaitingBrowser"}}

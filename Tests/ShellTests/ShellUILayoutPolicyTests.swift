@@ -20,7 +20,73 @@ struct ShellUILayoutPolicyTests {
         let settings = try Self.source("Sources/Shell/Notch/Settings/SettingsPanelView.swift")
 
         #expect(settings.contains("ZStack(alignment: .topLeading)"))
-        #expect(settings.components(separatedBy: ".frame(maxWidth: .infinity, alignment: .topLeading)").count >= 8)
+        #expect(settings.components(separatedBy: ".frame(maxWidth: .infinity, alignment: .topLeading)").count >= 9)
+    }
+
+    @Test("settings main page scrolls only middle vertical rows")
+    func settingsMainPageScrollsOnlyMiddleVerticalRows() throws {
+        let settings = try Self.source("Sources/Shell/Notch/Settings/SettingsPanelView.swift")
+        let mainPage = try Self.section(
+            in: settings,
+            from: "private var mainPage: some View",
+            to: "// MARK: - API key row + page"
+        )
+        let cardsRange = try #require(mainPage.range(of: "BentoPickerCard("))
+        let scrollRange = try #require(mainPage.range(of: "ScrollView(.vertical, showsIndicators: false)"))
+        let quitRange = try #require(mainPage.range(of: "quitButton"))
+        let scrollToQuit = try Self.section(
+            in: mainPage,
+            from: "ScrollView(.vertical, showsIndicators: false)",
+            to: "quitButton"
+        )
+
+        #expect(cardsRange.lowerBound < scrollRange.lowerBound)
+        #expect(scrollRange.lowerBound < quitRange.lowerBound)
+        #expect(!scrollToQuit.contains("BentoPickerCard("))
+        #expect(mainPage.contains(".frame(maxHeight: mainRowsScrollMaxHeight)"))
+    }
+
+    @Test("settings MCP page exposes add-server form")
+    func settingsMcpPageExposesAddServerForm() throws {
+        let settings = try Self.source("Sources/Shell/Notch/Settings/SettingsPanelView.swift")
+        let draft = try Self.source("Sources/Shell/Notch/Settings/McpServerDraft.swift")
+        let rows = try Self.source("Sources/Shell/Notch/Settings/SettingsRows.swift")
+
+        #expect(settings.contains("case mcpAdd"))
+        #expect(settings.contains("private var mcpAddPage: some View"))
+        #expect(settings.contains("SettingsMcpAddButton"))
+        #expect(settings.contains("Picker(\"Auth\", selection: $mcpDraft.authType)"))
+        #expect(settings.contains("Toggle(isOn: $mcpDraft.autoConnect)"))
+        #expect(settings.contains("openMcpEditPage"))
+        #expect(settings.contains("mcpDraft.buildAddParams()"))
+        #expect(settings.contains("mcpDraft.buildUpdateParams()"))
+        #expect(draft.contains("McpAddParams("))
+        #expect(draft.contains("McpUpdateParams("))
+        #expect(draft.contains("authType: authType"))
+        #expect(draft.contains("autoConnect: autoConnect"))
+        #expect(draft.contains("headersForSelectedAuthType()"))
+        #expect(draft.contains("decodeJSON([String].self"))
+        #expect(rows.contains("struct SettingsMcpAddButton"))
+        #expect(rows.contains("Label(\"Edit\", systemImage: \"pencil\")"))
+    }
+
+    @Test("settings MCP server items do not render separate status text")
+    func settingsMcpServerItemsDoNotRenderSeparateStatusText() throws {
+        let rows = try Self.source("Sources/Shell/Notch/Settings/SettingsRows.swift")
+        let card = try Self.section(
+            in: rows,
+            from: "struct SettingsMcpServerCard: View",
+            to: "struct SettingsDisplayModeRow: View"
+        )
+
+        #expect(!card.contains("\"Disconnected\""))
+        #expect(!card.contains("\"Connected\""))
+        #expect(!card.contains("\"Authenticating…\""))
+        #expect(!card.contains("\"Awaiting callback…\""))
+        #expect(!card.contains("\"Verifying…\""))
+        #expect(!card.contains("\"Auth required\""))
+        #expect(!card.contains("\"Auth failed\""))
+        #expect(!card.contains("\"Auth cancelled\""))
     }
 
     @Test("opened content swaps are top-leading anchored")

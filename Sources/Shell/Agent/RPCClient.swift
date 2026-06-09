@@ -704,6 +704,7 @@ public final class RPCClient: @unchecked Sendable {
         case RPCMethod.rpcPing: return 1
         case RPCMethod.agentSubmit, RPCMethod.agentCancel: return 1
         case RPCMethod.rpcHello: return 5
+        case RPCMethod.mcpConnect, RPCMethod.mcpAuthStartLogin: return 30
         // Manual compact issues an LLM summarization round inline before
         // returning. Long contexts on slow providers can run well past
         // the 5s default; allow a generous ceiling to match the auto

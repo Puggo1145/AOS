@@ -1,0 +1,1 @@
+{"id":59,"jsonrpc":"2.0","method":"mcp.add","params":{"args":["-y","@modelcontextprotocol/server-filesystem","/tmp"],"command":"npx","description":"Local files","env":{},"serverId":"filesystem","transportType":"stdio"}}

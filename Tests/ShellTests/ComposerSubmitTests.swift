@@ -143,12 +143,14 @@ struct ComposerSubmitTests {
         let agent = AgentService(rpc: rpc, sessionStore: store)
         let provider = ProviderService(rpc: rpc)
         let config = ConfigService(rpc: rpc)
+        let mcp = McpService(rpc: rpc)
         return NotchViewModel(
             senseStore: sense,
             agentService: agent,
             sessionService: session,
             providerService: provider,
             configService: config,
+            mcpService: mcp,
             permissionsService: permissions,
             visualCapturePolicyStore: VisualCapturePolicyStore(),
             screenRect: CGRect(x: 0, y: 0, width: 1440, height: 900),

@@ -120,6 +120,37 @@ export const builtinPermissionPoliciesByToolName = {
 	perform_AX_action: (ctx) => askComputerUse(ctx, "Perform AX action"),
 
 	todo_write: () => allow(),
+
+	mcp_search_tools: (ctx) =>
+		askMcpDiscovery(
+			"Allow MCP discovery?",
+			"Agent wants to inspect configured MCP server tools.",
+			"Search MCP tools",
+			stringArg(ctx.args, "query"),
+		),
+
+	mcp_get_tool_details: (ctx) =>
+		askMcpDiscovery(
+			"Allow MCP discovery?",
+			"Agent wants to inspect a configured MCP server tool schema.",
+			"Inspect MCP tool",
+			stringArg(ctx.args, "name"),
+		),
+
+	mcp_call_tool: (ctx) =>
+		ask({
+			title: "Allow MCP tool?",
+			message: "Agent wants to execute a configured MCP server tool.",
+			risk: "high",
+			capabilities: [
+				{
+					capability: "mcp.execute",
+					action: "Execute MCP tool",
+					target: stringArg(ctx.args, "name"),
+					details: mcpCallDetails(ctx.args),
+				},
+			],
+		}),
 } satisfies { readonly [K in InternalToolName]: PermissionPolicyEvaluator };
 
 function allowWorkspacePathElseAsk(
@@ -164,6 +195,26 @@ function askComputerUse(
 	});
 }
 
+function askMcpDiscovery(
+	title: string,
+	message: string,
+	action: string,
+	target: string,
+): PermissionPolicyDecision {
+	return ask({
+		title,
+		message,
+		risk: "medium",
+		capabilities: [
+			{
+				capability: "mcp.execute",
+				action,
+				target,
+			},
+		],
+	});
+}
+
 function stringArg(args: Record<string, unknown>, name: string): string {
 	const value = args[name];
 	if (typeof value !== "string") {
@@ -191,4 +242,28 @@ function requiredValue(args: Record<string, unknown>, name: string): unknown {
 		throw new Error(`permission policy expected ${name} to be present`);
 	}
 	return value;
+}
+
+function mcpCallDetails(args: Record<string, unknown>): JSONValue {
+	const canonicalName = stringArg(args, "name");
+	const dot = canonicalName.indexOf(".");
+	if (dot <= 0 || dot === canonicalName.length - 1) {
+		throw new Error(
+			`permission policy expected MCP tool name to use <serverId>.<toolName>`,
+		);
+	}
+	const toolArguments = args.arguments;
+	if (
+		toolArguments === null ||
+		typeof toolArguments !== "object" ||
+		Array.isArray(toolArguments)
+	) {
+		throw new Error(`permission policy expected arguments to be an object`);
+	}
+	return {
+		serverId: canonicalName.slice(0, dot),
+		toolName: canonicalName.slice(dot + 1),
+		canonicalName,
+		argumentsSummary: JSON.stringify(toolArguments),
+	};
 }

@@ -353,6 +353,7 @@ struct NotchView: View {
                 SettingsPanelView(
                     configService: viewModel.configService,
                     providerService: viewModel.providerService,
+                    mcpService: viewModel.mcpService,
                     permissionsService: viewModel.permissionsService,
                     topSafeInset: viewModel.deviceNotchRect.height,
                     onClose: { viewModel.showSettings = false }

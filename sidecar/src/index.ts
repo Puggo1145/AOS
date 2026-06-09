@@ -36,6 +36,13 @@ import {
 	RPCMethod,
 	type HelloResult,
 } from "./rpc/rpc-types";
+import { bootstrapMcpHost } from "./mcp/bootstrap";
+import { McpClientSession } from "./mcp/client-session";
+import { readMcpConfig } from "./mcp/config";
+import { McpOAuthStorage } from "./mcp/auth/storage";
+import { McpAuthRuntime } from "./mcp/auth/runtime";
+import { registerMcpAuthHandlers } from "./mcp/auth/handlers";
+import { registerMcpHandlers } from "./mcp/handlers";
 
 // Side-effect: triggers register-builtins (api providers + model catalog).
 import "./llm";
@@ -57,6 +64,16 @@ async function main(): Promise<void> {
 
 	const transport = new StdioTransport();
 	const dispatcher = new Dispatcher(transport);
+	const stdinClosed = new Promise<void>((resolve) => {
+		const done = () => {
+			process.stdin.off("end", done);
+			process.stdin.off("close", done);
+			resolve();
+		};
+		process.stdin.once("end", done);
+		process.stdin.once("close", done);
+	});
+	process.stdin.resume();
 	registerComputerUseTools(toolRegistry, dispatcher);
 
 	// Single process-wide SessionManager. Manager starts EMPTY; the Shell
@@ -67,6 +84,28 @@ async function main(): Promise<void> {
 	// todo state, so it registers AFTER the manager exists but BEFORE the
 	// agent loop attaches (the loop snapshots the tool registry per turn).
 	registerTodoTool(sessions);
+	const mcpConfig = readMcpConfig();
+	const mcpAuthRuntime = new McpAuthRuntime({
+		config: mcpConfig,
+		storage: new McpOAuthStorage(),
+		notify(method, params) {
+			dispatcher.notify(method, params);
+		},
+	});
+	const mcpHostService = bootstrapMcpHost(toolRegistry, {
+		config: mcpConfig,
+		createSession(serverId, serverConfig) {
+			return new McpClientSession(serverId, serverConfig, {
+				createOAuthProvider(id) {
+					return mcpAuthRuntime.createProviderForSession(id);
+				},
+				hasOAuthTokens(id) {
+					return mcpAuthRuntime.hasTokens(id);
+				},
+			});
+		},
+		authRuntime: mcpAuthRuntime,
+	});
 	assertRegisteredToolsMatchPermissionPolicies(
 		toolRegistry.list(),
 		builtinPermissionPolicyCatalog,
@@ -80,6 +119,25 @@ async function main(): Promise<void> {
 	registerAgentHandlers(dispatcher, { manager: sessions, permissionGateway });
 	registerProviderHandlers(dispatcher);
 	registerConfigHandlers(dispatcher);
+	registerMcpHandlers(dispatcher, mcpHostService, mcpAuthRuntime);
+	registerMcpAuthHandlers(dispatcher, mcpAuthRuntime);
+	let shuttingDown = false;
+	const shutdown = async (): Promise<void> => {
+		if (shuttingDown) return;
+		shuttingDown = true;
+		dispatcher.stop();
+		await mcpHostService.closeAll();
+	};
+	for (const signal of ["SIGINT", "SIGTERM"] as const) {
+		process.once(signal, () => {
+			shutdown()
+				.then(() => process.exit(0))
+				.catch((err) => {
+					logger.error("sidecar shutdown failed", { err: String(err) });
+					process.exit(1);
+				});
+		});
+	}
 	// rpc.ping handler — installed before the reader sees any inbound frames so
 	// the Shell can immediately health-check us after the handshake.
 	dispatcher.registerRequest(RPCMethod.rpcPing, async () => ({}));
@@ -112,10 +170,21 @@ async function main(): Promise<void> {
 		process.exit(2);
 	}
 
-	// Keep the process alive — the dispatcher reader loop owns liveness.
-	await new Promise<void>(() => {
-		/* never resolves; process exits via signal or dispatcher reader EOF */
-	});
+	void mcpHostService
+		.autoConnectServers(mcpAuthRuntime.status().servers)
+		.then((servers) => {
+			for (const server of servers) {
+				dispatcher.notify(RPCMethod.mcpStatusChanged, { server });
+			}
+		})
+		.catch((err) => {
+			logger.error("mcp auto-connect failed", { err: String(err) });
+		});
+
+	// Keep the process alive until Shell closes stdin. Then tear down any live
+	// MCP transports before allowing the child process to exit normally.
+	await stdinClosed;
+	await shutdown();
 }
 
 main().catch((err) => {

@@ -61,7 +61,7 @@ delete_keychain_items() {
     done
     status=$?
 
-    if [ "${status}" -eq 44 ] && [[ "${output}" == *"could not be found"* ]]; then
+    if [[ "${output}" == *"could not be found"* ]]; then
         if [ "${removed}" -eq 0 ]; then
             echo "    (already empty)"
         fi
@@ -85,7 +85,7 @@ reset_tcc_service() {
     fi
     status=$?
 
-    if [ "${status}" -eq 64 ] && [[ "${output}" == *"No such bundle identifier"* ]]; then
+    if [[ "${output}" == *"No such bundle identifier"* ]]; then
         echo "    ${service}: no registered bundle ${bundle}; nothing to clear"
         return
     fi

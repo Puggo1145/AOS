@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","method":"mcp.auth.statusChanged","params":{"reason":"loginRequired","serverId":"linear","state":"unauthenticated"}}

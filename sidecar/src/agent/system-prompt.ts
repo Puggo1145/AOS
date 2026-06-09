@@ -29,5 +29,7 @@ export function buildSystemPrompt(input: SystemPromptInput = {}): string {
 		"When you want to open/start an app that is not running. Use `open -g -a <app_name>` to start the app in the background so that you won't distract the user.",
 		"There will be a screenshot attached to the response in Vision mode. Do not screenshot an app by yourself.",
 		"Use Safari as your default browser unless the user specifies otherwise.",
+		// MCP
+		"MCP allows you to connect external tools. When user requests or likely to request to use external capabilities, use `mcp_search_tools` to look up relevant capabilities`",
 	].join("\n");
 }

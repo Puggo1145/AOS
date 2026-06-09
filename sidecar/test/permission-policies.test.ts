@@ -38,6 +38,9 @@ test("permission catalog must exactly match registered internal tools", () => {
 		"use_keyboard",
 		"perform_AX_action",
 		"todo_write",
+		"mcp_search_tools",
+		"mcp_get_tool_details",
+		"mcp_call_tool",
 	].map((name) => ({ spec: { name } }));
 
 	expect(() =>
@@ -215,6 +218,64 @@ test("todo_write declares no external permission and resolves allow", () => {
 	expect(evaluate("todo_write", { items: [] })).toMatchObject({
 		behavior: "allow",
 		capabilities: [],
+	});
+});
+
+test("MCP search and details ask before connecting configured servers", () => {
+	expect(
+		evaluate("mcp_search_tools", { query: "issue tracker" }),
+	).toMatchObject({
+		behavior: "ask",
+		title: "Allow MCP discovery?",
+		risk: "medium",
+		capabilities: [
+			{
+				capability: "mcp.execute",
+				action: "Search MCP tools",
+				target: "issue tracker",
+			},
+		],
+	});
+	expect(
+		evaluate("mcp_get_tool_details", { name: "linear.create_issue" }),
+	).toMatchObject({
+		behavior: "ask",
+		title: "Allow MCP discovery?",
+		risk: "medium",
+		capabilities: [
+			{
+				capability: "mcp.execute",
+				action: "Inspect MCP tool",
+				target: "linear.create_issue",
+			},
+		],
+	});
+});
+
+test("MCP call asks for approval with canonical target and argument summary", () => {
+	expect(
+		evaluate("mcp_call_tool", {
+			name: "linear.create_issue",
+			arguments: { title: "Bug", labels: ["inbox"] },
+		}),
+	).toMatchObject({
+		behavior: "ask",
+		title: "Allow MCP tool?",
+		message: "Agent wants to execute a configured MCP server tool.",
+		risk: "high",
+		capabilities: [
+			{
+				capability: "mcp.execute",
+				action: "Execute MCP tool",
+				target: "linear.create_issue",
+				details: {
+					serverId: "linear",
+					toolName: "create_issue",
+					canonicalName: "linear.create_issue",
+					argumentsSummary: '{"title":"Bug","labels":["inbox"]}',
+				},
+			},
+		],
 	});
 });
 
