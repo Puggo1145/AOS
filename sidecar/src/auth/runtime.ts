@@ -12,6 +12,7 @@
 //     `.invalid` sibling), emits `loginStatus { success }`, then a
 //     `statusChanged { ready }` so Shell ProviderService flips state
 
+import { errorText } from "../errors";
 import { existsSync, unlinkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 
@@ -39,12 +40,10 @@ import {
 	chatgptPlanOAuthProvider,
 	generateCodeVerifier,
 	generateState,
-} from "../llm/auth/oauth/chatgpt-plan";
-import { PROVIDER_IDS } from "../llm";
-import {
 	writeChatGPTPlanToken,
 	chatgptTokenPath,
-} from "../llm/auth/oauth/storage";
+} from "../llm/auth";
+import { PROVIDER_IDS } from "../llm";
 
 const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -121,7 +120,7 @@ export async function startLogin(
 	} catch (err) {
 		throw new RPCMethodError(
 			RPCErrorCode.internalError,
-			`failed to bind loopback ${CHATGPT_PLAN_REDIRECT_PORT}: ${err instanceof Error ? err.message : String(err)}`,
+			`failed to bind loopback ${CHATGPT_PLAN_REDIRECT_PORT}: ${errorText(err)}`,
 		);
 	}
 	const redirectUri = CHATGPT_PLAN_REDIRECT_URI;
@@ -209,7 +208,7 @@ export async function startLogin(
 			if (session.done) return;
 			session.done = true;
 			const errorCode = mapLoginError(err, controller.signal);
-			const message = err instanceof Error ? err.message : String(err);
+			const message = errorText(err);
 			ctx.dispatcher.notify(RPCMethod.providerLoginStatus, {
 				loginId,
 				providerId,

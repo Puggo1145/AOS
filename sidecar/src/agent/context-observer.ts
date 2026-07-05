@@ -23,7 +23,7 @@
 //     silently disable Dev Mode while leaving `latest()` returning stale
 //     data.
 
-import type { Message } from "../llm/types";
+import type { Message } from "../llm";
 
 export interface DevContextSnapshot {
 	/// Milliseconds since epoch when this snapshot was captured.

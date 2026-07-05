@@ -4,6 +4,7 @@
 // `stream()` invocation. This keeps the public `index.ts` cheap to load
 // when callers only need types or the model registry.
 
+import { errorText } from "../../errors";
 import { registerApiProvider } from "../api-registry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import type {
@@ -40,7 +41,7 @@ function lazyError(
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
 		stopReason: "error",
-		errorMessage: `Failed to load openai-responses provider: ${error instanceof Error ? error.message : String(error)}`,
+		errorMessage: `Failed to load openai-responses provider: ${errorText(error)}`,
 		timestamp: Date.now(),
 	};
 	queueMicrotask(() => {

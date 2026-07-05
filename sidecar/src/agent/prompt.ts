@@ -10,7 +10,7 @@
 // one deliberate exception because the model needs the marked context directly.
 
 import type { CitedContext, BehaviorEnvelope } from "../rpc/rpc-types";
-import type { ImageContent, UserContent, UserMessage } from "../llm/types";
+import type { ImageContent, UserContent, UserMessage } from "../llm";
 
 /// Build the LLM `UserMessage` for a turn. If `citedContext` carries any
 /// non-empty field, prepend an `<os-context>...</os-context>` block before the

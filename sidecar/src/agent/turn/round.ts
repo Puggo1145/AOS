@@ -10,34 +10,28 @@ import {
 	isContextOverflow,
 	type Api,
 	type AssistantMessage,
+	type AssistantMessageEvent,
 	type Message,
 	type Model,
 	type Tool,
 	type ToolCall,
 	type ToolResultMessage,
 } from "../../llm";
-import { logger } from "../../log";
 import type { Dispatcher } from "../../rpc/dispatcher";
 import { RPCErrorCode, RPCMethod, type JSONValue } from "../../rpc/rpc-types";
 import type { Conversation } from "../conversation";
 import type { ContextObserver } from "../context-observer";
-import {
-	PermissionApprovalError,
-	PermissionPolicyConfigurationError,
-	type PermissionAuthorizer,
-} from "../permissions";
+import type { PermissionAuthorizer } from "../permissions";
 import type { Session } from "../session/session";
-import type { ToolExecResult, ToolHandler } from "../tools";
+import type { ToolHandler } from "../tools";
+import type { TurnEmitter } from "./emitter";
 import { buildOutboundMessages, publishTurnContext } from "./outbound";
 import {
 	assistantSpoke,
+	executeToolCalls,
 	extractToolCalls,
 	finishToolRuntimeAfterTerminalAssistantReply,
 	prepareToolCall,
-	renderToolResultForWire,
-	runTool,
-	toolDispatchContext,
-	toolRuntimeEffects,
 	type ToolCallOutcome,
 } from "./tool-dispatch";
 
@@ -51,6 +45,16 @@ export type AgentRoundOutcome =
 	  };
 
 export interface AgentRoundRunnerOptions {
+	/// Turn-scoped `ui.*` wire emission — owns the dual-write invariant and
+	/// the thinking-open/close bookkeeping. See `./emitter.ts`.
+	emitter: TurnEmitter;
+	/// Raw dispatcher, kept alongside `emitter` ONLY for the two things that
+	/// don't fit the emitter's turn-scoped `ui.*` seam: the outbound
+	/// `computerUse.stopAppSession` *request* in
+	/// `finishToolRuntimeAfterTerminalAssistantReply`, and the
+	/// `provider.statusChanged` notify (session/provider-scoped, not a
+	/// turn-scoped `ui.*` frame) fired alongside an auth-invalidated stream
+	/// error.
 	dispatcher: Dispatcher;
 	conversation: Conversation;
 	session: Session;
@@ -70,9 +74,24 @@ export function pickErrorCode(msg: AssistantMessage): number {
 	return RPCErrorCode.internalError;
 }
 
-export class AgentRoundRunner {
-	private thinkingOpen = false;
+/// Result of draining one LLM round's event stream, classified for `run()`
+/// to branch on. "final" carries everything downstream phases need (the
+/// terminal AssistantMessage plus the per-call outcomes recorded from
+/// `toolcall_end` events); the other three kinds are already-terminal states
+/// with any matching wire frames already emitted by `consumeStream` itself
+/// (the `error` branch needs the specific `ev.error` payload, so that frame
+/// can't be hoisted out to `run()` without threading the event back up).
+type ConsumeStreamResult =
+	| {
+			kind: "final";
+			final: AssistantMessage;
+			callOutcomes: Map<string, ToolCallOutcome>;
+	  }
+	| { kind: "aborted" }
+	| { kind: "streamError" }
+	| { kind: "noFinal" };
 
+export class AgentRoundRunner {
 	constructor(private readonly options: AgentRoundRunnerOptions) {}
 
 	async run(input: {
@@ -82,6 +101,7 @@ export class AgentRoundRunner {
 	}): Promise<AgentRoundOutcome> {
 		const {
 			dispatcher,
+			emitter,
 			conversation: convo,
 			session,
 			model,
@@ -89,7 +109,6 @@ export class AgentRoundRunner {
 			systemPrompt,
 			toolSpecs,
 		} = this.options;
-		const sessionId = session.id;
 		const turnId = input.turnId;
 		let consecutiveSilentToolRounds = input.consecutiveSilentToolRounds;
 
@@ -106,142 +125,50 @@ export class AgentRoundRunner {
 			{ signal: input.signal, reasoning: effort },
 		);
 
-		const callOutcomes = new Map<string, ToolCallOutcome>();
-		let final: AssistantMessage | undefined;
-		let bailed = false;
-		for await (const ev of eventStream) {
-			if (input.signal.aborted) {
-				bailed = true;
-				break;
-			}
-			if (ev.type === "thinking_delta") {
-				this.thinkingOpen = true;
-				dispatcher.notify(RPCMethod.uiThinking, {
-					sessionId,
-					turnId,
-					kind: "delta",
-					delta: ev.delta,
-				});
-			} else if (ev.type === "thinking_end") {
-				this.closeThinkingIfOpen(turnId);
-			} else if (ev.type === "text_delta") {
-				if (convo.appendDelta(turnId, ev.delta)) {
-					dispatcher.notify(RPCMethod.uiToken, {
-						sessionId,
-						turnId,
-						delta: ev.delta,
-					});
-				}
-			} else if (ev.type === "toolcall_end") {
-				this.recordToolCallOutcome(turnId, ev.toolCall, callOutcomes);
-			} else if (ev.type === "done") {
-				final = ev.message;
-			} else if (ev.type === "error") {
-				const code = pickErrorCode(ev.error);
-				const message = ev.error.errorMessage ?? "agent error";
-				this.closeThinkingIfOpen(turnId);
-				if (convo.setError(turnId, code, message)) {
-					dispatcher.notify(RPCMethod.uiError, {
-						sessionId,
-						turnId,
-						code,
-						message,
-					});
-					if (
-						ev.error.errorReason === "authInvalidated" &&
-						ev.error.errorProviderId
-					) {
-						dispatcher.notify(RPCMethod.providerStatusChanged, {
-							providerId: ev.error.errorProviderId,
-							state: "unauthenticated",
-							reason: "authInvalidated",
-							message,
-						});
-					}
-				}
-				return {
-					kind: "terminal",
-					dropQueuedSteer: true,
-					consecutiveSilentToolRounds,
-				};
-			}
+		const streamResult = await this.consumeStream(
+			turnId,
+			input.signal,
+			eventStream,
+		);
+
+		if (streamResult.kind === "streamError") {
+			return this.terminal(consecutiveSilentToolRounds);
 		}
 
-		if (bailed || input.signal.aborted) {
-			this.closeThinkingIfOpen(turnId);
+		if (streamResult.kind === "aborted") {
+			emitter.closeThinkingIfOpen(turnId);
 			convo.finalizeCancellation(turnId);
-			dispatcher.notify(RPCMethod.uiStatus, {
-				sessionId,
-				turnId,
-				status: "done",
-			});
-			return {
-				kind: "terminal",
-				dropQueuedSteer: true,
-				consecutiveSilentToolRounds,
-			};
+			emitter.status(turnId, "done");
+			return this.terminal(consecutiveSilentToolRounds);
 		}
 
-		if (!final) {
-			this.closeThinkingIfOpen(turnId);
-			const message = "stream ended without a final assistant message";
-			if (convo.setError(turnId, RPCErrorCode.internalError, message)) {
-				dispatcher.notify(RPCMethod.uiError, {
-					sessionId,
-					turnId,
-					code: RPCErrorCode.internalError,
-					message,
-				});
-			}
-			return {
-				kind: "terminal",
-				dropQueuedSteer: true,
-				consecutiveSilentToolRounds,
-			};
+		if (streamResult.kind === "noFinal") {
+			emitter.closeThinkingIfOpen(turnId);
+			emitter.error(
+				turnId,
+				RPCErrorCode.internalError,
+				"stream ended without a final assistant message",
+			);
+			return this.terminal(consecutiveSilentToolRounds);
 		}
+
+		const { final, callOutcomes } = streamResult;
 
 		if (isContextOverflow(final, model.contextWindow)) {
-			this.closeThinkingIfOpen(turnId);
-			if (
-				convo.setError(
-					turnId,
-					RPCErrorCode.agentContextOverflow,
-					"Context too long",
-				)
-			) {
-				dispatcher.notify(RPCMethod.uiError, {
-					sessionId,
-					turnId,
-					code: RPCErrorCode.agentContextOverflow,
-					message: "Context too long",
-				});
-			}
-			return {
-				kind: "terminal",
-				dropQueuedSteer: true,
-				consecutiveSilentToolRounds,
-			};
+			emitter.closeThinkingIfOpen(turnId);
+			emitter.error(
+				turnId,
+				RPCErrorCode.agentContextOverflow,
+				"Context too long",
+			);
+			return this.terminal(consecutiveSilentToolRounds);
 		}
 
 		if (!convo.appendAssistantRound(turnId, final)) {
-			return {
-				kind: "terminal",
-				dropQueuedSteer: true,
-				consecutiveSilentToolRounds,
-			};
+			return this.terminal(consecutiveSilentToolRounds);
 		}
 
-		dispatcher.notify(RPCMethod.uiUsage, {
-			sessionId,
-			turnId,
-			inputTokens: final.usage.input,
-			outputTokens: final.usage.output,
-			cacheReadTokens: final.usage.cacheRead,
-			cacheWriteTokens: final.usage.cacheWrite,
-			totalTokens: final.usage.totalTokens,
-			contextWindow: model.contextWindow,
-			modelId: model.id,
-		});
+		emitter.usage(turnId, final, model);
 
 		const toolCalls = extractToolCalls(final);
 
@@ -252,12 +179,8 @@ export class AgentRoundRunner {
 			});
 			const markedDone = convo.markDone(turnId);
 			this.publishContext(turnId, buildOutboundMessages(convo, session));
-			this.closeThinkingIfOpen(turnId);
-			dispatcher.notify(RPCMethod.uiStatus, {
-				sessionId,
-				turnId,
-				status: "done",
-			});
+			emitter.closeThinkingIfOpen(turnId);
+			emitter.status(turnId, "done");
 			return { kind: "done", markedDone, consecutiveSilentToolRounds };
 		}
 
@@ -271,7 +194,7 @@ export class AgentRoundRunner {
 		if (
 			consecutiveSilentToolRounds > this.options.maxConsecutiveSilentToolRounds
 		) {
-			this.closeThinkingIfOpen(turnId);
+			emitter.closeThinkingIfOpen(turnId);
 			return this.failToolBudget(
 				turnId,
 				toolCalls,
@@ -280,168 +203,109 @@ export class AgentRoundRunner {
 			);
 		}
 
-		this.closeThinkingIfOpen(turnId);
-		convo.setStatus(turnId, "waiting");
-		dispatcher.notify(RPCMethod.uiStatus, {
-			sessionId,
+		emitter.closeThinkingIfOpen(turnId);
+		emitter.statusPersisted(turnId, "waiting");
+
+		const dispatchResult = await executeToolCalls({
+			session,
 			turnId,
-			status: "waiting",
+			signal: input.signal,
+			toolCalls,
+			callOutcomes,
+			permissionGateway: this.options.permissionGateway,
+			emitter,
+			conversation: convo,
+			model,
 		});
 
-		for (const tc of toolCalls) {
-			if (input.signal.aborted) break;
-			const outcome = callOutcomes.get(tc.id) ?? {
-				kind: "rejected" as const,
-				errorMessage: `internal: missing call outcome for ${tc.id}`,
-			};
-			let result: ToolExecResult;
-			let notifyResult = outcome.kind === "ready";
-			if (outcome.kind === "rejected") {
-				result = {
-					content: [{ type: "text", text: outcome.errorMessage }],
-					isError: true,
-				};
-			} else {
-				try {
-					const permission = await this.options.permissionGateway.authorize({
-						sessionId,
-						turnId,
-						toolCallId: tc.id,
-						toolName: tc.name,
-						args: outcome.args,
-						signal: input.signal,
-						onApprovalStart: () => {
-							dispatcher.notify(RPCMethod.uiStatus, {
-								sessionId,
-								turnId,
-								status: "awaitingPermission",
-							});
-						},
-						onApprovalEnd: () => {
-							dispatcher.notify(RPCMethod.uiStatus, {
-								sessionId,
-								turnId,
-								status: "waiting",
-							});
-						},
-					});
-					if (permission.kind === "aborted" || input.signal.aborted) break;
-					if (permission.kind !== "allowed") {
-						result = {
-							content: [{ type: "text", text: permission.message }],
-							isError: permission.isError,
-						};
-						notifyResult = false;
-						dispatcher.notify(RPCMethod.uiToolCall, {
-							sessionId,
-							turnId,
-							phase: "permissionDenied",
-							toolCallId: tc.id,
-							toolName: tc.name,
-							args: outcome.args as JSONValue,
-							errorMessage: permission.message,
-						});
-					} else {
-						const toolCtx = toolDispatchContext({
-							session,
-							turnId,
-							toolCallId: tc.id,
-							model,
-							signal: input.signal,
-						});
-						result = await runTool(
-							outcome.handler,
-							outcome.args,
-							tc.name,
-							toolCtx,
-							toolRuntimeEffects(session),
-						);
-					}
-				} catch (err) {
-					if (
-						err instanceof PermissionPolicyConfigurationError ||
-						err instanceof PermissionApprovalError
-					) {
-						throw err;
-					}
-					const message = err instanceof Error ? err.message : String(err);
-					logger.error("tool execution threw", {
-						sessionId,
-						turnId,
-						toolCallId: tc.id,
-						toolName: tc.name,
-						err: String(err),
-					});
-					result = {
-						content: [
-							{ type: "text", text: `Tool "${tc.name}" failed: ${message}` },
-						],
-						isError: true,
-					};
-				}
-			}
-			const toolResultMsg: ToolResultMessage = {
-				role: "toolResult",
-				toolCallId: tc.id,
-				toolName: tc.name,
-				content: result.content,
-				isError: result.isError,
-				timestamp: Date.now(),
-			};
-			if (!convo.appendToolResult(turnId, toolResultMsg)) {
-				return {
-					kind: "terminal",
-					dropQueuedSteer: true,
-					consecutiveSilentToolRounds,
-				};
-			}
-			if (notifyResult) {
-				dispatcher.notify(RPCMethod.uiToolCall, {
-					sessionId,
-					turnId,
-					phase: "result",
-					toolCallId: tc.id,
-					toolName: tc.name,
-					isError: result.isError,
-					outputText: renderToolResultForWire(result.content),
-				});
-			}
+		if (dispatchResult.kind === "turnGone") {
+			return this.terminal(consecutiveSilentToolRounds);
 		}
 
-		if (input.signal.aborted) {
+		if (dispatchResult.kind === "aborted") {
 			convo.finalizeCancellation(turnId);
-			dispatcher.notify(RPCMethod.uiStatus, {
-				sessionId,
-				turnId,
-				status: "done",
-			});
-			return {
-				kind: "terminal",
-				dropQueuedSteer: true,
-				consecutiveSilentToolRounds,
-			};
+			emitter.status(turnId, "done");
+			return this.terminal(consecutiveSilentToolRounds);
 		}
 
 		return { kind: "continue", consecutiveSilentToolRounds };
 	}
 
-	resumeWorking(turnId: string): void {
-		this.options.conversation.setStatus(turnId, "working");
-		this.options.dispatcher.notify(RPCMethod.uiStatus, {
-			sessionId: this.options.session.id,
-			turnId,
-			status: "working",
-		});
+	/// Drain one LLM round's event stream and classify the outcome. Owns the
+	/// per-event wire projection (thinking/token/toolCall "called"/"rejected")
+	/// and the `error` event's terminal frame emission (needs `ev.error`'s
+	/// code/message/provider fields, so it can't be generically hoisted to
+	/// `run()`). Returns `"aborted"` both when the signal fires between events
+	/// and when it fires mid-iteration (checked at the top of the loop body,
+	/// same as the inline loop this replaced) — `run()` owns the
+	/// finalizeCancellation/status-done side effects for that case since they
+	/// are shared with `executeToolCalls`'s abort path.
+	private async consumeStream(
+		turnId: string,
+		signal: AbortSignal,
+		eventStream: AsyncIterable<AssistantMessageEvent>,
+	): Promise<ConsumeStreamResult> {
+		const { emitter, dispatcher } = this.options;
+		const callOutcomes = new Map<string, ToolCallOutcome>();
+		let final: AssistantMessage | undefined;
+		for await (const ev of eventStream) {
+			if (signal.aborted) return { kind: "aborted" };
+			if (ev.type === "thinking_delta") {
+				emitter.thinkingDelta(turnId, ev.delta);
+			} else if (ev.type === "thinking_end") {
+				emitter.closeThinkingIfOpen(turnId);
+			} else if (ev.type === "text_delta") {
+				emitter.token(turnId, ev.delta);
+			} else if (ev.type === "toolcall_end") {
+				this.recordToolCallOutcome(turnId, ev.toolCall, callOutcomes);
+			} else if (ev.type === "done") {
+				final = ev.message;
+			} else if (ev.type === "error") {
+				const code = pickErrorCode(ev.error);
+				const message = ev.error.errorMessage ?? "agent error";
+				emitter.closeThinkingIfOpen(turnId);
+				if (emitter.error(turnId, code, message)) {
+					if (
+						ev.error.errorReason === "authInvalidated" &&
+						ev.error.errorProviderId
+					) {
+						// `provider.statusChanged` is session/provider-scoped, not a
+						// turn-scoped `ui.*` frame — stays on the raw dispatcher.
+						dispatcher.notify(RPCMethod.providerStatusChanged, {
+							providerId: ev.error.errorProviderId,
+							state: "unauthenticated",
+							reason: "authInvalidated",
+							message,
+						});
+					}
+				}
+				return { kind: "streamError" };
+			}
+		}
+
+		if (signal.aborted) return { kind: "aborted" };
+		if (!final) return { kind: "noFinal" };
+		return { kind: "final", final, callOutcomes };
 	}
 
-	closeThinkingIfOpen(turnId: string): void {
-		if (!this.thinkingOpen) return;
-		this.thinkingOpen = false;
-		this.options.dispatcher.notify(RPCMethod.uiThinking, {
-			sessionId: this.options.session.id,
-			turnId,
-			kind: "end",
-		});
+	/// Build the `{ kind: "terminal" }` outcome shared by every early-exit
+	/// branch in `run()` and `failToolBudget` — always drops the queued steer
+	/// and carries whatever `consecutiveSilentToolRounds` count was live at
+	/// the exit point.
+	private terminal(consecutiveSilentToolRounds: number): AgentRoundOutcome {
+		return {
+			kind: "terminal",
+			dropQueuedSteer: true,
+			consecutiveSilentToolRounds,
+		};
+	}
+
+	/// Transition back to "working" after a tool round completes and another
+	/// LLM round is about to start. One of the two spots that persist the
+	/// status onto the Conversation AND notify with the same value — see
+	/// `TurnEmitter.statusPersisted`.
+	resumeWorking(turnId: string): void {
+		this.options.emitter.statusPersisted(turnId, "working");
 	}
 
 	private publishContext(turnId: string, messages: Message[]): void {
@@ -465,18 +329,14 @@ export class AgentRoundRunner {
 		const outcome = prepareToolCall(toolCall, this.options.toolByName);
 		callOutcomes.set(toolCall.id, outcome);
 		if (outcome.kind === "ready") {
-			this.options.dispatcher.notify(RPCMethod.uiToolCall, {
-				sessionId: this.options.session.id,
-				turnId,
+			this.options.emitter.toolCall(turnId, {
 				phase: "called",
 				toolCallId: toolCall.id,
 				toolName: toolCall.name,
 				args: outcome.args as JSONValue,
 			});
 		} else {
-			this.options.dispatcher.notify(RPCMethod.uiToolCall, {
-				sessionId: this.options.session.id,
-				turnId,
+			this.options.emitter.toolCall(turnId, {
 				phase: "rejected",
 				toolCallId: toolCall.id,
 				toolName: toolCall.name,
@@ -493,9 +353,8 @@ export class AgentRoundRunner {
 		consecutiveSilentToolRounds: number,
 	): AgentRoundOutcome {
 		const {
-			dispatcher,
+			emitter,
 			conversation: convo,
-			session,
 			maxConsecutiveSilentToolRounds,
 		} = this.options;
 		const overflowMsg = `tool-call budget exceeded (${maxConsecutiveSilentToolRounds} consecutive tool rounds without assistant text)`;
@@ -510,16 +369,10 @@ export class AgentRoundRunner {
 				timestamp: Date.now(),
 			};
 			if (!convo.appendToolResult(turnId, stopMsg)) {
-				return {
-					kind: "terminal",
-					dropQueuedSteer: true,
-					consecutiveSilentToolRounds,
-				};
+				return this.terminal(consecutiveSilentToolRounds);
 			}
 			if (callOutcomes.get(tc.id)?.kind === "ready") {
-				dispatcher.notify(RPCMethod.uiToolCall, {
-					sessionId: session.id,
-					turnId,
+				emitter.toolCall(turnId, {
 					phase: "result",
 					toolCallId: tc.id,
 					toolName: tc.name,
@@ -528,18 +381,7 @@ export class AgentRoundRunner {
 				});
 			}
 		}
-		if (convo.setError(turnId, RPCErrorCode.internalError, overflowMsg)) {
-			dispatcher.notify(RPCMethod.uiError, {
-				sessionId: session.id,
-				turnId,
-				code: RPCErrorCode.internalError,
-				message: overflowMsg,
-			});
-		}
-		return {
-			kind: "terminal",
-			dropQueuedSteer: true,
-			consecutiveSilentToolRounds,
-		};
+		emitter.error(turnId, RPCErrorCode.internalError, overflowMsg);
+		return this.terminal(consecutiveSilentToolRounds);
 	}
 }

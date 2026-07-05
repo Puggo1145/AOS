@@ -19,7 +19,6 @@ import {
 	compactConversation,
 	autoCompactIfNeeded,
 	AUTO_COMPACT_REMAINING_THRESHOLD,
-	compactBreaker,
 	COMPACT_FAILURE_LIMIT,
 	COMPACT_SYSTEM_PROMPT,
 } from "../src/agent/compact";
@@ -133,12 +132,10 @@ beforeEach(() => {
 			return stream;
 		},
 	});
-	compactBreaker.clear();
 });
 
 afterEach(() => {
 	unregisterApiProviders(FAKE_SOURCE_ID);
-	compactBreaker.clear();
 });
 
 // ---------------------------------------------------------------------------
@@ -375,7 +372,7 @@ test("autoCompactIfNeeded: trips the breaker after consecutive failures and sile
 	for (let i = 0; i < COMPACT_FAILURE_LIMIT; i++) {
 		await expect(autoCompactIfNeeded(session, model)).rejects.toThrow(/nope/);
 	}
-	expect(compactBreaker.isAutoDisabled(session.id)).toBe(true);
+	expect(session.compactBreaker.isAutoDisabled()).toBe(true);
 	expect(capture.messageBatches).toHaveLength(COMPACT_FAILURE_LIMIT);
 
 	// Next attempt — even though the threshold is still tripped — must
@@ -392,11 +389,11 @@ test("autoCompactIfNeeded: a successful run zeroes the breaker counter", async (
 
 	throwError = new Error("flake");
 	await expect(autoCompactIfNeeded(session, model)).rejects.toThrow();
-	expect(compactBreaker.inspect(session.id).consecutiveFailures).toBe(1);
+	expect(session.compactBreaker.consecutiveFailures).toBe(1);
 
 	throwError = null;
 	await autoCompactIfNeeded(session, model);
-	expect(compactBreaker.inspect(session.id).consecutiveFailures).toBe(0);
+	expect(session.compactBreaker.consecutiveFailures).toBe(0);
 });
 
 test("AUTO_COMPACT_REMAINING_THRESHOLD is the documented 20K", () => {

@@ -3,7 +3,7 @@
 // `./models/catalog`, or `./utils/*` from the agent layer are
 // disallowed (see docs/designs/llm-provider.md "包边界").
 
-import { registerBuiltins } from "./providers/register-builtins";
+export { registerBuiltins as registerBuiltinLlmProviders } from "./providers/register-builtins";
 
 export { stream, streamSimple } from "./stream";
 export {
@@ -40,6 +40,7 @@ export type {
 	Api,
 	Provider,
 	Message,
+	UserContent,
 	UserMessage,
 	AssistantMessage,
 	ToolResultMessage,
@@ -66,6 +67,3 @@ export type {
 	SimpleStreamFunction,
 	ApiProviderEntry,
 } from "./types";
-
-// Side effect: register built-in providers exactly once on first import.
-registerBuiltins();

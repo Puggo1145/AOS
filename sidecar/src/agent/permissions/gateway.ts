@@ -1,3 +1,4 @@
+import { errorText } from "../../errors";
 import { logger } from "../../log";
 import {
 	RPCMethod,
@@ -97,7 +98,7 @@ export class PermissionGateway implements PermissionAuthorizer {
 				});
 				return { kind: "aborted" };
 			}
-			const message = err instanceof Error ? err.message : String(err);
+			const message = errorText(err);
 			logger.error("permission approval failed", {
 				sessionId: input.sessionId,
 				turnId: input.turnId,

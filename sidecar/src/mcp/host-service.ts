@@ -1,5 +1,6 @@
+import { errorText } from "../errors";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/client";
-import type { JSONSchema } from "../llm/types";
+import type { JSONSchema } from "../llm";
 import type { McpAuthServerInfo, McpServerStatusInfo } from "../rpc/rpc-types";
 import type { McpConfig, McpServerConfig } from "./config";
 import { McpClientSession } from "./client-session";
@@ -229,7 +230,7 @@ export class McpHostService {
 			await this.loadToolDetails(record);
 			record.lastError = undefined;
 		} catch (err) {
-			record.lastError = errorMessage(err);
+			record.lastError = errorText(err);
 			const session = record.session;
 			record.session = undefined;
 			record.tools = undefined;
@@ -471,8 +472,4 @@ function stringField(value: unknown, label: string): string {
 
 function isJsonSchema(value: unknown): value is JSONSchema {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
 }

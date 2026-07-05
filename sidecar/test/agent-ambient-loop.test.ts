@@ -16,11 +16,11 @@ import {
 	type ByteSink,
 	type ByteSource,
 } from "../src/rpc/transport";
+import { registerAgentHandlers } from "../src/agent/handlers";
 import {
-	registerAgentHandlers,
 	setModelResolver,
 	resetModelResolver,
-} from "../src/agent/loop";
+} from "../src/agent/model-resolver";
 import { ContextObserver } from "../src/agent/context-observer";
 import { SessionManager } from "../src/agent/session/manager";
 import { toolRegistry } from "../src/agent/tools/core/registry";

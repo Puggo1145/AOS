@@ -1,7 +1,10 @@
 import { readFileSync, unlinkSync } from "node:fs";
 import { z, type ZodType } from "zod";
-import { supportsVision } from "../../../llm/models/capabilities";
-import type { Tool, ToolResultContent } from "../../../llm/types";
+import {
+	supportsVision,
+	type Tool,
+	type ToolResultContent,
+} from "../../../llm";
 import type { Dispatcher } from "../../../rpc/dispatcher";
 import {
 	RPCMethod,

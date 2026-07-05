@@ -11,7 +11,7 @@
 
 import { StdioTransport } from "./rpc/transport";
 import { Dispatcher } from "./rpc/dispatcher";
-import { registerAgentHandlers } from "./agent/loop";
+import { registerAgentHandlers } from "./agent/handlers";
 import { SessionManager } from "./agent/session/manager";
 import { registerSessionHandlers } from "./agent/session/handlers";
 import { registerProviderHandlers } from "./auth/register";
@@ -43,15 +43,18 @@ import { McpOAuthStorage } from "./mcp/auth/storage";
 import { McpAuthRuntime } from "./mcp/auth/runtime";
 import { registerMcpAuthHandlers } from "./mcp/auth/handlers";
 import { registerMcpHandlers } from "./mcp/handlers";
+import { registerBuiltinLlmProviders } from "./llm";
 
-// Side-effect: triggers register-builtins (api providers + model catalog).
-import "./llm";
-
-async function main(): Promise<void> {
-	process.stderr.write(
-		`[notch-agent-sidecar] starting; protocol ${NOTCH_PROTOCOL_VERSION}\n`,
-	);
-
+/// Global, transport-independent bootstrap: register built-in LLM API
+/// providers (openai-responses, openai-completions, deepseek), ensure the
+/// agent's workspace directory exists, and register every built-in tool +
+/// ambient provider into their respective global registries.
+///
+/// Ordering constraint that must survive any future edit here: LLM provider
+/// registration must run first — session/tool bootstrap doesn't touch models,
+/// but any future ordering change must keep this ahead of model resolution.
+function bootstrapAgentRuntime(): void {
+	registerBuiltinLlmProviders();
 	// Side-effect bootstrap: ensure ~/.notch-agent/workspace/ exists (the agent's
 	// default scratch directory) and register every built-in tool into the
 	// global ToolRegistry before the agent loop ever runs.
@@ -61,6 +64,48 @@ async function main(): Promise<void> {
 	// Registered alongside the tool registry so every turn assembled below
 	// sees a populated ambient registry.
 	registerBuiltinAmbient();
+}
+
+/// Construct the MCP host service + auth runtime. Depends on `dispatcher`
+/// (auth runtime notifies over it) and the global `toolRegistry` (the host
+/// service registers each connected server's tools into it) — must run
+/// after `registerComputerUseTools` and before the permission-catalog
+/// assertion, since both register tools that assertion checks against.
+function bootstrapMcp(dispatcher: Dispatcher): {
+	mcpAuthRuntime: McpAuthRuntime;
+	mcpHostService: ReturnType<typeof bootstrapMcpHost>;
+} {
+	const mcpConfig = readMcpConfig();
+	const mcpAuthRuntime = new McpAuthRuntime({
+		config: mcpConfig,
+		storage: new McpOAuthStorage(),
+		notify(method, params) {
+			dispatcher.notify(method, params);
+		},
+	});
+	const mcpHostService = bootstrapMcpHost(toolRegistry, {
+		config: mcpConfig,
+		createSession(serverId, serverConfig) {
+			return new McpClientSession(serverId, serverConfig, {
+				createOAuthProvider(id) {
+					return mcpAuthRuntime.createProviderForSession(id);
+				},
+				hasOAuthTokens(id) {
+					return mcpAuthRuntime.hasTokens(id);
+				},
+			});
+		},
+		authRuntime: mcpAuthRuntime,
+	});
+	return { mcpAuthRuntime, mcpHostService };
+}
+
+async function main(): Promise<void> {
+	process.stderr.write(
+		`[notch-agent-sidecar] starting; protocol ${NOTCH_PROTOCOL_VERSION}\n`,
+	);
+
+	bootstrapAgentRuntime();
 
 	const transport = new StdioTransport();
 	const dispatcher = new Dispatcher(transport);
@@ -84,28 +129,7 @@ async function main(): Promise<void> {
 	// todo state, so it registers AFTER the manager exists but BEFORE the
 	// agent loop attaches (the loop snapshots the tool registry per turn).
 	registerTodoTool(sessions);
-	const mcpConfig = readMcpConfig();
-	const mcpAuthRuntime = new McpAuthRuntime({
-		config: mcpConfig,
-		storage: new McpOAuthStorage(),
-		notify(method, params) {
-			dispatcher.notify(method, params);
-		},
-	});
-	const mcpHostService = bootstrapMcpHost(toolRegistry, {
-		config: mcpConfig,
-		createSession(serverId, serverConfig) {
-			return new McpClientSession(serverId, serverConfig, {
-				createOAuthProvider(id) {
-					return mcpAuthRuntime.createProviderForSession(id);
-				},
-				hasOAuthTokens(id) {
-					return mcpAuthRuntime.hasTokens(id);
-				},
-			});
-		},
-		authRuntime: mcpAuthRuntime,
-	});
+	const { mcpAuthRuntime, mcpHostService } = bootstrapMcp(dispatcher);
 	assertRegisteredToolsMatchPermissionPolicies(
 		toolRegistry.list(),
 		builtinPermissionPolicyCatalog,

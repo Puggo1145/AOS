@@ -20,6 +20,7 @@
 // doc "风险" item: "OpenAI Responses 协议未来字段变更" → only log).
 // =====================================================================
 
+import { errorText } from "../../errors";
 import { createParser, type EventSourceMessage } from "eventsource-parser";
 
 import type {
@@ -340,7 +341,7 @@ export const streamOpenaiResponses: StreamFunction<
 					} catch (err) {
 						// Per design doc: unknown events log to stderr but do not abort.
 						process.stderr.write(
-							`[openai-responses] event mapping error: ${err instanceof Error ? err.message : String(err)}\n`,
+							`[openai-responses] event mapping error: ${errorText(err)}\n`,
 						);
 					}
 				},

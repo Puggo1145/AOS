@@ -22,6 +22,7 @@
 //   - missing optional fields with valid surrounding JSON → return without
 //     them populated (still treated as not-set).
 
+import { errorText } from "../errors";
 import {
 	existsSync,
 	mkdirSync,
@@ -110,7 +111,7 @@ export function readUserConfig(): UserConfig {
 	} catch (err) {
 		throw new MalformedConfigError(
 			"read",
-			`Failed to read config at ${path}: ${err instanceof Error ? err.message : String(err)}`,
+			`Failed to read config at ${path}: ${errorText(err)}`,
 			err,
 		);
 	}
@@ -121,7 +122,7 @@ export function readUserConfig(): UserConfig {
 	} catch (err) {
 		throw new MalformedConfigError(
 			"parse",
-			`Config file ${path} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+			`Config file ${path} is not valid JSON: ${errorText(err)}`,
 			err,
 		);
 	}

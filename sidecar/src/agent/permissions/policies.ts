@@ -1,3 +1,4 @@
+import { errorText } from "../../errors";
 import type {
 	PermissionPolicy,
 	PermissionPolicyCatalog,
@@ -60,7 +61,7 @@ export function evaluatePermissionPolicy(
 		if (err instanceof PermissionPolicyConfigurationError) {
 			throw err;
 		}
-		const message = err instanceof Error ? err.message : String(err);
+		const message = errorText(err);
 		throw new PermissionPolicyConfigurationError(
 			`permission policy "${policy.toolName}" failed for tool "${ctx.toolName}": ${message}`,
 		);

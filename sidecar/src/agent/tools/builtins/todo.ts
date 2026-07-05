@@ -9,6 +9,7 @@
 // the model rewrites the list every time it changes status, the harness
 // simply renders the new state, and the user always sees one coherent plan.
 
+import { errorText } from "../../../errors";
 import type { SessionManager } from "../../session/manager";
 import type { TodoManager, TodoItem } from "../../todos/manager";
 import { toolRegistry } from "../core/registry";
@@ -90,9 +91,7 @@ export function createTodoWriteTool(opts: {
 				rendered = manager.update(args.items);
 			} catch (err) {
 				// Validation failure — the model can fix it on the next round.
-				throw new ToolUserError(
-					err instanceof Error ? err.message : String(err),
-				);
+				throw new ToolUserError(errorText(err));
 			}
 			return {
 				content: [{ type: "text", text: rendered }],

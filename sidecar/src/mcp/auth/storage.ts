@@ -1,3 +1,4 @@
+import { errorText } from "../../errors";
 import {
 	existsSync,
 	mkdirSync,
@@ -207,7 +208,7 @@ export class McpOAuthStorage {
 		} catch (err) {
 			if (options.passive) return null;
 			throw new McpAuthError(
-				`Malformed MCP OAuth ${kind} file for server "${serverId}": ${err instanceof Error ? err.message : String(err)}`,
+				`Malformed MCP OAuth ${kind} file for server "${serverId}": ${errorText(err)}`,
 			);
 		}
 		if (!validate(parsed)) {

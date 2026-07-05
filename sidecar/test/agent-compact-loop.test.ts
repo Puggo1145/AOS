@@ -16,16 +16,15 @@
 //     replacement for explicit todo re-injection.
 
 import { test, expect, beforeEach, afterEach } from "bun:test";
+import { registerAgentHandlers } from "../src/agent/handlers";
 import {
-	registerAgentHandlers,
 	setModelResolver,
 	resetModelResolver,
-} from "../src/agent/loop";
+} from "../src/agent/model-resolver";
 import { SessionManager } from "../src/agent/session/manager";
 import { toolRegistry } from "../src/agent/tools/core/registry";
 import { ambientRegistry } from "../src/agent/ambient/registry";
 import { todosAmbientProvider } from "../src/agent/ambient/providers/todos";
-import { compactBreaker } from "../src/agent/compact";
 import {
 	registerApiProvider,
 	unregisterApiProviders,
@@ -101,7 +100,6 @@ beforeEach(() => {
 	setModelResolver(() => makeFakeModel());
 	toolRegistry.clear();
 	ambientRegistry.clear();
-	compactBreaker.clear();
 });
 
 afterEach(() => {
@@ -109,7 +107,6 @@ afterEach(() => {
 	resetModelResolver();
 	toolRegistry.clear();
 	ambientRegistry.clear();
-	compactBreaker.clear();
 	scriptedRounds = [];
 	providerCalls = [];
 });
@@ -512,7 +509,7 @@ test("agent.reset clears the compact breaker so a fresh session starts unobstruc
 		await flush();
 	}
 
-	expect(compactBreaker.isAutoDisabled(sessionId)).toBe(true);
+	expect(session.compactBreaker.isAutoDisabled()).toBe(true);
 
 	// Reset wipes the breaker.
 	pushInbound({
@@ -522,7 +519,7 @@ test("agent.reset clears the compact breaker so a fresh session starts unobstruc
 		params: { sessionId },
 	});
 	await flush();
-	expect(compactBreaker.isAutoDisabled(sessionId)).toBe(false);
+	expect(session.compactBreaker.isAutoDisabled()).toBe(false);
 });
 
 // ---------------------------------------------------------------------------

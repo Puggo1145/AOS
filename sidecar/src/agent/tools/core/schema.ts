@@ -1,5 +1,5 @@
 import { z, type ZodIssue, type ZodType } from "zod";
-import type { JSONSchema, ToolCall } from "../../../llm/types";
+import type { JSONSchema, ToolCall } from "../../../llm";
 import type {
 	ToolExecContext,
 	ToolExecResult,

@@ -1,3 +1,4 @@
+import { errorText } from "../../errors";
 import { randomUUID } from "node:crypto";
 import {
 	auth,
@@ -359,7 +360,7 @@ export class McpAuthRuntime {
 				loginId: session.loginId,
 				serverId: session.serverId,
 				state: "failed",
-				message: err instanceof Error ? err.message : String(err),
+				message: errorText(err),
 			});
 		} finally {
 			if (!session.done) {
@@ -385,7 +386,7 @@ export class McpAuthRuntime {
 			loginId: session.loginId,
 			serverId: session.serverId,
 			state: "failed",
-			message: err instanceof Error ? err.message : String(err),
+			message: errorText(err),
 		});
 	}
 

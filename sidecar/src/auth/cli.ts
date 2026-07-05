@@ -11,6 +11,7 @@
 // (`provider.startLogin`) and this CLI never run concurrently — they are
 // alternative entry points to the same OAuth machinery.
 
+import { errorText } from "../errors";
 import {
 	CHATGPT_PLAN_CLIENT_ID,
 	CHATGPT_PLAN_REDIRECT_PATH,
@@ -19,11 +20,9 @@ import {
 	chatgptPlanOAuthProvider,
 	generateCodeVerifier,
 	generateState,
-} from "../llm/auth/oauth/chatgpt-plan";
-import {
 	writeChatGPTPlanToken,
 	chatgptTokenPath,
-} from "../llm/auth/oauth/storage";
+} from "../llm/auth";
 import { startCallbackServer } from "./loopback";
 import { existsSync, unlinkSync } from "node:fs";
 
@@ -81,9 +80,7 @@ async function runLoginCLI(): Promise<void> {
 
 if ((import.meta as unknown as { main?: boolean }).main) {
 	runLoginCLI().catch((err) => {
-		process.stderr.write(
-			`login failed: ${err instanceof Error ? err.message : String(err)}\n`,
-		);
+		process.stderr.write(`login failed: ${errorText(err)}\n`);
 		process.exit(1);
 	});
 }

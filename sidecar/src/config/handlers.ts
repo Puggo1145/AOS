@@ -20,18 +20,20 @@ import {
 } from "../rpc/rpc-types";
 import {
 	DEFAULT_MODEL_PER_PROVIDER,
-	MODELS,
 	PROVIDER_NAMES,
-	type KnownProvider,
-} from "../llm/models/catalog";
-import {
 	defaultEffort,
+	getDefaultModel,
+	getModel,
+	getModels,
+	getProviders,
 	supportedEfforts,
 	supportsEffort,
 	supportsThinking,
-} from "../llm/models/effort";
-import { supportsVision } from "../llm/models/capabilities";
-import type { Api, Model } from "../llm/types";
+	supportsVision,
+	type Api,
+	type KnownProvider,
+	type Model,
+} from "../llm";
 import {
 	DEFAULT_PERMISSION_LEVEL,
 	isPermissionLevel,
@@ -41,8 +43,7 @@ import {
 } from "./storage";
 
 function buildProviderCatalog(): ConfigProviderEntry[] {
-	return (Object.keys(MODELS) as KnownProvider[]).map((id) => {
-		const inner = MODELS[id] as Record<string, Model<Api>>;
+	return (getProviders() as KnownProvider[]).map((id) => {
 		return {
 			id,
 			name: PROVIDER_NAMES[id],
@@ -51,7 +52,7 @@ function buildProviderCatalog(): ConfigProviderEntry[] {
 			// empty array means "no reasoning UI for this model"; a non-empty
 			// list is exactly the picker rows the Shell should render. The
 			// Shell never re-derives capabilities from `model.id`.
-			models: Object.values(inner).map((m) => ({
+			models: getModels(id).map((m) => ({
 				id: m.id,
 				name: m.name,
 				supportedEfforts: supportedEfforts(m).map((e) => ({
@@ -66,11 +67,7 @@ function buildProviderCatalog(): ConfigProviderEntry[] {
 }
 
 function isKnownSelection(providerId: string, modelId: string): boolean {
-	const provider = (MODELS as Record<string, Record<string, unknown>>)[
-		providerId
-	];
-	if (!provider) return false;
-	return modelId in provider;
+	return getModels(providerId).some((m) => m.id === modelId);
 }
 
 /// Returns the catalog `Model` for the user's current selection, falling
@@ -80,16 +77,10 @@ function resolveSelectedModel(
 	selection: { providerId: string; modelId: string } | undefined,
 ): Model<Api> {
 	if (selection && isKnownSelection(selection.providerId, selection.modelId)) {
-		const inner = (MODELS as Record<string, Record<string, Model<Api>>>)[
-			selection.providerId
-		]!;
-		return inner[selection.modelId]!;
+		return getModel<Api>(selection.providerId, selection.modelId);
 	}
-	const firstProvider = Object.keys(MODELS)[0] as KnownProvider;
-	const defaultModelId = DEFAULT_MODEL_PER_PROVIDER[firstProvider] as string;
-	return (MODELS as Record<string, Record<string, Model<Api>>>)[firstProvider]![
-		defaultModelId
-	]!;
+	const firstProvider = getProviders()[0] as KnownProvider;
+	return getDefaultModel<Api>(firstProvider);
 }
 
 export function registerConfigHandlers(dispatcher: Dispatcher): void {

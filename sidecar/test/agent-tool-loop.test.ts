@@ -16,11 +16,11 @@ import { test, expect, beforeEach, afterEach } from "bun:test";
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
 import { z } from "zod";
+import { registerAgentHandlers } from "../src/agent/handlers";
 import {
-	registerAgentHandlers,
 	setModelResolver,
 	resetModelResolver,
-} from "../src/agent/loop";
+} from "../src/agent/model-resolver";
 import { SessionManager } from "../src/agent/session/manager";
 import { toolRegistry } from "../src/agent/tools/core/registry";
 import { defineTool, ToolUserError } from "../src/agent/tools";

@@ -6,11 +6,11 @@
 // stream lets us deterministically push text deltas, errors, or hang for cancel.
 
 import { test, expect, beforeEach, afterEach } from "bun:test";
+import { registerAgentHandlers } from "../src/agent/handlers";
 import {
-	registerAgentHandlers,
 	setModelResolver,
 	resetModelResolver,
-} from "../src/agent/loop";
+} from "../src/agent/model-resolver";
 import {
 	ContextObserver,
 	type DevContextSnapshot,

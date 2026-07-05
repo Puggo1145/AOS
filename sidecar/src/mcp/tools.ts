@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { ToolRegistry } from "../agent/tools";
 import { defineTool, ToolUserError } from "../agent/tools";
 import type { ToolExecResult } from "../agent/tools";
-import type { ToolResultContent } from "../llm/types";
+import type { ToolResultContent } from "../llm";
 import type {
 	McpToolDetails,
 	McpToolDetailLevel,

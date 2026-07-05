@@ -37,7 +37,6 @@ import {
 } from "../../llm";
 import type { Session } from "../session/session";
 import { COMPACT_FINAL_REQUEST, COMPACT_SYSTEM_PROMPT } from "./prompt";
-import { compactBreaker } from "./breaker";
 
 /// Auto-compact threshold. When the model's remaining context (i.e.
 /// `model.contextWindow - convo.lastTotalTokens`) falls under this
@@ -203,7 +202,7 @@ export async function autoCompactIfNeeded(
 	model: Model<Api>,
 	options?: { signal?: AbortSignal; onStart?: () => void },
 ): Promise<CompactResult | null> {
-	if (compactBreaker.isAutoDisabled(session.id)) return null;
+	if (session.compactBreaker.isAutoDisabled()) return null;
 	const remaining = model.contextWindow - session.conversation.lastTotalTokens;
 	if (remaining > AUTO_COMPACT_REMAINING_THRESHOLD) return null;
 
@@ -217,7 +216,7 @@ export async function autoCompactIfNeeded(
 		const result = await compactConversation(session, model, {
 			signal: options?.signal,
 		});
-		compactBreaker.recordSuccess(session.id);
+		session.compactBreaker.recordSuccess();
 		// The auto path's own guards above ensure we never reach this with
 		// truly empty history — but if `compactConversation` does return the
 		// noop sentinel for any reason, normalize it to "skipped" rather
@@ -225,7 +224,7 @@ export async function autoCompactIfNeeded(
 		if (result === COMPACT_NOOP_EMPTY) return null;
 		return result;
 	} catch (err) {
-		compactBreaker.recordFailure(session.id);
+		session.compactBreaker.recordFailure();
 		throw err;
 	}
 }

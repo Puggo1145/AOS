@@ -1,3 +1,4 @@
+import { errorText } from "../../errors";
 import { validateConfiguredResourceSyntax } from "./resource";
 
 export type McpOAuthRegistrationConfig =
@@ -42,7 +43,7 @@ export function parseMcpOAuthAuthConfig(
 		try {
 			validateConfiguredResourceSyntax(resource, `${label}.resource`);
 		} catch (err) {
-			throw deps.schemaError(err instanceof Error ? err.message : String(err));
+			throw deps.schemaError(errorText(err));
 		}
 	}
 	return { type: "oauth", registration, redirect, resource };
@@ -185,5 +186,5 @@ function assertOnlyKeys(
 }
 
 function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
+	return errorText(err);
 }

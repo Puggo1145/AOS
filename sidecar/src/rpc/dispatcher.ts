@@ -21,6 +21,7 @@
 //   - Outbound `request` keeps a pending map keyed by RPCId; resolved on
 //     response. `stop()` rejects all pending with DispatcherStopped.
 
+import { errorText } from "../errors";
 import {
 	RPCErrorCode,
 	type RPCErrorResponse,
@@ -413,7 +414,7 @@ export class Dispatcher {
 			if (err instanceof RPCMethodError) {
 				this.replyError(id, err.code, err.message, err.data);
 			} else {
-				const msg = err instanceof Error ? err.message : String(err);
+				const msg = errorText(err);
 				this.replyError(id, RPCErrorCode.internalError, msg);
 			}
 		}

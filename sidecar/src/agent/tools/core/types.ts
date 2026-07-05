@@ -12,7 +12,7 @@
 // details) without polluting the model's view.
 
 import type { z } from "zod";
-import type { Api, Model, Tool, ToolResultContent } from "../../../llm/types";
+import type { Api, Model, Tool, ToolResultContent } from "../../../llm";
 import type { ComputerUseAppSessionInfo } from "../../session/session";
 
 export interface ComputerUseToolRuntime {

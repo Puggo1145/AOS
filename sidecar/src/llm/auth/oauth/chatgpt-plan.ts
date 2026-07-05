@@ -12,6 +12,7 @@
 // VERIFY: endpoint URLs, client_id, and scope strings below remain
 // PROVISIONAL until the real ChatGPT plan auth endpoint is confirmed.
 
+import { errorText } from "../../../errors";
 import { createHash, randomBytes } from "node:crypto";
 import { renameSync, existsSync } from "node:fs";
 
@@ -284,10 +285,7 @@ export async function readChatGPTToken(): Promise<{
 			} catch {
 				// best-effort
 			}
-			throw new AuthInvalidatedError(
-				PROVIDER_IDS.chatgptPlan,
-				err instanceof Error ? err.message : String(err),
-			);
+			throw new AuthInvalidatedError(PROVIDER_IDS.chatgptPlan, errorText(err));
 		} finally {
 			refreshInflight = null;
 		}

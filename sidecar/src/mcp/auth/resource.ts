@@ -1,3 +1,4 @@
+import { errorText } from "../../errors";
 import { McpAuthError } from "./errors";
 
 export function canonicalMcpResourceUri(serverUrl: string): string {
@@ -57,7 +58,7 @@ function parseAbsoluteUrl(value: string, label: string): URL {
 		url = new URL(value);
 	} catch (err) {
 		throw new McpAuthError(
-			`${label} must be an absolute URI: ${err instanceof Error ? err.message : String(err)}`,
+			`${label} must be an absolute URI: ${errorText(err)}`,
 		);
 	}
 	if (!url.protocol || !url.hostname) {

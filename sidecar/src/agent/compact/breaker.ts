@@ -8,73 +8,53 @@
 // makes progress, and burns tokens.
 //
 // Manual /compact triggers must NOT consult this state — the user is
-// explicitly asking, the cost decision is theirs. The breaker is keyed
-// on `sessionId` and lives in module scope (mirrors `ambient/registry`)
-// rather than on the Session class so the compact module owns its own
-// failure-tracking concern end-to-end.
+// explicitly asking, the cost decision is theirs. The breaker is a
+// per-session value object owned by `Session` (constructed alongside
+// conversation/turns/todos) so its lifetime is tied to the session's —
+// no separate forget-on-reset bookkeeping required.
 
 const FAILURE_LIMIT = 3;
 
-interface BreakerState {
-	consecutiveFailures: number;
-	disabled: boolean;
-}
+export class CompactBreaker {
+	private _consecutiveFailures = 0;
+	private _disabled = false;
 
-const states = new Map<string, BreakerState>();
-
-function get(sessionId: string): BreakerState {
-	let s = states.get(sessionId);
-	if (!s) {
-		s = { consecutiveFailures: 0, disabled: false };
-		states.set(sessionId, s);
+	get consecutiveFailures(): number {
+		return this._consecutiveFailures;
 	}
-	return s;
-}
 
-export const compactBreaker = {
+	get disabled(): boolean {
+		return this._disabled;
+	}
+
 	/// Whether auto-compact should be skipped for this session. Manual
 	/// triggers (future RPC entry) must not call this — the breaker only
 	/// gates the implicit per-turn auto path.
-	isAutoDisabled(sessionId: string): boolean {
-		return get(sessionId).disabled;
-	},
+	isAutoDisabled(): boolean {
+		return this._disabled;
+	}
 
-	recordSuccess(sessionId: string): void {
-		const s = get(sessionId);
-		s.consecutiveFailures = 0;
+	recordSuccess(): void {
+		this._consecutiveFailures = 0;
 		// Note: we do NOT auto-revive a tripped breaker on success — once it
 		// trips it stays tripped for the session's lifetime. A successful
 		// manual compact does not imply auto-compact is now safe (the auto
 		// path's failures usually come from a different cause: prompt size,
 		// not transient network).
-	},
+	}
 
-	recordFailure(sessionId: string): void {
-		const s = get(sessionId);
-		s.consecutiveFailures += 1;
-		if (s.consecutiveFailures >= FAILURE_LIMIT) s.disabled = true;
-	},
+	recordFailure(): void {
+		this._consecutiveFailures += 1;
+		if (this._consecutiveFailures >= FAILURE_LIMIT) this._disabled = true;
+	}
 
-	/// Drop a session's tracked state. Called from `agent.reset` and
-	/// `session.delete` so a fresh session does not inherit a tripped
-	/// breaker from a previous run with the same id (test setup churn,
-	/// mainly).
-	forget(sessionId: string): void {
-		states.delete(sessionId);
-	},
-
-	/// Test-only: wipe all tracked sessions.
-	clear(): void {
-		states.clear();
-	},
-
-	/// Test-only: read current counter state.
-	inspect(sessionId: string): {
-		consecutiveFailures: number;
-		disabled: boolean;
-	} {
-		return { ...get(sessionId) };
-	},
-};
+	/// Drop tracked state. Called from `agent.reset` via `session.compactBreaker.reset()`
+	/// so a fresh session does not inherit a tripped breaker from the prior
+	/// history run.
+	reset(): void {
+		this._consecutiveFailures = 0;
+		this._disabled = false;
+	}
+}
 
 export const COMPACT_FAILURE_LIMIT = FAILURE_LIMIT;

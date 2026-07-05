@@ -35,7 +35,7 @@ import type {
 	ToolCall,
 	ToolResultContent,
 	ToolResultMessage,
-} from "../llm/types";
+} from "../llm";
 import type { CitedContext, TurnStatus } from "../rpc/rpc-types";
 import { buildUserMessage } from "./prompt";
 

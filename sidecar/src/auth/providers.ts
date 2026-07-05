@@ -9,7 +9,7 @@
 // on refresh failure) is naturally ignored because we only look at
 // `chatgpt.json`.
 
-import { hasChatGPTPlanToken } from "../llm/auth/oauth/storage";
+import { hasChatGPTPlanToken } from "../llm/auth";
 import { PROVIDER_IDS, PROVIDER_NAMES } from "../llm";
 import type {
 	ProviderAuthMethod,

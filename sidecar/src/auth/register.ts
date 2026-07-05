@@ -21,7 +21,7 @@ import { type Dispatcher, RPCMethodError } from "../rpc/dispatcher";
 import { startLogin, cancelLogin, getStatus } from "./runtime";
 import { clearApiKey, setApiKey } from "./api-key-store";
 import { getProvider } from "./providers";
-import { chatgptTokenPath } from "../llm/auth/oauth/storage";
+import { chatgptTokenPath } from "../llm/auth";
 
 export function registerProviderHandlers(dispatcher: Dispatcher): void {
 	dispatcher.registerRequest(RPCMethod.providerStatus, async () => getStatus());

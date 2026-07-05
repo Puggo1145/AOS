@@ -1,3 +1,4 @@
+import { errorText } from "../errors";
 import {
 	existsSync,
 	mkdirSync,
@@ -575,5 +576,5 @@ function schemaError(message: string): MalformedMcpConfigError {
 }
 
 function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
+	return errorText(err);
 }

@@ -8,6 +8,7 @@
 import { Conversation } from "../conversation";
 import { TurnRegistry } from "../registry";
 import { TodoManager } from "../todos/manager";
+import { CompactBreaker } from "../compact/breaker";
 import type { CitedContext } from "../../rpc/rpc-types";
 import type { SessionId, SessionInfo } from "./types";
 
@@ -31,6 +32,12 @@ export class Session {
 	/// tool mutates this; the agent loop subscribes and projects every
 	/// update onto the wire as `ui.todo`.
 	readonly todos: TodoManager;
+	/// Per-session auto-compact circuit breaker. See `compact/breaker.ts` for
+	/// why this is a value object owned by the session rather than a
+	/// module-global map — the breaker's lifetime is tied to the session's,
+	/// so `agent.reset` resets it directly instead of remembering to
+	/// separately "forget" a keyed global entry.
+	readonly compactBreaker: CompactBreaker;
 	private _pendingSteer: PendingSteerPrompt | undefined;
 	private _compactController: AbortController | undefined;
 	/// Count of consecutive tool-call rounds in the in-flight (or most
@@ -50,6 +57,7 @@ export class Session {
 		this.conversation = new Conversation();
 		this.turns = new TurnRegistry();
 		this.todos = new TodoManager();
+		this.compactBreaker = new CompactBreaker();
 	}
 
 	get info(): SessionInfo {
@@ -92,13 +100,12 @@ export class Session {
 		this._compactController = undefined;
 	}
 
-	setCompacting(compacting: boolean): void {
-		if (compacting) {
-			this.beginCompact();
-		} else {
-			this.cancelCompact();
-			this.clearCompact();
-		}
+	/// Abort any in-flight compact and drop the controller. Used by
+	/// `agent.reset` — a reset session must not leave a stale compact running
+	/// against a conversation that's about to be wiped.
+	abortCompact(): void {
+		this.cancelCompact();
+		this.clearCompact();
 	}
 
 	queueSteer(input: PendingSteerPrompt): void {
