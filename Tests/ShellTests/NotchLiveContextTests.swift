@@ -62,7 +62,7 @@ struct NotchLiveContextTests {
             window: WindowIdentity(title: "Draft", windowId: nil)
         )
         vm.senseStore._applyBehaviorsForTesting(source: "general", envelopes: [currentInput])
-        vm.notchOpen(.click)
+        vm.notchOpen()
         vm.senseStore._applyFrontmostForTesting(
             app: finder,
             window: WindowIdentity(title: "Downloads", windowId: nil)

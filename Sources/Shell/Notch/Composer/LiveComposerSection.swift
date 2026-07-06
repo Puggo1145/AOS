@@ -25,20 +25,6 @@ struct LiveComposerSection: View {
         // the parent's `maxHeight: .infinity` offer and inflates
         // `composerContentHeight`.
         .fixedSize(horizontal: false, vertical: true)
-        .background(
-            GeometryReader { geo in
-                Color.clear.preference(key: ComposerHeightKey.self, value: geo.size.height)
-            }
-        )
-        .onPreferenceChange(ComposerHeightKey.self) { h in
-            onHeightChange(h)
-        }
-    }
-}
-
-private struct ComposerHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
+        .onHeightChange(perform: onHeightChange)
     }
 }

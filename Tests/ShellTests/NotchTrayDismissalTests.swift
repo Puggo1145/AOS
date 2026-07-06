@@ -73,29 +73,29 @@ struct NotchTrayDismissalTests {
         // tray's initial state is "no provider configured". Permissions
         // default to allGranted (denied is empty) and config is not
         // corrupted, so this is the only row.
-        let ids = vm.trayItems.map(\.id)
+        let ids = vm.tray.trayItems.map(\.id)
         #expect(ids == [BuiltinTrayItemID.missingProvider])
     }
 
     @Test("dismissTrayItem records the id and the row disappears")
     func dismissRecordsId() {
         let vm = makeViewModel()
-        vm.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
-        #expect(vm.dismissedItemIds.contains(BuiltinTrayItemID.missingProvider))
-        #expect(vm.trayItems.isEmpty)
+        vm.tray.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
+        #expect(vm.tray.dismissedItemIds.contains(BuiltinTrayItemID.missingProvider))
+        #expect(vm.tray.trayItems.isEmpty)
     }
 
     @Test("dismissing the last row collapses the drawer")
     func dismissingLastRowCollapsesDrawer() {
         let vm = makeViewModel()
         // User had expanded the drawer to inspect the (single) row.
-        vm.trayExpanded = true
-        vm.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
+        vm.tray.trayExpanded = true
+        vm.tray.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
         // Without the reset, the next inbound row would render
         // already-expanded — surprising the user with a side-panel-style
         // reveal instead of the intended drawer animation.
-        #expect(vm.trayExpanded == false)
-        #expect(vm.trayItems.isEmpty)
+        #expect(vm.tray.trayExpanded == false)
+        #expect(vm.tray.trayItems.isEmpty)
     }
 
     @Test("notchTraySize collapses to zero after dismissing the only row")
@@ -104,10 +104,10 @@ struct NotchTrayDismissalTests {
         // Pretend the layout pass has measured a non-trivial drawer height —
         // we want to prove the size reads from `trayItems.count`, not from
         // a stale measurement.
-        vm.trayContentHeight = 120
+        vm.tray.trayContentHeight = 120
         #expect(vm.notchTraySize.height > 0)
 
-        vm.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
+        vm.tray.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
         #expect(vm.notchTraySize.height == 0)
     }
 
@@ -118,13 +118,13 @@ struct NotchTrayDismissalTests {
         let vm = makeViewModel()
         // Drop the missing-provider notice so the todo row is the only
         // remaining tray member — keeps the assertion focused on shape.
-        vm.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
+        vm.tray.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
         vm.agentService.handleTodo(UITodoParams(sessionId: "S", items: [
             TodoItemWire(id: "1", text: "draft section", status: .completed),
             TodoItemWire(id: "2", text: "write code",     status: .inProgress),
             TodoItemWire(id: "3", text: "add tests",      status: .pending),
         ]))
-        let items = vm.trayItems
+        let items = vm.tray.trayItems
         #expect(items.count == 1)
         let row = items[0]
         #expect(row.id == BuiltinTrayItemID.todoProgress)
@@ -137,19 +137,19 @@ struct NotchTrayDismissalTests {
     @Test("plan with no in_progress item produces no todo row")
     func todoProgressHiddenWithoutInProgress() {
         let vm = makeViewModel()
-        vm.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
+        vm.tray.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
         // All pending — no current step to surface.
         vm.agentService.handleTodo(UITodoParams(sessionId: "S", items: [
             TodoItemWire(id: "1", text: "a", status: .pending),
             TodoItemWire(id: "2", text: "b", status: .pending),
         ]))
-        #expect(vm.trayItems.isEmpty)
+        #expect(vm.tray.trayItems.isEmpty)
         // All completed — same: no active step.
         vm.agentService.handleTodo(UITodoParams(sessionId: "S", items: [
             TodoItemWire(id: "1", text: "a", status: .completed),
             TodoItemWire(id: "2", text: "b", status: .completed),
         ]))
-        #expect(vm.trayItems.isEmpty)
+        #expect(vm.tray.trayItems.isEmpty)
     }
 
     // MARK: - Compact lifecycle row
@@ -157,7 +157,7 @@ struct NotchTrayDismissalTests {
     @Test("running compact appears as a non-dismissable tray row")
     func compactRunningRowAppears() {
         let vm = makeViewModel()
-        vm.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
+        vm.tray.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
 
         vm.agentService.handleCompact(UICompactParams(
             sessionId: "S",
@@ -165,8 +165,8 @@ struct NotchTrayDismissalTests {
             phase: .started
         ))
 
-        let row = vm.trayItems.first
-        #expect(vm.trayItems.count == 1)
+        let row = vm.tray.trayItems.first
+        #expect(vm.tray.trayItems.count == 1)
         #expect(row?.id.hasPrefix(BuiltinTrayItemID.compactPrefix) == true)
         #expect(row?.message == "Compacting context")
         #expect(row?.dismissable == false)
@@ -176,7 +176,7 @@ struct NotchTrayDismissalTests {
     @Test("completed compact appears as a dismissable tray notification")
     func compactDoneRowAppears() {
         let vm = makeViewModel()
-        vm.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
+        vm.tray.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
 
         vm.agentService.handleCompact(UICompactParams(sessionId: "S", turnId: "", phase: .started))
         vm.agentService.handleCompact(UICompactParams(
@@ -186,8 +186,8 @@ struct NotchTrayDismissalTests {
             compactedTurnCount: 3
         ))
 
-        let row = vm.trayItems.first
-        #expect(vm.trayItems.count == 1)
+        let row = vm.tray.trayItems.first
+        #expect(vm.tray.trayItems.count == 1)
         #expect(row?.id.hasPrefix(BuiltinTrayItemID.compactPrefix) == true)
         #expect(row?.message == "Context compacted")
         #expect(row?.dismissable == true)
@@ -196,27 +196,27 @@ struct NotchTrayDismissalTests {
     @Test("completed compact notification can be dismissed manually")
     func compactDoneRowDismissesManually() {
         let vm = makeViewModel()
-        vm.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
+        vm.tray.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
         vm.agentService.handleCompact(UICompactParams(sessionId: "S", turnId: "", phase: .started))
         vm.agentService.handleCompact(UICompactParams(sessionId: "S", turnId: "", phase: .done))
-        let id = vm.trayItems[0].id
+        let id = vm.tray.trayItems[0].id
 
-        vm.dismissTrayItem(id: id)
+        vm.tray.dismissTrayItem(id: id)
 
-        #expect(vm.trayItems.isEmpty)
+        #expect(vm.tray.trayItems.isEmpty)
     }
 
     @Test("completed compact notification disappears on the next turn")
     func compactDoneRowClearsOnNextTurn() {
         let vm = makeViewModel()
-        vm.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
+        vm.tray.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
         vm.agentService.handleCompact(UICompactParams(sessionId: "S", turnId: "", phase: .started))
         vm.agentService.handleCompact(UICompactParams(sessionId: "S", turnId: "", phase: .done))
-        #expect(vm.trayItems.count == 1)
+        #expect(vm.tray.trayItems.count == 1)
 
         vm.agentService._testTurnStarted(id: "next")
 
-        #expect(vm.trayItems.isEmpty)
+        #expect(vm.tray.trayItems.isEmpty)
     }
 
     @Test("command palette filters stale compact rows when context stops being compactable")
@@ -226,27 +226,27 @@ struct NotchTrayDismissalTests {
         vm.agentService.handleStatus(UIStatusParams(sessionId: "S", turnId: "T1", status: .done))
         vm.composerInputModel._testSetPlainText("/")
         vm.refreshCommandPalette()
-        #expect(vm.trayItems.map(\.id) == [BuiltinTrayItemID.commandPrefix + "compact"])
+        #expect(vm.tray.trayItems.map(\.id) == [BuiltinTrayItemID.commandPrefix + "compact"])
 
         vm.agentService.handleCompact(UICompactParams(sessionId: "S", turnId: "", phase: .started))
 
-        #expect(vm.trayItems.map(\.id) == [BuiltinTrayItemID.commandPrefix + "_empty"])
+        #expect(vm.tray.trayItems.map(\.id) == [BuiltinTrayItemID.commandPrefix + "_empty"])
     }
 
     @Test("dismissTrayItem is a no-op for non-dismissable rows")
     func dismissNonDismissableIsNoop() {
         let vm = makeViewModel()
-        vm.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
+        vm.tray.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
         vm.agentService.handleTodo(UITodoParams(sessionId: "S", items: [
             TodoItemWire(id: "1", text: "x", status: .inProgress),
         ]))
-        #expect(vm.trayItems.count == 1)
+        #expect(vm.tray.trayItems.count == 1)
         // Calling dismiss for the live row must NOT enter the dismissed
         // set — we don't want a future render path that compares against
         // the set to silently drop the row.
-        vm.dismissTrayItem(id: BuiltinTrayItemID.todoProgress)
-        #expect(vm.dismissedItemIds.contains(BuiltinTrayItemID.todoProgress) == false)
-        #expect(vm.trayItems.count == 1)
+        vm.tray.dismissTrayItem(id: BuiltinTrayItemID.todoProgress)
+        #expect(vm.tray.dismissedItemIds.contains(BuiltinTrayItemID.todoProgress) == false)
+        #expect(vm.tray.trayItems.count == 1)
     }
 
     // MARK: - Custom source registration
@@ -258,7 +258,7 @@ struct NotchTrayDismissalTests {
         // notices source. A custom source registered now must appear AFTER
         // the built-in todoProgress slot — registration order is display
         // order.
-        vm.registerTraySource {
+        vm.tray.registerTraySource {
             [TrayItem(
                 id: "skill.demo",
                 icon: "sparkles",
@@ -268,15 +268,15 @@ struct NotchTrayDismissalTests {
                 dismissable: true
             )]
         }
-        let ids = vm.trayItems.map(\.id)
+        let ids = vm.tray.trayItems.map(\.id)
         #expect(ids == [BuiltinTrayItemID.missingProvider, "skill.demo"])
     }
 
     @Test("custom source row is dismissable through the same path as built-ins")
     func customSourceRowDismissable() {
         let vm = makeViewModel()
-        vm.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
-        vm.registerTraySource {
+        vm.tray.dismissTrayItem(id: BuiltinTrayItemID.missingProvider)
+        vm.tray.registerTraySource {
             [TrayItem(
                 id: "skill.demo",
                 icon: "sparkles",
@@ -285,8 +285,8 @@ struct NotchTrayDismissalTests {
                 dismissable: true
             )]
         }
-        #expect(vm.trayItems.map(\.id) == ["skill.demo"])
-        vm.dismissTrayItem(id: "skill.demo")
-        #expect(vm.trayItems.isEmpty)
+        #expect(vm.tray.trayItems.map(\.id) == ["skill.demo"])
+        vm.tray.dismissTrayItem(id: "skill.demo")
+        #expect(vm.tray.trayItems.isEmpty)
     }
 }

@@ -34,6 +34,12 @@ extension NotchViewModel {
         return .operable(on: on)
     }
 
+    /// Flip the per-app "always attach a screenshot" pick from the
+    /// composer's context-chip row.
+    func toggleAlwaysCapture(bundleId: String) {
+        visualCapturePolicyStore.toggle(bundleId: bundleId)
+    }
+
     func canSubmitComposer(paletteActive: Bool) -> Bool {
         !composerInputModel.isTextEmpty
             && !agentService.hasQueuedPrompt

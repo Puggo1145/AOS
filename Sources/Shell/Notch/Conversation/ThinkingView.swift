@@ -102,11 +102,9 @@ struct ThinkingView: View {
             reduceMotion: reduceMotion || !isCurrent
         )
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                GeometryReader { geo in
-                    Color.clear.preference(key: ThinkingHeightKey.self, value: geo.size.height)
-                }
-            )
+            .onHeightChange { h in
+                measuredHeight = h
+            }
             .offset(y: offsetY)
             // Reduce Motion suppresses the upward-slide easing — the offset
             // still applies (so only the last row is visible), but it snaps
@@ -115,9 +113,6 @@ struct ThinkingView: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .frame(height: lineHeight, alignment: .topLeading)
             .clipped()
-            .onPreferenceChange(ThinkingHeightKey.self) { h in
-                measuredHeight = h
-            }
     }
 
     /// Trailing slice of the thinking trace for streaming render. Uses
@@ -177,19 +172,14 @@ struct ThinkingView: View {
                 ScrollView {
                     Text(thinking)
                         .notchFont(size: contentScale.thinkingFontSize, weight: contentScale.fontWeight, design: .monospaced)
-                        .foregroundStyle(.white.opacity(0.65))
+                        .notchForeground(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
                         .padding(.vertical, 6)
                         .padding(.horizontal, 8)
-                        .background(
-                            GeometryReader { geo in
-                                Color.clear.preference(
-                                    key: ExpandedContentHeightKey.self,
-                                    value: geo.size.height
-                                )
-                            }
-                        )
+                        .onHeightChange { h in
+                            expandedContentHeight = h
+                        }
                 }
                 .frame(height: min(expandedContentHeight, Self.expandedMaxHeight))
                 .background(
@@ -197,9 +187,6 @@ struct ThinkingView: View {
                         .fill(Color.white.opacity(0.04))
                 )
                 .clipped()
-                .onPreferenceChange(ExpandedContentHeightKey.self) { h in
-                    expandedContentHeight = h
-                }
             }
         }
     }
@@ -280,21 +267,5 @@ private struct ShimmerText: View {
                 )
         }
         .fixedSize(horizontal: false, vertical: true)
-    }
-}
-
-// MARK: - Height preference
-
-private struct ThinkingHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
-private struct ExpandedContentHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
     }
 }

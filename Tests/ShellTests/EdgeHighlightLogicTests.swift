@@ -42,7 +42,7 @@ struct EdgeHighlightLogicTests {
 
     @Test("mouse just outside slack boundary → inactive")
     func slackBoundaryIsExclusive() {
-        let closedBar = NotchViewModel.makeClosedBarRect(deviceNotchRect: deviceNotchRect)
+        let closedBar = NotchGeometryModel.makeClosedBarRect(deviceNotchRect: deviceNotchRect)
         let mouse = CGPoint(x: closedBar.maxX + leaveSlack + 1, y: closedBar.midY)
         let result = EdgeHighlightOverlay.computeHighlight(
             globalMouse: mouse,
@@ -67,7 +67,7 @@ struct EdgeHighlightLogicTests {
 
     @Test("local point is projected into the closed bar silhouette")
     func localPointUsesClosedBarCoordinates() {
-        let closedBar = NotchViewModel.makeClosedBarRect(deviceNotchRect: deviceNotchRect)
+        let closedBar = NotchGeometryModel.makeClosedBarRect(deviceNotchRect: deviceNotchRect)
         let mouse = CGPoint(x: 700, y: 899)
         let result = EdgeHighlightOverlay.computeHighlight(
             globalMouse: mouse,

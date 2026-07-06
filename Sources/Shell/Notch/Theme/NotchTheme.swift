@@ -119,47 +119,6 @@ struct NotchScaledMetric {
     }
 }
 
-/// Returns the requested baseline opacity in normal contrast, floored to
-/// `floorWhenIncreased` (default 0.85) when the user has enabled "Increase
-/// Contrast" in System Settings. Use sparingly inside view bodies that
-/// already pass through a literal opacity value and would otherwise need a
-/// full migration to `notchForeground(_:)`.
-struct ContrastAwareOpacity: View {
-    let baseline: CGFloat
-    let floorWhenIncreased: CGFloat
-    let render: (CGFloat) -> AnyView
-
-    @Environment(\.colorSchemeContrast) private var contrast
-
-    init(
-        baseline: CGFloat,
-        floorWhenIncreased: CGFloat = 0.85,
-        @ViewBuilder render: @escaping (CGFloat) -> some View
-    ) {
-        self.baseline = baseline
-        self.floorWhenIncreased = floorWhenIncreased
-        self.render = { AnyView(render($0)) }
-    }
-
-    var body: some View {
-        let resolved = (contrast == .increased && baseline < floorWhenIncreased)
-            ? floorWhenIncreased
-            : baseline
-        render(resolved)
-    }
-}
-
-/// Free-function counterpart of `ContrastAwareOpacity` for use in property
-/// reads. SwiftUI views can read `\.colorSchemeContrast` via @Environment;
-/// this is the pre-environment fallback for static helpers.
-func resolvedNotchOpacity(
-    baseline: CGFloat,
-    contrast: ColorSchemeContrast,
-    floorWhenIncreased: CGFloat = 0.85
-) -> CGFloat {
-    (contrast == .increased && baseline < floorWhenIncreased) ? floorWhenIncreased : baseline
-}
-
 // MARK: - NotchPressableStyle
 //
 // Shared button style for chrome buttons (header gear / plus / history /

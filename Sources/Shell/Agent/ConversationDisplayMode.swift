@@ -6,6 +6,19 @@ public enum ConversationDisplayMode: String, CaseIterable, Identifiable, Sendabl
 
     public var id: String { rawValue }
 
+    /// UserDefaults key shared by every surface that reads or writes the
+    /// display mode (Settings pages, conversation view). Single source of
+    /// truth so the surfaces can never drift onto different keys.
+    public static let storageKey = "notch-agent.conversationDisplayMode"
+
+    /// Non-crashing projection from a persisted raw string. Persisted prefs
+    /// are external input — a stale/legacy value written by an older build
+    /// (or a hand-edited plist) must not crash the app, so unknown strings
+    /// fall back to `.history`, the default mode.
+    public static func from(raw: String) -> ConversationDisplayMode {
+        ConversationDisplayMode(rawValue: raw) ?? .history
+    }
+
     public var label: String {
         switch self {
         case .history: return "History"

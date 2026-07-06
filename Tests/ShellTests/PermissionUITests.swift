@@ -30,18 +30,18 @@ struct PermissionUITests {
 
     @Test("Settings missing permissions ignore Automation acknowledgement state")
     func settingsMissingPermissionsIgnoreAutomationAcknowledgementState() {
-        #expect(SettingsPanelView.missingProbeablePermissions(denied: []) == [])
-        #expect(SettingsPanelView.missingProbeablePermissions(denied: [.automation]) == [])
-        #expect(SettingsPanelView.missingProbeablePermissions(denied: [.localFiles]) == [])
-        #expect(SettingsPanelView.missingProbeablePermissions(denied: [.accessibility, .automation, .localFiles]) == [.accessibility])
+        #expect(SettingsFlowModel.missingProbeablePermissions(denied: []) == [])
+        #expect(SettingsFlowModel.missingProbeablePermissions(denied: [.automation]) == [])
+        #expect(SettingsFlowModel.missingProbeablePermissions(denied: [.localFiles]) == [])
+        #expect(SettingsFlowModel.missingProbeablePermissions(denied: [.accessibility, .automation, .localFiles]) == [.accessibility])
     }
 
     @Test("Settings Automation row opens System Settings instead of using reviewed state")
     func settingsAutomationRowOpensSystemSettingsInsteadOfUsingReviewedState() {
-        #expect(SettingsPanelView.permissionStatus(for: .automation, denied: []) == .opensSettings)
-        #expect(SettingsPanelView.permissionStatus(for: .localFiles, denied: []) == .opensSettings)
-        #expect(SettingsPanelView.permissionStatus(for: .screenRecording, denied: []) == .granted)
-        #expect(SettingsPanelView.permissionStatus(for: .screenRecording, denied: [.screenRecording]) == .disabled)
+        #expect(SettingsFlowModel.permissionStatus(for: .automation, denied: []) == .opensSettings)
+        #expect(SettingsFlowModel.permissionStatus(for: .localFiles, denied: []) == .opensSettings)
+        #expect(SettingsFlowModel.permissionStatus(for: .screenRecording, denied: []) == .granted)
+        #expect(SettingsFlowModel.permissionStatus(for: .screenRecording, denied: [.screenRecording]) == .disabled)
     }
 
     @Test("Automation uses Finder icon only during onboarding")

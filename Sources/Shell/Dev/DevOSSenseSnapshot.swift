@@ -72,7 +72,14 @@ struct DevOSSenseSnapshot: Equatable {
     private static func payloadText(_ payload: JSONValue) -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try! encoder.encode(payload)
-        return String(data: data, encoding: .utf8)!
+        do {
+            let data = try encoder.encode(payload)
+            return String(data: data, encoding: .utf8)!
+        } catch {
+            // JSONValue is a closed JSON model, so encoding can only fail on
+            // programmer error (e.g. a future non-JSON case). Fail fast with
+            // context instead of a bare `try!` crash.
+            fatalError("DevOSSenseSnapshot: failed to encode behavior payload as JSON: \(error)")
+        }
     }
 }

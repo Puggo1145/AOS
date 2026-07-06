@@ -56,49 +56,18 @@ struct NotchHeaderStripsView: View {
 
     private var newConversationButton: some View {
         Button {
-            let store = viewModel.agentService.sessionStore
-            guard store.canCreateNewConversation else { return }
-            // SessionService.create auto-activates via SessionStore.adoptCreated
-            // so the mirror + activeId flip atomically before SwiftUI reads them.
-            Task {
-                do {
-                    _ = try await viewModel.sessionService.create()
-                } catch {
-                    store.setActionError(
-                        SessionActionError(
-                            kind: .create,
-                            message: "Failed to start a new conversation: \(error.localizedDescription)",
-                            sessionId: nil
-                        )
-                    )
-                }
-            }
+            Task { await viewModel.startNewConversation() }
         } label: {
             headerIcon("plus")
         }
         .buttonStyle(.notchPressable)
-        .disabled(!viewModel.agentService.sessionStore.canCreateNewConversation)
+        .disabled(!viewModel.canCreateNewConversation)
         .accessibilityLabel(Text("New conversation"))
     }
 
     private var historyButton: some View {
         Button {
-            // Refresh first so turnCount / lastActivityAt are current, then
-            // open regardless of outcome — the panel renders the cached list
-            // and surfaces a banner if refresh failed.
-            Task {
-                let store = viewModel.agentService.sessionStore
-                do {
-                    _ = try await store.refreshList()
-                } catch {
-                    store.setActionError(SessionActionError(
-                        kind: .list,
-                        message: "Failed to refresh sessions: \(error.localizedDescription)",
-                        sessionId: nil
-                    ))
-                }
-                viewModel.showHistory = true
-            }
+            Task { await viewModel.openHistory() }
         } label: {
             headerIcon("clock.arrow.circlepath")
         }

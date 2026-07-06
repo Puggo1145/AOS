@@ -1,6 +1,15 @@
 import Foundation
 import RPCSchema
 
+// MARK: - McpServerDraft
+//
+// Form-values → wire-params mapping for the Settings "Add/Edit MCP" page.
+// Lives in the MCP module (not Settings) because the design forbids views
+// assembling RPC payloads: this is where form state becomes
+// `RPCSchema.McpAddParams` / `McpUpdateParams`, including JSON validation.
+// The Settings flow model owns the instance and drives it from user intent;
+// `SettingsMcpEditPage` only reads/writes plain draft fields.
+
 struct McpServerDraft: Equatable {
     var editingServerId: String?
     var serverId: String = ""
@@ -141,5 +150,34 @@ struct McpServerDraft: Equatable {
         } catch {
             throw SettingsValidationError("\(label) must be valid JSON: \(error.localizedDescription)")
         }
+    }
+}
+
+/// Validation error for form → RPC-params mapping (JSON parsing, required
+/// selection state). Scoped to the MCP module since `McpServerDraft` is its
+/// only producer.
+struct SettingsValidationError: LocalizedError {
+    let message: String
+
+    init(_ message: String) {
+        self.message = message
+    }
+
+    var errorDescription: String? {
+        message
+    }
+
+    static func message(for error: Error) -> String {
+        if let localized = error as? LocalizedError,
+           let message = localized.errorDescription {
+            return message
+        }
+        return String(describing: error)
+    }
+}
+
+extension String {
+    var trimmedForSettings: String {
+        trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

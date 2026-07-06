@@ -4,7 +4,7 @@ import SwiftUI
 //
 // The drawer that pokes out below the main panel when there are pending
 // system notices, agent live-state rows, or any other registered tray
-// items. Renders a generic `[TrayItem]` from `NotchViewModel.trayItems`;
+// items. Renders a generic `[TrayItem]` from `NotchTrayModel.trayItems`;
 // per-row content (icon / tint / message / trailing slot / tap behaviour)
 // is fully described by the item itself, so adding a new row is a
 // `registerTraySource` call somewhere — not an edit here.
@@ -27,13 +27,13 @@ struct SystemTrayView: View {
     let viewModel: NotchViewModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var items: [TrayItem] { viewModel.trayItems }
+    private var items: [TrayItem] { viewModel.tray.trayItems }
     private var hasMultiple: Bool { items.count > 1 }
     /// Slash-command palette mode replaces the regular notice surface:
     /// every row is a peer command suggestion, the chevron disappears
     /// (no first-row + collapse semantics — every match is meant to be
     /// visible), and the selected row paints as the keyboard cursor.
-    private var inPaletteMode: Bool { viewModel.isCommandPaletteMode }
+    private var inPaletteMode: Bool { viewModel.tray.isCommandPaletteMode }
 
     @ViewBuilder
     var body: some View {
@@ -82,7 +82,7 @@ struct SystemTrayView: View {
                 // the full visual band including the curves, not just
                 // the flat region.
                 .padding(.bottom, 4)
-                .frame(height: viewModel.notchTrayCollapsedHeight)
+                .frame(height: viewModel.tray.notchTrayCollapsedHeight)
 
                 if hasMultiple {
                     VStack(alignment: .leading, spacing: 6) {
@@ -92,20 +92,12 @@ struct SystemTrayView: View {
                     .padding(.bottom, 10)
                 }
             }
-            .background(
-                GeometryReader { geo in
-                    Color.clear.preference(
-                        key: TrayHeightKey.self,
-                        value: geo.size.height
-                    )
-                }
-            )
+            .onHeightChange { h in
+                viewModel.tray.trayContentHeight = h
+            }
         }
-        .scrollDisabled(!viewModel.effectiveTrayExpanded)
+        .scrollDisabled(!viewModel.tray.effectiveTrayExpanded)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onPreferenceChange(TrayHeightKey.self) { h in
-            viewModel.trayContentHeight = h
-        }
     }
 
     // MARK: - Palette layout
@@ -120,19 +112,11 @@ struct SystemTrayView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(
-                GeometryReader { geo in
-                    Color.clear.preference(
-                        key: TrayHeightKey.self,
-                        value: geo.size.height
-                    )
-                }
-            )
+            .onHeightChange { h in
+                viewModel.tray.trayContentHeight = h
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onPreferenceChange(TrayHeightKey.self) { h in
-            viewModel.trayContentHeight = h
-        }
     }
 
     // MARK: - Rows
@@ -163,7 +147,7 @@ struct SystemTrayView: View {
 
             if item.dismissable {
                 Button {
-                    viewModel.dismissTrayItem(id: item.id)
+                    viewModel.tray.dismissTrayItem(id: item.id)
                 } label: {
                     Image(systemName: "xmark")
                         .notchFont(size: 10, weight: .bold)
@@ -243,25 +227,16 @@ struct SystemTrayView: View {
 
     private var chevronButton: some View {
         Button {
-            viewModel.toggleTrayExpanded()
+            viewModel.tray.toggleTrayExpanded()
         } label: {
-            Image(systemName: viewModel.trayExpanded ? "chevron.up" : "chevron.down")
+            Image(systemName: viewModel.tray.trayExpanded ? "chevron.up" : "chevron.down")
                 .notchFont(size: 10, weight: .semibold)
                 .notchForeground(.secondary)
                 .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.notchPressable)
-        .accessibilityLabel(viewModel.trayExpanded ? "Collapse notices" : "Expand notices")
-    }
-}
-
-// MARK: - Height preference
-
-private struct TrayHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
+        .accessibilityLabel(viewModel.tray.trayExpanded ? "Collapse notices" : "Expand notices")
     }
 }
 
@@ -274,7 +249,7 @@ private struct TrayShimmerText: View {
         if reduceMotion {
             Text(text)
                 .notchFont(size: 11, weight: .medium)
-                .foregroundStyle(.white.opacity(0.9))
+                .notchForeground(.primary)
                 .lineLimit(1)
         } else {
             ZStack(alignment: .leading) {

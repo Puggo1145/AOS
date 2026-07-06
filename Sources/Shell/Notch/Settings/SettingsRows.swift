@@ -47,14 +47,13 @@ struct SettingsAPIKeyRow: View {
 
 struct SettingsOAuthRow: View {
     let provider: ProviderService.Provider
-    let providerService: ProviderService
-    let onError: @MainActor (String) -> Void
-
-    private var session: ProviderService.LoginSession? {
-        providerService.loginSession.flatMap {
-            $0.providerId == provider.id ? $0 : nil
-        }
-    }
+    /// Display-only snapshot of the in-progress login session for this
+    /// provider (if any) — the flow model owns the orchestration that
+    /// produces it; this row only reads it.
+    let session: ProviderService.LoginSession?
+    let canStartLogin: Bool
+    let onStartOrReauth: () -> Void
+    let onCancel: () -> Void
 
     private var isReady: Bool {
         provider.state == .ready
@@ -86,9 +85,7 @@ struct SettingsOAuthRow: View {
     var body: some View {
         let status = status
         VStack(alignment: .leading, spacing: 6) {
-            Button {
-                startLoginFlow(isInflight: status.isInflight)
-            } label: {
+            Button(action: onStartOrReauth) {
                 HStack(spacing: 10) {
                     Image(systemName: "person.crop.circle.badge.checkmark")
                         .notchFont(size: 12, weight: .semibold)
@@ -113,45 +110,15 @@ struct SettingsOAuthRow: View {
                 .settingsRowBackground()
             }
             .buttonStyle(.plain)
-            .disabled(status.isInflight || !providerService.canStartLogin)
+            .disabled(status.isInflight || !canStartLogin)
 
             if status.isInflight {
-                Button("Cancel") {
-                    Task {
-                        do {
-                            try await providerService.cancelLogin()
-                        } catch {
-                            await MainActor.run {
-                                onError(ProviderService.message(for: error))
-                            }
-                        }
-                    }
-                }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.white.opacity(0.85))
-                .notchFont(size: 11)
-                .padding(.leading, 12)
+                Button("Cancel", action: onCancel)
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.white.opacity(0.85))
+                    .notchFont(size: 11)
+                    .padding(.leading, 12)
             }
-        }
-    }
-
-    private func startLoginFlow(isInflight: Bool) {
-        guard providerService.canStartLogin, !isInflight else { return }
-        Task {
-            if session?.state == .failed {
-                providerService.dismissLoginSession()
-            }
-            if isReady {
-                do {
-                    try await providerService.logout(providerId: provider.id)
-                } catch {
-                    await MainActor.run {
-                        onError(ProviderService.message(for: error))
-                    }
-                    return
-                }
-            }
-            await providerService.startLogin(providerId: provider.id)
         }
     }
 }
@@ -305,7 +272,7 @@ struct SettingsMcpServerCard: View {
             } label: {
                 Text(actionTitle)
                     .notchFont(size: 11, weight: .semibold)
-                    .foregroundStyle(.white.opacity(0.9))
+                    .notchForeground(.primary)
                     .frame(width: 76)
                     .padding(.vertical, 7)
                     .background(

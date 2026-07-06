@@ -232,6 +232,15 @@ struct ToolCallRunSummaryView: View {
     }
 }
 
+// These three keys deliberately stay raw PreferenceKeys rather than moving
+// to `onHeightChange` (see HeightReporting.swift). They aren't simple "report
+// my height" measurements — they're a scroll-position tracking system for
+// the follow-bottom machinery in AgentConversationView.swift, where delivery
+// order and `reduce`'s coalescing across the whole scroll content matter
+// (e.g. `HistoryBottomMaxYKey` keeps "latest write wins", not "max wins").
+// Folding them into the shared modifier's rounded/deduped/latest-wins policy
+// would change that behavior, which is exactly what this scoped refactor is
+// meant to avoid.
 struct HistoryHeightKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {

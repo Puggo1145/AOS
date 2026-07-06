@@ -30,7 +30,7 @@ struct AgentConversationView: View {
     @State private var prevBottomSentinelMaxY: CGFloat = 0
     @State private var followEvalPending: Bool = false
     @State private var lastObservedTurnCount: Int = 0
-    @AppStorage("notch-agent.conversationDisplayMode") private var displayModeRaw: String = ConversationDisplayMode.history.rawValue
+    @AppStorage(ConversationDisplayMode.storageKey) private var displayModeRaw: String = ConversationDisplayMode.history.rawValue
 
     /// Symmetric ±4pt band around the viewport bottom: re-attach when
     /// the sentinel sits within this slack of the bottom; detach when a
@@ -43,7 +43,7 @@ struct AgentConversationView: View {
     }
 
     private var displayMode: ConversationDisplayMode {
-        ConversationDisplayMode(rawValue: displayModeRaw)!
+        ConversationDisplayMode.from(raw: displayModeRaw)
     }
 
     private var contentScale: ConversationContentScale {
@@ -73,7 +73,7 @@ struct AgentConversationView: View {
     }
 
     private func resetScrollState() {
-        viewModel.historyContentHeight = 0
+        viewModel.measurements.historyContentHeight = 0
         followBottom = true
         viewportHeight = 0
         bottomSentinelMaxY = 0
@@ -90,54 +90,19 @@ struct AgentConversationView: View {
         // Boot-time session.create failure: explains why the composer
         // below is disabled.
         if let msg = agentService.sessionStore.bootError, !msg.isEmpty {
-            errorBanner(msg)
+            NotchErrorBanner(message: msg)
         }
         // Session-action failures (create / activate / list refresh).
         if let actionError = agentService.sessionStore.lastActionError {
-            dismissibleErrorBanner(actionError)
+            NotchErrorBanner(message: actionError.message) {
+                viewModel.dismissSessionActionError()
+            }
         }
         // Submit-time errors that have no per-turn slot (e.g. payload
         // exceeded the RPC line cap).
         if let msg = agentService.lastErrorMessage, !msg.isEmpty {
-            errorBanner(msg)
+            NotchErrorBanner(message: msg)
         }
-    }
-
-    private func errorBanner(_ message: String) -> some View {
-        Text(message)
-            .notchFont(size: 12, weight: .medium)
-            .foregroundStyle(.red.opacity(0.9))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color.red.opacity(0.12))
-            )
-    }
-
-    private func dismissibleErrorBanner(_ actionError: SessionActionError) -> some View {
-        HStack(alignment: .top, spacing: 6) {
-            Text(actionError.message)
-                .notchFont(size: 12, weight: .medium)
-                .foregroundStyle(.red.opacity(0.9))
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Button {
-                agentService.sessionStore.setActionError(nil)
-            } label: {
-                Image(systemName: "xmark")
-                    .notchFont(size: 10, weight: .semibold)
-                    .notchForeground(.secondary)
-            }
-            .buttonStyle(.notchPressable)
-            .accessibilityLabel("Dismiss error")
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color.red.opacity(0.12))
-        )
     }
 
     // MARK: - History
@@ -239,16 +204,16 @@ struct AgentConversationView: View {
 
     private func handleHistoryHeightChange(_ rawHeight: CGFloat, proxy: ScrollViewProxy) {
         let rounded = rawHeight.rounded()
-        guard viewModel.historyContentHeight != rounded else { return }
-        let didGrow = rounded > viewModel.historyContentHeight
+        guard viewModel.measurements.historyContentHeight != rounded else { return }
+        let didGrow = rounded > viewModel.measurements.historyContentHeight
         let countNow = historyItems.count
         let countGrew = countNow > lastObservedTurnCount
         lastObservedTurnCount = countNow
         let availableViewport = viewModel.notchOpenedMaxHeight
             - viewModel.openedContentVerticalChrome
-            - viewModel.composerContentHeight
-        let wasOverflowing = viewModel.historyContentHeight > availableViewport
-        viewModel.historyContentHeight = rounded
+            - viewModel.measurements.composerContentHeight
+        let wasOverflowing = viewModel.measurements.historyContentHeight > availableViewport
+        viewModel.measurements.historyContentHeight = rounded
         let nowOverflowing = rounded > availableViewport
         // Skip when content still fits — the panel grows downward
         // naturally and a scrollTo would bottom-pin the ScrollView,
@@ -298,7 +263,7 @@ struct AgentConversationView: View {
     /// within `atBottomSlack` of the viewport bottom.
     private func evaluateFollowState() {
         guard viewportHeight > 0 else { return }
-        let currentContentHeight = viewModel.historyContentHeight
+        let currentContentHeight = viewModel.measurements.historyContentHeight
         let dy = bottomSentinelMaxY - prevBottomSentinelMaxY
         let dh = currentContentHeight - prevContentHeight
         // `max(0, dh)` so a content shrink doesn't masquerade as a fake
@@ -405,16 +370,12 @@ struct AgentConversationView: View {
             }
 
             if turn.status == .error, let msg = turn.errorMessage, !msg.isEmpty {
-                Text(msg)
-                    .notchFont(size: isCompact ? 13 : 12, weight: .medium)
-                    .foregroundStyle(.red.opacity(0.9))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(Color.red.opacity(0.12))
-                    )
+                NotchErrorBanner(
+                    message: msg,
+                    fontSize: isCompact ? 13 : 12,
+                    horizontalPadding: 8,
+                    verticalPadding: 6
+                )
             }
         }
         .fontWeight(isCompact ? contentScale.fontWeight : nil)

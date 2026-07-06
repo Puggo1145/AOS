@@ -50,7 +50,11 @@ struct ContextChipsView: View {
     private static let rowVerticalPadding: CGFloat = 4
 
     let context: SenseContext
-    let policyStore: VisualCapturePolicyStore
+    /// Forwards the per-app "always capture" toggle intent up to
+    /// `NotchViewModel.toggleAlwaysCapture(bundleId:)`. Kept as a closure
+    /// (rather than injecting `VisualCapturePolicyStore` directly) so this
+    /// view has no dependency on where the policy is stored.
+    let onToggleCapture: (String) -> Void
     /// Derived screenshot-toggle state for the current (model, permission,
     /// per-app pick) tuple. Computed at the parent (`ComposerCard`) so
     /// this view stays free of LLM concepts.
@@ -116,7 +120,7 @@ struct ContextChipsView: View {
             // visible but inert so the user can discover the affordance
             // and the tooltip explains why it's currently disabled.
             if case .operable = screenshotToggle {
-                _ = policyStore.toggle(bundleId: bundleId)
+                onToggleCapture(bundleId)
             }
         } label: {
             Image(systemName: screenshotToggleIcon)

@@ -94,7 +94,7 @@ public final class NotchWindowController {
         // tray's MAX height — the dynamically-grown panel never extends past
         // its budget (history ScrollView scrolls past it), and the system
         // tray drawer that pokes out below adds its own ceiling on top.
-        let panelHeight = viewModel.notchOpenedMaxHeight + viewModel.notchTrayMaxHeight
+        let panelHeight = viewModel.notchOpenedMaxHeight + viewModel.tray.notchTrayMaxHeight
         self.topStripHeight = panelHeight
         let topStrip = Self.makeTopStripRect(screenFrame: screenFrame, panelHeight: panelHeight)
 
@@ -153,10 +153,14 @@ public final class NotchWindowController {
             }
             .store(in: &cancellables)
 
-        NotificationCenter.default
-            .publisher(for: .notchStatusChanged)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak window, weak viewModel] _ in
+        // Status changes: preserve the previous Combine timing
+        // (`.receive(on: DispatchQueue.main)`) by hopping to the next
+        // main-queue tick before re-evaluating click-through. Click-through
+        // must be evaluated *after* SwiftUI has processed the status change
+        // (silhouette geometry depends on it), not synchronously inline with
+        // the mutator.
+        viewModel.onStatusChanged = { [weak window, weak viewModel] _ in
+            DispatchQueue.main.async {
                 guard let window, let viewModel else { return }
                 guard !Self.modalSuppression.isActive else { return }
                 Self.applyClickThrough(
@@ -165,30 +169,30 @@ public final class NotchWindowController {
                     mouse: NSEvent.mouseLocation
                 )
             }
-            .store(in: &cancellables)
+        }
 
-        NotificationCenter.default
-            .publisher(for: .notchPlacementChanged)
-            .sink { [weak self, weak window, weak viewModel] _ in
-                guard let self, let window, let viewModel else { return }
-                let previousPlacement = self.lastAppliedPlacement
-                let currentPlacement = viewModel.currentPlacement
-                let plan = Self.windowFrameUpdatePlan(
-                    from: previousPlacement,
-                    to: currentPlacement,
-                    screenFrame: self.screenFrame,
-                    topStripHeight: self.topStripHeight,
-                    pendingDeferredFrame: self.deferredWindowFrameTarget
-                )
-                self.applyWindowFrame(plan, to: window, appliedPlacement: currentPlacement)
-                guard !Self.modalSuppression.isActive else { return }
-                Self.applyClickThrough(
-                    window: window,
-                    viewModel: viewModel,
-                    mouse: NSEvent.mouseLocation
-                )
-            }
-            .store(in: &cancellables)
+        // Placement changes: kept synchronous (no queue hop) — AppKit must
+        // resize the hosting window before SwiftUI paints the new height,
+        // per the comment on `openedSurfaceStateDidChange`.
+        viewModel.onPlacementChanged = { [weak self, weak window, weak viewModel] in
+            guard let self, let window, let viewModel else { return }
+            let previousPlacement = self.lastAppliedPlacement
+            let currentPlacement = viewModel.currentPlacement
+            let plan = Self.windowFrameUpdatePlan(
+                from: previousPlacement,
+                to: currentPlacement,
+                screenFrame: self.screenFrame,
+                topStripHeight: self.topStripHeight,
+                pendingDeferredFrame: self.deferredWindowFrameTarget
+            )
+            self.applyWindowFrame(plan, to: window, appliedPlacement: currentPlacement)
+            guard !Self.modalSuppression.isActive else { return }
+            Self.applyClickThrough(
+                window: window,
+                viewModel: viewModel,
+                mouse: NSEvent.mouseLocation
+            )
+        }
 
         // React to VoiceOver state flips so a user enabling/disabling VO
         // mid-session immediately gets the right click-through behavior
@@ -526,6 +530,11 @@ public final class NotchWindowController {
     public func destroy() {
         deferredWindowFrameTask?.cancel()
         deferredWindowFrameTask = nil
+        // These callbacks were wired in `bindClickThrough`; nil them out here
+        // (mirroring the old cancellation of the equivalent NotificationCenter
+        // subscriptions) before tearing down the view model.
+        viewModel?.onStatusChanged = nil
+        viewModel?.onPlacementChanged = nil
         cancellables.forEach { $0.cancel() }
         cancellables.removeAll()
         viewModel?.destroy()

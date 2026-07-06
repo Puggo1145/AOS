@@ -64,7 +64,7 @@ struct ComposerCard: View {
         VStack(alignment: .leading, spacing: 8) {
             ContextChipsView(
                 context: viewModel.senseStore.context,
-                policyStore: viewModel.visualCapturePolicyStore,
+                onToggleCapture: { viewModel.toggleAlwaysCapture(bundleId: $0) },
                 screenshotToggle: viewModel.composerScreenshotToggleState,
                 deselectedBehaviorKeys: $deselectedBehaviorKeys
             )
@@ -137,7 +137,7 @@ struct ComposerCard: View {
                 .foregroundStyle(.white.opacity(0.7))
             Text(queued.prompt)
                 .notchFont(size: 15)
-                .foregroundStyle(.white.opacity(0.9))
+                .notchForeground(.primary)
                 .lineLimit(1)
                 .truncationMode(.tail)
         }

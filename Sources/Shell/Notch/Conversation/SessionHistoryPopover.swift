@@ -13,10 +13,11 @@ import RPCSchema
 // straight from the @Observable store.
 
 struct SessionHistoryPanelView: View {
-    let sessionStore: SessionStore
-    let sessionService: SessionService
+    let viewModel: NotchViewModel
     let topSafeInset: CGFloat
     let onClose: () -> Void
+
+    private var sessionStore: SessionStore { viewModel.agentService.sessionStore }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -24,7 +25,7 @@ struct SessionHistoryPanelView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "chevron.left")
                         .notchFont(size: 13, weight: .semibold)
-                        .foregroundStyle(.white.opacity(0.65))
+                        .notchForeground(.secondary)
                     Text("History")
                         .notchFont(size: 18, weight: .semibold)
                         .foregroundStyle(.white.opacity(0.95))
@@ -101,15 +102,8 @@ struct SessionHistoryPanelView: View {
             // somewhere to render its banner — closing on click made errors
             // indistinguishable from a successful switch.
             Task {
-                do {
-                    _ = try await sessionService.activate(sessionId: item.id)
+                if await viewModel.activateSession(id: item.id, title: item.title) {
                     onClose()
-                } catch {
-                    sessionStore.setActionError(SessionActionError(
-                        kind: .activate,
-                        message: "Failed to switch to “\(item.title)”: \(error.localizedDescription)",
-                        sessionId: item.id
-                    ))
                 }
             }
         } label: {

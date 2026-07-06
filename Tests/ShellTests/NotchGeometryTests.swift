@@ -18,7 +18,7 @@ struct NotchGeometryTests {
 
     @Test("notchOpenedRect is centred horizontally on the screen")
     func openedRectIsCentred() {
-        let rect = NotchViewModel.makeNotchOpenedRect(screenRect: screenRect, panel: panel)
+        let rect = NotchGeometryModel.makeNotchOpenedRect(screenRect: screenRect, panel: panel)
         #expect(rect.midX == screenRect.midX)
         #expect(rect.width == panel.width)
         #expect(rect.height == panel.height)
@@ -29,7 +29,7 @@ struct NotchGeometryTests {
 
     @Test("headlineOpenedRect aligns with device notch height")
     func headlineRectMatchesDeviceNotch() {
-        let rect = NotchViewModel.makeHeadlineOpenedRect(
+        let rect = NotchGeometryModel.makeHeadlineOpenedRect(
             screenRect: screenRect,
             panel: panel,
             deviceNotchHeight: deviceNotchRect.height
@@ -41,7 +41,7 @@ struct NotchGeometryTests {
 
     @Test("closedBarRect spans device notch + two h×h satellite squares")
     func closedBarSpansSatellites() {
-        let rect = NotchViewModel.makeClosedBarRect(deviceNotchRect: deviceNotchRect)
+        let rect = NotchGeometryModel.makeClosedBarRect(deviceNotchRect: deviceNotchRect)
         #expect(rect.height == deviceNotchRect.height)
         #expect(rect.width == deviceNotchRect.width + deviceNotchRect.height * 2)
         #expect(rect.minX == deviceNotchRect.minX - deviceNotchRect.height)
@@ -78,7 +78,7 @@ struct NotchGeometryTests {
     @Test("openedRect width matches panel even on narrow screens")
     func openedRectIgnoresScreenWidth() {
         let narrow = CGRect(x: 0, y: 0, width: 800, height: 600)
-        let rect = NotchViewModel.makeNotchOpenedRect(screenRect: narrow, panel: panel)
+        let rect = NotchGeometryModel.makeNotchOpenedRect(screenRect: narrow, panel: panel)
         #expect(rect.width == panel.width)
         #expect(rect.midX == narrow.midX)
     }
@@ -96,7 +96,7 @@ struct NotchGeometryTests {
 
     @Test("tray height is zero when there are no notices")
     func trayHeightZeroWhenEmpty() {
-        let s = NotchViewModel.makeTraySize(
+        let s = NotchGeometryModel.makeTraySize(
             width: trayWidth, itemCount: 0, expanded: false,
             measuredContentHeight: 999, // ignored
             collapsedHeight: trayCollapsed, maxHeight: trayMax
@@ -109,14 +109,14 @@ struct NotchGeometryTests {
         // Floor: even if measurement undershoots (e.g. before the first
         // layout pass writes `trayContentHeight`), we never paint shorter
         // than one row's worth — otherwise the drawer pops in.
-        let undershoot = NotchViewModel.makeTraySize(
+        let undershoot = NotchGeometryModel.makeTraySize(
             width: trayWidth, itemCount: 1, expanded: false,
             measuredContentHeight: 10,
             collapsedHeight: trayCollapsed, maxHeight: trayMax
         )
         #expect(undershoot.height == trayCollapsed)
         // Natural fit between floor and ceiling passes through.
-        let natural = NotchViewModel.makeTraySize(
+        let natural = NotchGeometryModel.makeTraySize(
             width: trayWidth, itemCount: 1, expanded: false,
             measuredContentHeight: 80,
             collapsedHeight: trayCollapsed, maxHeight: trayMax
@@ -126,7 +126,7 @@ struct NotchGeometryTests {
 
     @Test("tray content taller than max is clamped — inner ScrollView takes over")
     func contentTallerThanMaxIsClamped() {
-        let s = NotchViewModel.makeTraySize(
+        let s = NotchGeometryModel.makeTraySize(
             width: trayWidth, itemCount: 4, expanded: true,
             measuredContentHeight: 999,
             collapsedHeight: trayCollapsed, maxHeight: trayMax
@@ -139,7 +139,7 @@ struct NotchGeometryTests {
         // Even if the inner VStack measured tall (all rows are still
         // *in the layout* per the SystemTrayView animation contract),
         // the collapsed drawer must render exactly one row's worth.
-        let s = NotchViewModel.makeTraySize(
+        let s = NotchGeometryModel.makeTraySize(
             width: trayWidth, itemCount: 3, expanded: false,
             measuredContentHeight: 200,
             collapsedHeight: trayCollapsed, maxHeight: trayMax
@@ -149,7 +149,7 @@ struct NotchGeometryTests {
 
     @Test("multi-notice + expanded uses measured height, clamped into [collapsed, max]")
     func multiExpandedUsesMeasured() {
-        let s = NotchViewModel.makeTraySize(
+        let s = NotchGeometryModel.makeTraySize(
             width: trayWidth, itemCount: 3, expanded: true,
             measuredContentHeight: 130,
             collapsedHeight: trayCollapsed, maxHeight: trayMax
@@ -162,7 +162,7 @@ struct NotchGeometryTests {
     @Test("openedTotalRect is centered horizontally and hangs from screen top")
     func openedTotalRectHangsFromTop() {
         let total = CGSize(width: 500, height: 320)
-        let rect = NotchViewModel.makeOpenedTotalRect(screenRect: screenRect, totalSize: total)
+        let rect = NotchGeometryModel.makeOpenedTotalRect(screenRect: screenRect, totalSize: total)
         #expect(rect.midX == screenRect.midX)
         #expect(rect.maxY == screenRect.maxY)
         #expect(rect.minY == screenRect.maxY - total.height)
@@ -173,8 +173,8 @@ struct NotchGeometryTests {
     func openedTotalRectGrowsDownward() {
         let mainOnly = CGSize(width: 500, height: 240)
         let withTray = CGSize(width: 500, height: 240 + 80)
-        let r1 = NotchViewModel.makeOpenedTotalRect(screenRect: screenRect, totalSize: mainOnly)
-        let r2 = NotchViewModel.makeOpenedTotalRect(screenRect: screenRect, totalSize: withTray)
+        let r1 = NotchGeometryModel.makeOpenedTotalRect(screenRect: screenRect, totalSize: mainOnly)
+        let r2 = NotchGeometryModel.makeOpenedTotalRect(screenRect: screenRect, totalSize: withTray)
         #expect(r1.maxY == r2.maxY) // top-aligned to screen
         #expect(r2.minY < r1.minY)  // bottom edge dropped by tray height
         #expect(r2.height - r1.height == 80)
@@ -182,7 +182,7 @@ struct NotchGeometryTests {
 
     @Test("local notch-window clicks do not close when measured panel height is stale")
     func localNotchWindowClickDoesNotCloseWithStaleHeight() {
-        let staleMeasuredRect = NotchViewModel.makeOpenedTotalRect(
+        let staleMeasuredRect = NotchGeometryModel.makeOpenedTotalRect(
             screenRect: screenRect,
             totalSize: CGSize(width: 500, height: 120)
         )
@@ -198,12 +198,12 @@ struct NotchGeometryTests {
 
     @Test("opened click-through gate uses max overlay budget while measured height is stale")
     func openedClickThroughGateUsesMaxOverlayBudgetWhileMeasuredHeightIsStale() {
-        let staleMeasuredRect = NotchViewModel.makeOpenedTotalRect(
+        let staleMeasuredRect = NotchGeometryModel.makeOpenedTotalRect(
             screenRect: screenRect,
             totalSize: CGSize(width: 500, height: 120)
         )
-        let staleVisible = NotchViewModel.makeOpenedVisibleRect(openedTotalRect: staleMeasuredRect)
-        let mouseActive = NotchViewModel.makeOpenedMouseActiveRect(
+        let staleVisible = NotchGeometryModel.makeOpenedVisibleRect(openedTotalRect: staleMeasuredRect)
+        let mouseActive = NotchGeometryModel.makeOpenedMouseActiveRect(
             visibleRect: staleVisible,
             screenRect: screenRect,
             width: 500,
@@ -221,13 +221,13 @@ struct NotchGeometryTests {
 
     @Test("opened click-through gate ignores blank space after measurement lands")
     func openedClickThroughGateIgnoresBlankSpaceAfterMeasurementLands() {
-        let visible = NotchViewModel.makeOpenedVisibleRect(openedTotalRect:
-            NotchViewModel.makeOpenedTotalRect(
+        let visible = NotchGeometryModel.makeOpenedVisibleRect(openedTotalRect:
+            NotchGeometryModel.makeOpenedTotalRect(
                 screenRect: screenRect,
                 totalSize: CGSize(width: 500, height: 120)
             )
         )
-        let mouseActive = NotchViewModel.makeOpenedMouseActiveRect(
+        let mouseActive = NotchGeometryModel.makeOpenedMouseActiveRect(
             visibleRect: visible,
             screenRect: screenRect,
             width: 500,
@@ -245,7 +245,7 @@ struct NotchGeometryTests {
 
     @Test("global outside clicks still close the opened notch")
     func globalOutsideClickClosesOpenedNotch() {
-        let rect = NotchViewModel.makeOpenedTotalRect(
+        let rect = NotchGeometryModel.makeOpenedTotalRect(
             screenRect: screenRect,
             totalSize: CGSize(width: 500, height: 240)
         )
@@ -361,7 +361,7 @@ struct NotchGeometryTests {
     @Test("detach morph source preserves the opened content footprint")
     func detachMorphSourcePreservesOpenedContentFootprint() {
         let finalSize = CGSize(width: 500, height: 250)
-        let source = NotchViewModel.makeDetachMorphPresentation(
+        let source = DetachMorphPresentation.make(
             phase: .source,
             placement: .detached(CGRect(x: 200, y: 300, width: 500, height: 250)),
             screenRect: screenRect,
@@ -371,7 +371,7 @@ struct NotchGeometryTests {
             targetCornerRadius: 18,
             targetTopPadding: 10
         )
-        let target = NotchViewModel.makeDetachMorphPresentation(
+        let target = DetachMorphPresentation.make(
             phase: .target,
             placement: .detached(CGRect(x: 200, y: 300, width: 500, height: 250)),
             screenRect: screenRect,
@@ -383,15 +383,15 @@ struct NotchGeometryTests {
         )
 
         #expect(source.contentTopPadding == 0)
-        #expect(source.contentClipTopRadius == 0)
-        #expect(source.contentClipBottomRadius == 32)
+        #expect(source.contentClipCornerRadii.topLeading == 0)
+        #expect(source.contentClipCornerRadii.bottomLeading == 32)
         #expect(source.chromeOverlayOpacity == 0)
         #expect(source.silhouetteSize.width == finalSize.width + 2 * NotchGeometryModel.openedShoulderRadius)
         #expect(source.silhouetteSize.height == 240)
 
         #expect(target.contentTopPadding == 10)
-        #expect(target.contentClipTopRadius == 18)
-        #expect(target.contentClipBottomRadius == 18)
+        #expect(target.contentClipCornerRadii.topLeading == 18)
+        #expect(target.contentClipCornerRadii.bottomLeading == 18)
         #expect(target.chromeOverlayOpacity == 0)
         #expect(target.silhouetteSize == finalSize)
     }
@@ -403,7 +403,7 @@ struct NotchGeometryTests {
         let revealFrame = CGRect(x: 0, y: 300, width: 500, height: 250)
         let triggerFrame = CGRect(x: 0, y: 0, width: 8, height: 900)
 
-        let left = NotchViewModel.makeDetachMorphPresentation(
+        let left = DetachMorphPresentation.make(
             phase: .idle,
             placement: .edgeDock(
                 edge: .left,
@@ -426,7 +426,7 @@ struct NotchGeometryTests {
         #expect(left.shapeCornerRadii.bottomTrailing == 18)
         #expect(left.contentClipCornerRadii == left.shapeCornerRadii)
 
-        let right = NotchViewModel.makeDetachMorphPresentation(
+        let right = DetachMorphPresentation.make(
             phase: .idle,
             placement: .edgeDock(
                 edge: .right,
@@ -449,7 +449,7 @@ struct NotchGeometryTests {
         #expect(right.shapeCornerRadii.bottomTrailing == 0)
         #expect(right.contentClipCornerRadii == right.shapeCornerRadii)
 
-        let bottom = NotchViewModel.makeDetachMorphPresentation(
+        let bottom = DetachMorphPresentation.make(
             phase: .idle,
             placement: .edgeDock(
                 edge: .bottom,
@@ -477,7 +477,7 @@ struct NotchGeometryTests {
     func detachedFloatingPanelFlattensCornersOnEdgeContactBeforeRelease() {
         let finalSize = CGSize(width: 500, height: 250)
 
-        let leftContact = NotchViewModel.makeDetachMorphPresentation(
+        let leftContact = DetachMorphPresentation.make(
             phase: .idle,
             placement: .detached(CGRect(x: screenRect.minX, y: 300, width: 500, height: 250)),
             screenRect: screenRect,
@@ -493,7 +493,7 @@ struct NotchGeometryTests {
         #expect(leftContact.shapeCornerRadii.topTrailing == 18)
         #expect(leftContact.shapeCornerRadii.bottomTrailing == 18)
 
-        let rightContact = NotchViewModel.makeDetachMorphPresentation(
+        let rightContact = DetachMorphPresentation.make(
             phase: .idle,
             placement: .detached(CGRect(x: screenRect.maxX - 500, y: 300, width: 500, height: 250)),
             screenRect: screenRect,
@@ -509,7 +509,7 @@ struct NotchGeometryTests {
         #expect(rightContact.shapeCornerRadii.topTrailing == 0)
         #expect(rightContact.shapeCornerRadii.bottomTrailing == 0)
 
-        let bottomContact = NotchViewModel.makeDetachMorphPresentation(
+        let bottomContact = DetachMorphPresentation.make(
             phase: .idle,
             placement: .detached(CGRect(x: 200, y: screenRect.minY, width: 500, height: 250)),
             screenRect: screenRect,
@@ -651,7 +651,7 @@ struct NotchGeometryTests {
 
     @Test("local physical-notch re-click closes the opened notch")
     func localPhysicalNotchClickClosesOpenedNotch() {
-        let rect = NotchViewModel.makeOpenedTotalRect(
+        let rect = NotchGeometryModel.makeOpenedTotalRect(
             screenRect: screenRect,
             totalSize: CGSize(width: 500, height: 240)
         )
@@ -669,7 +669,7 @@ struct NotchGeometryTests {
     @Test("opened visible rect extends 18pt past the logical rect on each side")
     func openedVisibleRectIncludesShoulders() {
         let logical = CGRect(x: 100, y: 200, width: 500, height: 240)
-        let visible = NotchViewModel.makeOpenedVisibleRect(openedTotalRect: logical)
+        let visible = NotchGeometryModel.makeOpenedVisibleRect(openedTotalRect: logical)
         #expect(visible.minX == logical.minX - 18)
         #expect(visible.maxX == logical.maxX + 18)
         #expect(visible.minY == logical.minY)
@@ -679,8 +679,8 @@ struct NotchGeometryTests {
 
     @Test("closed visible rect extends 6pt past the bar on each side")
     func closedVisibleRectIncludesShoulders() {
-        let bar = NotchViewModel.makeClosedBarRect(deviceNotchRect: deviceNotchRect)
-        let visible = NotchViewModel.makeClosedVisibleRect(closedBarRect: bar)
+        let bar = NotchGeometryModel.makeClosedBarRect(deviceNotchRect: deviceNotchRect)
+        let visible = NotchGeometryModel.makeClosedVisibleRect(closedBarRect: bar)
         #expect(visible.minX == bar.minX - 6)
         #expect(visible.maxX == bar.maxX + 6)
         #expect(visible.height == bar.height)

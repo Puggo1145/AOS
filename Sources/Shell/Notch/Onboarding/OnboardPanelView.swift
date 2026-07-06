@@ -38,7 +38,7 @@ struct OnboardPanelView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text(headline)
                 .notchFont(size: 13, weight: .semibold)
-                .foregroundStyle(.white.opacity(0.9))
+                .notchForeground(.primary)
             content
         }
         .padding(.top, topSafeInset + 4)
@@ -227,22 +227,20 @@ struct OnboardPanelView: View {
                     .notchFont(size: 11)
                     .notchForeground(.secondary)
 
-                SecureField("sk-…", text: apiKeyDraftBinding)
-                    .textFieldStyle(.plain)
-                    .notchFont(size: 13, design: .monospaced)
-                    .foregroundStyle(.white.opacity(0.95))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.white.opacity(0.06))
-                    )
+                NotchTextField(
+                    placeholder: "sk-…",
+                    text: apiKeyDraftBinding,
+                    isSecure: true,
+                    fontSize: 13,
+                    monospaced: true,
+                    horizontalPadding: 12,
+                    verticalPadding: 10,
+                    cornerRadius: 8,
+                    cornerStyle: .circular
+                )
 
                 if let err = entry.error {
-                    Text(err)
-                        .notchFont(size: 11)
-                        .foregroundStyle(.red.opacity(0.9))
-                        .fixedSize(horizontal: false, vertical: true)
+                    NotchErrorText(err)
                 }
 
                 HStack(spacing: 8) {

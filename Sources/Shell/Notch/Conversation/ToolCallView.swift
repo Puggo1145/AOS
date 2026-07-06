@@ -112,14 +112,9 @@ struct ToolCallView: View {
                         .textSelection(.enabled)
                         .padding(.vertical, 6)
                         .padding(.horizontal, 8)
-                        .background(
-                            GeometryReader { geo in
-                                Color.clear.preference(
-                                    key: ToolCallContentHeightKey.self,
-                                    value: geo.size.height
-                                )
-                            }
-                        )
+                        .onHeightChange { h in
+                            contentHeight = h
+                        }
                 }
                 .frame(height: min(contentHeight, Self.expandedMaxHeight))
                 .background(
@@ -127,17 +122,7 @@ struct ToolCallView: View {
                         .fill(Color.white.opacity(0.04))
                 )
                 .clipped()
-                .onPreferenceChange(ToolCallContentHeightKey.self) { h in
-                    contentHeight = h
-                }
             }
         }
-    }
-}
-
-private struct ToolCallContentHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
     }
 }

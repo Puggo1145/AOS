@@ -89,7 +89,7 @@ struct NotchMouseActiveRectTests {
     }
 
     private func waitForDetachMorphPhase(
-        _ expected: NotchViewModel.DetachMorphPhase,
+        _ expected: DetachMorphPhase,
         viewModel: NotchViewModel
     ) async throws {
         let deadline = Date().addingTimeInterval(1)
@@ -105,13 +105,13 @@ struct NotchMouseActiveRectTests {
     @Test("second settings open with unchanged measured height ignores blank space")
     func secondSettingsOpenWithUnchangedMeasuredHeightIgnoresBlankSpace() {
         let vm = makeViewModel()
-        vm.notchOpen(.click)
+        vm.notchOpen()
         vm.showSettings = true
-        vm.markSettingsMeasured(height: 120)
+        vm.measurements.markSettingsMeasured(height: 120)
         vm.showSettings = false
 
         vm.showSettings = true
-        vm.markSettingsMeasured(height: 120)
+        vm.measurements.markSettingsMeasured(height: 120)
 
         let blankBelowActualUI = NSPoint(x: vm.screenRect.midX, y: vm.screenRect.maxY - 260)
         #expect(vm.visibleHotRect.contains(blankBelowActualUI) == false)
@@ -124,13 +124,13 @@ struct NotchMouseActiveRectTests {
     @Test("second history open with unchanged measured height ignores blank space")
     func secondHistoryOpenWithUnchangedMeasuredHeightIgnoresBlankSpace() {
         let vm = makeViewModel()
-        vm.notchOpen(.click)
+        vm.notchOpen()
         vm.showHistory = true
-        vm.markHistoryMeasured(height: 120)
+        vm.measurements.markHistoryMeasured(height: 120)
         vm.showHistory = false
 
         vm.showHistory = true
-        vm.markHistoryMeasured(height: 120)
+        vm.measurements.markHistoryMeasured(height: 120)
 
         let blankBelowActualUI = NSPoint(x: vm.screenRect.midX, y: vm.screenRect.maxY - 260)
         #expect(vm.visibleHotRect.contains(blankBelowActualUI) == false)
@@ -143,9 +143,9 @@ struct NotchMouseActiveRectTests {
     @Test("settings reopen stays mouse-active for newly taller content until measurement lands")
     func settingsReopenStaysMouseActiveForNewlyTallerContentUntilMeasurementLands() {
         let vm = makeViewModel()
-        vm.notchOpen(.click)
+        vm.notchOpen()
         vm.showSettings = true
-        vm.markSettingsMeasured(height: 120)
+        vm.measurements.markSettingsMeasured(height: 120)
         vm.showSettings = false
 
         vm.showSettings = true
@@ -157,16 +157,16 @@ struct NotchMouseActiveRectTests {
             mouseActiveRect: vm.mouseActiveRect
         ) == false)
 
-        vm.markSettingsMeasured(height: 260)
+        vm.measurements.markSettingsMeasured(height: 260)
         #expect(vm.visibleHotRect.contains(newlyVisibleBeforeMeasurement))
     }
 
     @Test("history reopen stays mouse-active for newly taller content until measurement lands")
     func historyReopenStaysMouseActiveForNewlyTallerContentUntilMeasurementLands() {
         let vm = makeViewModel()
-        vm.notchOpen(.click)
+        vm.notchOpen()
         vm.showHistory = true
-        vm.markHistoryMeasured(height: 120)
+        vm.measurements.markHistoryMeasured(height: 120)
         vm.showHistory = false
 
         vm.showHistory = true
@@ -178,15 +178,15 @@ struct NotchMouseActiveRectTests {
             mouseActiveRect: vm.mouseActiveRect
         ) == false)
 
-        vm.markHistoryMeasured(height: 260)
+        vm.measurements.markHistoryMeasured(height: 260)
         #expect(vm.visibleHotRect.contains(newlyVisibleBeforeMeasurement))
     }
 
     @Test("detach drag lifecycle keeps first press drag active through update and finish")
     func detachDragLifecycleKeepsFirstPressDragActiveThroughUpdateAndFinish() {
         let vm = makeViewModel()
-        vm.notchOpen(.click)
-        vm.composerContentHeight = 80
+        vm.notchOpen()
+        vm.measurements.composerContentHeight = 80
 
         vm.startDetachDrag(pointer: CGPoint(x: 840, y: 884))
         guard case let .detached(startFrame) = vm.placement else {
@@ -228,8 +228,8 @@ struct NotchMouseActiveRectTests {
     @Test("finish detach drag ignores stale mouse-up pointer and keeps current frame")
     func finishDetachDragIgnoresStaleMouseUpPointerAndKeepsCurrentFrame() {
         let vm = makeViewModel()
-        vm.notchOpen(.click)
-        vm.composerContentHeight = 80
+        vm.notchOpen()
+        vm.measurements.composerContentHeight = 80
 
         vm.startDetachDrag(pointer: CGPoint(x: 840, y: 884))
         vm.updateDetachDrag(pointer: CGPoint(x: 900, y: 700))
@@ -246,9 +246,9 @@ struct NotchMouseActiveRectTests {
     @Test("detached settings height changes keep panel top anchored before next drag")
     func detachedSettingsHeightChangesKeepPanelTopAnchoredBeforeNextDrag() {
         let vm = makeViewModel()
-        vm.notchOpen(.click)
+        vm.notchOpen()
         vm.showSettings = true
-        vm.markSettingsMeasured(height: 120)
+        vm.measurements.markSettingsMeasured(height: 120)
         let initialFrame = CGRect(
             x: 240,
             y: 360,
@@ -257,7 +257,7 @@ struct NotchMouseActiveRectTests {
         )
         vm.setPlacement(.detached(initialFrame))
 
-        vm.markSettingsMeasured(height: 260)
+        vm.measurements.markSettingsMeasured(height: 260)
 
         #expect(vm.placement == .detached(initialFrame))
         guard case let .detached(resizedFrame) = vm.currentPlacement else {
@@ -272,9 +272,9 @@ struct NotchMouseActiveRectTests {
     @Test("detached content height changes derive the render frame without mutating placement state")
     func detachedContentHeightChangesDeriveRenderFrameWithoutMutatingPlacementState() {
         let vm = makeViewModel()
-        vm.notchOpen(.click)
+        vm.notchOpen()
         vm.showSettings = true
-        vm.markSettingsMeasured(height: 120)
+        vm.measurements.markSettingsMeasured(height: 120)
         let placementFrame = CGRect(
             x: 240,
             y: 360,
@@ -283,7 +283,7 @@ struct NotchMouseActiveRectTests {
         )
         vm.setPlacement(.detached(placementFrame))
 
-        vm.markSettingsMeasured(height: 260)
+        vm.measurements.markSettingsMeasured(height: 260)
 
         #expect(vm.placement == .detached(placementFrame))
         guard case let .detached(currentFrame) = vm.currentPlacement else {
@@ -298,9 +298,9 @@ struct NotchMouseActiveRectTests {
     @Test("each detached content height change notifies window placement without mutating placement state")
     func eachDetachedContentHeightChangeNotifiesWindowPlacementWithoutMutatingPlacementState() {
         let vm = makeViewModel()
-        vm.notchOpen(.click)
+        vm.notchOpen()
         vm.showSettings = true
-        vm.markSettingsMeasured(height: 120)
+        vm.measurements.markSettingsMeasured(height: 120)
         let placementFrame = CGRect(
             x: 240,
             y: 360,
@@ -310,16 +310,10 @@ struct NotchMouseActiveRectTests {
         vm.setPlacement(.detached(placementFrame))
 
         var placementNotificationCount = 0
-        let observer = NotificationCenter.default.addObserver(
-            forName: .notchPlacementChanged,
-            object: nil,
-            queue: nil
-        ) { _ in
-            placementNotificationCount += 1
-        }
-        defer { NotificationCenter.default.removeObserver(observer) }
+        vm.onPlacementChanged = { placementNotificationCount += 1 }
+        defer { vm.onPlacementChanged = nil }
 
-        vm.markSettingsMeasured(height: 260)
+        vm.measurements.markSettingsMeasured(height: 260)
 
         #expect(placementNotificationCount == 1)
         #expect(vm.placement == .detached(placementFrame))
@@ -330,7 +324,7 @@ struct NotchMouseActiveRectTests {
         #expect(tallerFrame.maxY == placementFrame.maxY)
         #expect(tallerFrame.size == vm.detachedTotalSize)
 
-        vm.markSettingsMeasured(height: 180)
+        vm.measurements.markSettingsMeasured(height: 180)
 
         #expect(placementNotificationCount == 2)
         #expect(vm.placement == .detached(placementFrame))
@@ -345,9 +339,9 @@ struct NotchMouseActiveRectTests {
     @Test("detached settings open waits for first measurement instead of collapsing to compact height")
     func detachedSettingsOpenWaitsForFirstMeasurementInsteadOfCollapsingToCompactHeight() {
         let vm = makeViewModel()
-        vm.notchOpen(.click)
+        vm.notchOpen()
         configureReadyProvider(vm)
-        vm.composerContentHeight = 180
+        vm.measurements.composerContentHeight = 180
         let initialFrame = CGRect(
             x: 240,
             y: 360,
@@ -362,7 +356,7 @@ struct NotchMouseActiveRectTests {
         #expect(vm.detachedTotalSize == sizeBeforeSettings)
         #expect(vm.placement == .detached(initialFrame))
 
-        vm.markSettingsMeasured(height: 260)
+        vm.measurements.markSettingsMeasured(height: 260)
         #expect(vm.placement == .detached(initialFrame))
         guard case let .detached(measuredFrame) = vm.currentPlacement else {
             Issue.record("Expected current detached placement after settings measurement")
@@ -375,9 +369,9 @@ struct NotchMouseActiveRectTests {
     @Test("detached pending settings height uses opened surface state instead of placement frame")
     func detachedPendingSettingsHeightUsesOpenedSurfaceStateInsteadOfPlacementFrame() {
         let vm = makeViewModel()
-        vm.notchOpen(.click)
+        vm.notchOpen()
         configureReadyProvider(vm)
-        vm.composerContentHeight = 180
+        vm.measurements.composerContentHeight = 180
         let conversationHeight = vm.notchOpenedSize.height
         let oversizedPlacementFrame = CGRect(
             x: 240,
@@ -396,13 +390,13 @@ struct NotchMouseActiveRectTests {
     @Test("detached settings reopen reuses cached measured height when SwiftUI emits no new equal measurement")
     func detachedSettingsReopenReusesCachedMeasuredHeightWhenSwiftUIEmitsNoNewEqualMeasurement() {
         let vm = makeViewModel()
-        vm.notchOpen(.click)
+        vm.notchOpen()
         configureReadyProvider(vm)
         vm.showSettings = true
-        vm.markSettingsMeasured(height: 260)
+        vm.measurements.markSettingsMeasured(height: 260)
         let settingsHeight = vm.notchOpenedSize.height
         vm.showSettings = false
-        vm.composerContentHeight = 80
+        vm.measurements.composerContentHeight = 80
         let conversationHeight = vm.notchOpenedSize.height
         #expect(settingsHeight > conversationHeight)
         let initialFrame = CGRect(
@@ -428,13 +422,13 @@ struct NotchMouseActiveRectTests {
     @Test("detached settings reopen uses cached measurement and updates when the new page measures")
     func detachedSettingsReopenUsesCachedMeasurementAndUpdatesWhenTheNewPageMeasures() {
         let vm = makeViewModel()
-        vm.notchOpen(.click)
+        vm.notchOpen()
         configureReadyProvider(vm)
         vm.showSettings = true
-        vm.markSettingsMeasured(height: 120)
+        vm.measurements.markSettingsMeasured(height: 120)
         let cachedSettingsSize = vm.detachedTotalSize
         vm.showSettings = false
-        vm.composerContentHeight = 180
+        vm.measurements.composerContentHeight = 180
         let initialFrame = CGRect(
             x: 240,
             y: 360,
@@ -448,7 +442,7 @@ struct NotchMouseActiveRectTests {
         #expect(vm.detachedTotalSize == cachedSettingsSize)
         #expect(vm.placement == .detached(initialFrame))
 
-        vm.markSettingsMeasured(height: 260)
+        vm.measurements.markSettingsMeasured(height: 260)
         #expect(vm.placement == .detached(initialFrame))
         guard case let .detached(measuredFrame) = vm.currentPlacement else {
             Issue.record("Expected current detached placement after settings measurement")
@@ -461,9 +455,9 @@ struct NotchMouseActiveRectTests {
     @Test("first drag after each detached height change starts from the already resized frame")
     func firstDragAfterEachDetachedHeightChangeStartsFromAlreadyResizedFrame() {
         let vm = makeViewModel()
-        vm.notchOpen(.click)
+        vm.notchOpen()
         vm.showSettings = true
-        vm.markSettingsMeasured(height: 120)
+        vm.measurements.markSettingsMeasured(height: 120)
         let initialFrame = CGRect(
             x: 240,
             y: 360,
@@ -472,10 +466,10 @@ struct NotchMouseActiveRectTests {
         )
         vm.setPlacement(.detached(initialFrame))
 
-        vm.markSettingsMeasured(height: 260)
+        vm.measurements.markSettingsMeasured(height: 260)
         assertFirstDragMovesFromCurrentFrame(viewModel: vm, dx: 40, dy: -20)
 
-        vm.markSettingsMeasured(height: 180)
+        vm.measurements.markSettingsMeasured(height: 180)
         assertFirstDragMovesFromCurrentFrame(viewModel: vm, dx: -30, dy: 18)
     }
 
@@ -492,7 +486,7 @@ struct NotchMouseActiveRectTests {
     @Test("starting detach drag activates a shape-only detach transition")
     func startingDetachDragActivatesShapeOnlyDetachTransition() async throws {
         let vm = makeViewModel()
-        vm.notchOpen(.click)
+        vm.notchOpen()
 
         vm.startDetachDrag(pointer: CGPoint(x: 840, y: 884))
 

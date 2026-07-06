@@ -8,15 +8,15 @@ extension NotchViewModel {
     /// alive through the registered array. Order here is display order:
     /// action-bearing system notices first, then live agent status rows.
     func installBuiltinTraySources() {
-        registerTraySource { [weak self] in
+        tray.registerTraySource { [weak self] in
             guard let self else { return [] }
             return self.systemNoticeItems()
         }
-        registerTraySource { [weak self] in
+        tray.registerTraySource { [weak self] in
             guard let self else { return [] }
             return self.compactLifecycleItems()
         }
-        registerTraySource { [weak self] in
+        tray.registerTraySource { [weak self] in
             guard let self else { return [] }
             return self.todoProgressItems()
         }

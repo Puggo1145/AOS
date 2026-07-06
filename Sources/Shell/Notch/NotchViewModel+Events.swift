@@ -11,8 +11,10 @@ import Combine
 //   - mouseLocation → closed↔popping based on hot-rect containment
 //   - mouseDown     → opened ↔ closed transitions
 //   - keyDown ESC   → cancel + close
-//   - status flip   → debounce-driven silhouette fade (notch-dev-guide §7.3)
-//   - status flip   → throttled haptic on entering .popping (§7.4)
+//
+// The throttled haptic on entering .popping (§7.4) is no longer a Combine
+// subscription — see `fireHapticIfNeeded()` below, called directly from
+// `notchPop()`.
 
 @MainActor
 extension NotchViewModel {
@@ -62,7 +64,7 @@ extension NotchViewModel {
                     }
                 case .closed, .popping:
                     if hot.contains(p) {
-                        self.notchOpen(.click)
+                        self.notchOpen()
                     }
                 }
             }
@@ -78,45 +80,16 @@ extension NotchViewModel {
                 Task { await agent.cancel() }
             }
             .store(in: &cancellables)
-
-        // The closed-state silhouette stays fully opaque at all times — the
-        // bar is the persistent "agent online" indicator that hugs the
-        // physical notch, so any rest-state fade would expose the hardware
-        // cutout and read as the UI disappearing.
-        let statusPublisher = NotificationCenter.default
-            .publisher(for: .notchStatusChanged)
-            .compactMap { $0.object as? NotchViewModel.Status }
-
-        // Haptic feedback on entering .popping, throttled to 0.5s so a jittery
-        // mouse over the notch doesn't spam the Taptic engine. Per §7.4.
-        statusPublisher
-            .filter { $0 == .popping }
-            .throttle(for: .milliseconds(500), scheduler: DispatchQueue.main, latest: false)
-            .sink { _ in
-                NSHapticFeedbackManager.defaultPerformer.perform(
-                    .levelChange,
-                    performanceTime: .now
-                )
-            }
-            .store(in: &cancellables)
     }
 }
 
-// MARK: - Status broadcast
+// MARK: - Status / placement broadcast
 //
-// We piggy-back on NotificationCenter to publish status changes for the
-// debounce/throttle pipelines. The viewModel posts on every status mutation
-// via `didSet`-equivalent; with @Observable we can't observe properties from
-// Combine directly, so we route the notify call from a willSet hook in
-// `notchOpen` / `notchClose` / `notchPop` (those mutators must broadcast).
-//
-// To keep the change centralized, we wrap them here in a notify helper. The
-// view-model methods themselves call `broadcastStatus()` after mutating.
-
-extension Notification.Name {
-    static let notchStatusChanged = Notification.Name("notch-agent.notch.statusChanged")
-    static let notchPlacementChanged = Notification.Name("notch-agent.notch.placementChanged")
-}
+// Direct typed callbacks (`onStatusChanged` / `onPlacementChanged`, declared
+// on NotchViewModel) replace what used to be a NotificationCenter event bus.
+// The view-model mutators (`notchOpen` / `notchClose` / `notchPop` /
+// `setPlacement` / `openedSurfaceStateDidChange`) call `broadcastStatus()` /
+// `broadcastPlacement()` after mutating; these just forward to the callback.
 
 @MainActor
 extension NotchViewModel {
@@ -133,10 +106,23 @@ extension NotchViewModel {
     }
 
     func broadcastStatus() {
-        NotificationCenter.default.post(name: .notchStatusChanged, object: status)
+        onStatusChanged?(status)
     }
 
     func broadcastPlacement() {
-        NotificationCenter.default.post(name: .notchPlacementChanged, object: placement)
+        onPlacementChanged?()
+    }
+
+    /// Haptic feedback on entering `.popping`, throttled to 0.5s so a jittery
+    /// mouse over the notch doesn't spam the Taptic engine. Per notch-dev-guide
+    /// §7.4. Leading edge fires immediately; repeats within the window are
+    /// dropped — approximates Combine's `throttle(..., latest: false)`.
+    func fireHapticIfNeeded() {
+        let now = Date()
+        if let last = lastPoppingHapticAt, now.timeIntervalSince(last) < 0.5 {
+            return
+        }
+        lastPoppingHapticAt = now
+        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
     }
 }

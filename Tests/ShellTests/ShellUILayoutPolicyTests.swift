@@ -20,17 +20,15 @@ struct ShellUILayoutPolicyTests {
         let settings = try Self.source("Sources/Shell/Notch/Settings/SettingsPanelView.swift")
 
         #expect(settings.contains("ZStack(alignment: .topLeading)"))
-        #expect(settings.components(separatedBy: ".frame(maxWidth: .infinity, alignment: .topLeading)").count >= 9)
+        // The 10 previously copy-pasted `.frame(...).transition(...)` blocks
+        // collapse into one shared modifier, applied once per page case.
+        #expect(settings.contains("func settingsPageTransition(edge: Edge) -> some View"))
+        #expect(settings.components(separatedBy: ".settingsPageTransition(edge:").count - 1 >= 10)
     }
 
     @Test("settings main page scrolls only middle vertical rows")
     func settingsMainPageScrollsOnlyMiddleVerticalRows() throws {
-        let settings = try Self.source("Sources/Shell/Notch/Settings/SettingsPanelView.swift")
-        let mainPage = try Self.section(
-            in: settings,
-            from: "private var mainPage: some View",
-            to: "// MARK: - API key row + page"
-        )
+        let mainPage = try Self.source("Sources/Shell/Notch/Settings/SettingsMainPage.swift")
         let cardsRange = try #require(mainPage.range(of: "BentoPickerCard("))
         let scrollRange = try #require(mainPage.range(of: "ScrollView(.vertical, showsIndicators: false)"))
         let quitRange = try #require(mainPage.range(of: "quitButton"))
@@ -49,17 +47,20 @@ struct ShellUILayoutPolicyTests {
     @Test("settings MCP page exposes add-server form")
     func settingsMcpPageExposesAddServerForm() throws {
         let settings = try Self.source("Sources/Shell/Notch/Settings/SettingsPanelView.swift")
-        let draft = try Self.source("Sources/Shell/Notch/Settings/McpServerDraft.swift")
+        let flowModel = try Self.source("Sources/Shell/Notch/Settings/SettingsFlowModel.swift")
+        let listPage = try Self.source("Sources/Shell/Notch/Settings/SettingsMcpPage.swift")
+        let editPage = try Self.source("Sources/Shell/Notch/Settings/SettingsMcpEditPage.swift")
+        let draft = try Self.source("Sources/Shell/MCP/McpServerDraft.swift")
         let rows = try Self.source("Sources/Shell/Notch/Settings/SettingsRows.swift")
 
-        #expect(settings.contains("case mcpAdd"))
-        #expect(settings.contains("private var mcpAddPage: some View"))
-        #expect(settings.contains("SettingsMcpAddButton"))
-        #expect(settings.contains("Picker(\"Auth\", selection: $mcpDraft.authType)"))
-        #expect(settings.contains("Toggle(isOn: $mcpDraft.autoConnect)"))
-        #expect(settings.contains("openMcpEditPage"))
-        #expect(settings.contains("mcpDraft.buildAddParams()"))
-        #expect(settings.contains("mcpDraft.buildUpdateParams()"))
+        #expect(flowModel.contains("case mcpAdd"))
+        #expect(settings.contains("case .mcpAdd:"))
+        #expect(editPage.contains("struct SettingsMcpEditPage: View"))
+        #expect(listPage.contains("SettingsMcpAddButton"))
+        #expect(editPage.contains("Picker(\"Auth\", selection: $flow.mcpDraft.authType)"))
+        #expect(editPage.contains("Toggle(isOn: $flow.mcpDraft.autoConnect)"))
+        #expect(listPage.contains("flow.openMcpEditPage"))
+        #expect(editPage.contains("flow.saveMcpServer()"))
         #expect(draft.contains("McpAddParams("))
         #expect(draft.contains("McpUpdateParams("))
         #expect(draft.contains("authType: authType"))
@@ -101,8 +102,6 @@ struct ShellUILayoutPolicyTests {
     func attachedAndDetachedPanelsShareOpenedContentStateAnimations() throws {
         let notchView = try Self.source("Sources/Shell/Notch/NotchView.swift")
 
-        #expect(notchView.contains("private var animatedOpenedContent: some View"))
-        #expect(notchView.components(separatedBy: "animatedOpenedContent").count >= 3)
         #expect(notchView.contains("private var openedPanelAnimationKey: OpenedPanelAnimationKey"))
         #expect(notchView.contains("private var openedPanelContent: some View"))
         #expect(notchView.contains("private var openedTrayContent: some View"))
@@ -119,16 +118,10 @@ struct ShellUILayoutPolicyTests {
             from: "private var openedPanelContent: some View",
             to: "private var openedTrayContent: some View"
         )
-        let animatedOpenedContent = try Self.section(
-            in: notchView,
-            from: "private var animatedOpenedContent: some View",
-            to: "private var openedPanelContent: some View"
-        )
 
         let frameRange = try #require(openedPanelContent.range(of: ".frame("))
         let animationRange = try #require(openedPanelContent.range(of: ".animation(reduceMotion ? nil : .notchHeight"))
         #expect(frameRange.lowerBound < animationRange.lowerBound)
-        #expect(!animatedOpenedContent.contains(".animation("))
     }
 
     @Test("detached placement is derived from opened surface size instead of synchronized from content didSets")
@@ -161,12 +154,19 @@ struct ShellUILayoutPolicyTests {
     @Test("opened page measurements report on appear and on height changes")
     func openedPageMeasurementsReportOnAppearAndOnHeightChanges() throws {
         let notchView = try Self.source("Sources/Shell/Notch/NotchView.swift")
+        let heightReporting = try Self.source("Sources/Shell/Notch/HeightReporting.swift")
 
-        #expect(notchView.contains("private struct HeightReporter: View"))
-        #expect(notchView.contains(".onAppear"))
-        #expect(notchView.contains(".onChange(of: geo.size.height)"))
+        // NotchView's onboarding/settings/history measurements route through
+        // the shared `onHeightChange` modifier instead of a local
+        // HeightReporter/PreferenceKey.
+        #expect(notchView.contains(".onHeightChange"))
+        #expect(!notchView.contains("private struct HeightReporter: View"))
         #expect(!notchView.contains(".onPreferenceChange(SettingsHeightKey.self)"))
         #expect(!notchView.contains(".onPreferenceChange(HistoryPanelHeightKey.self)"))
+
+        // The shared modifier itself still reports on appear and on change.
+        #expect(heightReporting.contains(".onAppear"))
+        #expect(heightReporting.contains(".onChange(of: geo.size.height)"))
     }
 
     private static func source(_ path: String, file: String = #filePath) throws -> String {

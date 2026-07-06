@@ -129,10 +129,7 @@ private struct PermissionCard: View {
 
                 grantButton
                 if let errorMessage {
-                    Text(errorMessage)
-                        .notchFont(size: 11)
-                        .foregroundStyle(Color.red.opacity(0.9))
-                        .fixedSize(horizontal: false, vertical: true)
+                    NotchErrorText(errorMessage)
                 }
             }
         }

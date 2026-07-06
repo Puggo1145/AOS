@@ -19,18 +19,6 @@ struct PermissionApprovalSection: View {
             deny: deny
         )
         .fixedSize(horizontal: false, vertical: true)
-        .background(
-            GeometryReader { geo in
-                Color.clear.preference(key: PermissionApprovalHeightKey.self, value: geo.size.height)
-            }
-        )
-        .onPreferenceChange(PermissionApprovalHeightKey.self, perform: onHeightChange)
-    }
-}
-
-private struct PermissionApprovalHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
+        .onHeightChange(perform: onHeightChange)
     }
 }

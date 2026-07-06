@@ -160,7 +160,7 @@ struct NotchView: View {
         .animation(reduceMotion ? nil : .notchChrome,
                    value: trayHeight)
         .animation(reduceMotion ? nil : .notchChrome,
-                   value: viewModel.effectiveTrayExpanded)
+                   value: viewModel.tray.effectiveTrayExpanded)
     }
 
     private var floatingPanelBody: some View {
@@ -275,8 +275,8 @@ struct NotchView: View {
         }
     }
 
-    private var detachMorphPresentation: NotchViewModel.DetachMorphPresentation {
-        NotchViewModel.makeDetachMorphPresentation(
+    private var detachMorphPresentation: DetachMorphPresentation {
+        DetachMorphPresentation.make(
             phase: reduceMotion ? .idle : viewModel.detachMorphPhase,
             placement: viewModel.currentPlacement,
             screenRect: viewModel.screenRect,
@@ -307,15 +307,8 @@ struct NotchView: View {
         )
     }
 
-    /// Shared opened-content animation surface. Attached-top and detached
-    /// panels use different outer containers, but overlay/page swaps must
-    /// be driven by the same state animation contract.
-    private var animatedOpenedContent: some View {
-        openedContent
-    }
-
     private var openedPanelContent: some View {
-        animatedOpenedContent
+        openedContent
             .frame(
                 width: viewModel.notchOpenedSize.width,
                 height: viewModel.notchOpenedSize.height,
@@ -342,8 +335,7 @@ struct NotchView: View {
         ZStack(alignment: .topLeading) {
             if viewModel.showHistory {
                 SessionHistoryPanelView(
-                    sessionStore: viewModel.agentService.sessionStore,
-                    sessionService: viewModel.sessionService,
+                    viewModel: viewModel,
                     topSafeInset: viewModel.deviceNotchRect.height,
                     onClose: { viewModel.showHistory = false }
                 )
@@ -467,7 +459,7 @@ struct NotchView: View {
 // Width-pin + vertical fixedSize collapses the onboarding panel to its
 // intrinsic height (the inner `.frame(maxHeight: .infinity)` + Spacer
 // otherwise expand to fill any offered height). The measured value flows
-// up to `viewModel.onboardingContentHeight`, which `notchOpenedSize` then
+// up to `viewModel.measurements.onboardingContentHeight`, which `notchOpenedSize` then
 // uses so the silhouette hugs the cards. The tray drawer sits at
 // `offset(y: shapeHeight)` below this — natural panel height means the
 // drawer extends downward without ever clipping the cards.
@@ -478,20 +470,17 @@ private struct OnboardingMeasurement: ViewModifier {
         content
             .frame(width: viewModel.notchOpenedSize.width)
             .fixedSize(horizontal: false, vertical: true)
-            .background(HeightReporter { h in
-                // Round to integer points so sub-pixel jitter from
-                // SwiftUI's per-frame re-layout during the tray's expand
-                // animation doesn't propagate into `onboardingContentHeight`.
-                // `notchOpenedSize.height` is animated via `.animation`, so
-                // even a 0.5pt drift would visibly nudge the notch panel
-                // taller every time the drawer toggles. Real content
-                // changes (permission card swap, provider → apiKey entry)
-                // are always >> 1pt and still flow through.
-                let rounded = h.rounded()
-                if viewModel.onboardingContentHeight != rounded {
-                    viewModel.onboardingContentHeight = rounded
-                }
-            })
+            // `onHeightChange` already rounds to integer points and dedupes
+            // (see HeightReporting.swift for why — sub-pixel jitter from
+            // SwiftUI's per-frame re-layout during the tray's expand
+            // animation must not propagate into `onboardingContentHeight`,
+            // since `notchOpenedSize.height` is animated and even a 0.5pt
+            // drift would visibly nudge the panel taller every drawer
+            // toggle). Real content changes are always >> 1pt and still
+            // flow through.
+            .onHeightChange { rounded in
+                viewModel.measurements.onboardingContentHeight = rounded
+            }
     }
 }
 
@@ -501,7 +490,7 @@ private struct OnboardingMeasurement: ViewModifier {
 // to the open-state panel width; vertical `fixedSize` collapses the inner
 // VStack to its intrinsic height (Spacers and `maxHeight: .infinity`
 // otherwise expand to fill any offered height). The measured value flows
-// up to `viewModel.settingsContentHeight`, and `notchOpenedSize` clamps it
+// up to `viewModel.measurements.settingsContentHeight`, and `notchOpenedSize` clamps it
 // into [compactMin, notchOpenedMaxHeight] — picker sub-pages whose lists
 // exceed the ceiling let their inner ScrollView take over.
 private struct SettingsMeasurement: ViewModifier {
@@ -511,14 +500,14 @@ private struct SettingsMeasurement: ViewModifier {
         content
             .frame(width: viewModel.notchOpenedSize.width)
             .fixedSize(horizontal: false, vertical: true)
-            .background(HeightReporter { h in
-                // Round to integer points to suppress sub-pixel jitter from
-                // SwiftUI's per-frame relayout while sub-page transitions
-                // animate. Real content changes (row added, picker page
-                // pushed) are always >> 1pt and still flow through.
-                let rounded = h.rounded()
-                viewModel.markSettingsMeasured(height: rounded)
-            })
+            // `onHeightChange` rounds (suppressing sub-pixel jitter from
+            // per-frame relayout while sub-page transitions animate) and
+            // drops non-positive readings, so `markSettingsMeasured` here
+            // never actually sees 0 — same as before this modifier existed
+            // locally (see HeightReporting.swift doc comment).
+            .onHeightChange { rounded in
+                viewModel.measurements.markSettingsMeasured(height: rounded)
+            }
     }
 }
 
@@ -535,31 +524,8 @@ private struct HistoryMeasurement: ViewModifier {
         content
             .frame(width: viewModel.notchOpenedSize.width)
             .fixedSize(horizontal: false, vertical: true)
-            .background(HeightReporter { h in
-                let rounded = h.rounded()
-                viewModel.markHistoryMeasured(height: rounded)
-            })
-    }
-}
-
-private struct HeightReporter: View {
-    let onMeasure: (CGFloat) -> Void
-
-    var body: some View {
-        GeometryReader { geo in
-            Color.clear
-                .onAppear {
-                    report(geo.size.height)
-                }
-                .onChange(of: geo.size.height) { _, height in
-                    report(height)
-                }
-        }
-    }
-
-    private func report(_ height: CGFloat) {
-        let rounded = height.rounded()
-        guard rounded > 0 else { return }
-        onMeasure(rounded)
+            .onHeightChange { rounded in
+                viewModel.measurements.markHistoryMeasured(height: rounded)
+            }
     }
 }

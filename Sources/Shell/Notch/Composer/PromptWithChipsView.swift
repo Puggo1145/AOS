@@ -96,10 +96,10 @@ private struct HistoryChipPill: View {
         HStack(spacing: 4) {
             Image(systemName: "doc.on.clipboard")
                 .notchFont(size: 11, weight: .semibold)
-                .foregroundStyle(.white.opacity(0.9))
+                .notchForeground(.primary)
             Text(label)
                 .notchFont(size: 12, weight: .medium)
-                .foregroundStyle(.white.opacity(0.9))
+                .notchForeground(.primary)
                 .lineLimit(1)
         }
         .padding(.horizontal, 8)

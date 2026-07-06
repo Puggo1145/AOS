@@ -45,22 +45,11 @@ struct OpenedPanelView: View {
 
     @ViewBuilder
     private var bottomSection: some View {
-        let service = viewModel.permissionApprovalService
         BottomSectionPager(
             viewModel: viewModel,
-            request: service?.pendingRequest,
-            allow: {
-                guard let service else {
-                    preconditionFailure("permission approval service is required for approval actions")
-                }
-                service.allowPendingRequest()
-            },
-            deny: {
-                guard let service else {
-                    preconditionFailure("permission approval service is required for approval actions")
-                }
-                service.denyPendingRequest()
-            }
+            request: viewModel.permissionApprovalService?.pendingRequest,
+            allow: { viewModel.allowPendingPermission() },
+            deny: { viewModel.denyPendingPermission() }
         )
     }
 }
@@ -74,36 +63,31 @@ private struct BottomSectionPager: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var composerHeight: CGFloat = 0
     @State private var approvalHeight: CGFloat = 0
-    @State private var displayedRequest: PermissionRequestApprovalParams?
-    @State private var showingApproval: Bool = false
-    @State private var dismissalTask: Task<Void, Never>?
+    @State private var model = ApprovalPagerModel()
 
     private var pageWidth: CGFloat {
         viewModel.notchOpenedSize.width - 32
     }
 
     private var pageHeight: CGFloat {
-        displayedRequest == nil ? composerHeight : max(composerHeight, approvalHeight)
+        model.displayedRequest == nil ? composerHeight : max(composerHeight, approvalHeight)
     }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             composerPage
-                .offset(x: showingApproval ? -pageWidth : 0)
+                .offset(x: model.showingApproval ? -pageWidth : 0)
             approvalPage
-                .offset(x: showingApproval ? 0 : pageWidth)
+                .offset(x: model.showingApproval ? 0 : pageWidth)
         }
         .frame(width: pageWidth, alignment: .topLeading)
         .clipped()
         .onChange(of: pageHeight) { _, h in
-            viewModel.composerContentHeight = h
+            viewModel.measurements.composerContentHeight = h
         }
         .onAppear {
-            if let request {
-                displayedRequest = request
-                showingApproval = true
-            }
-            viewModel.composerContentHeight = pageHeight
+            model.onAppear(request: request)
+            viewModel.measurements.composerContentHeight = pageHeight
         }
         .onChange(of: request) { _, nextRequest in
             syncDisplayedRequest(nextRequest)
@@ -115,74 +99,58 @@ private struct BottomSectionPager: View {
             viewModel: viewModel,
             onHeightChange: { h in
                 composerHeight = h
-                viewModel.composerContentHeight = pageHeight
+                viewModel.measurements.composerContentHeight = pageHeight
             }
         )
         .frame(width: pageWidth, alignment: .top)
-        .accessibilityHidden(showingApproval)
-        .allowsHitTesting(!showingApproval)
+        .accessibilityHidden(model.showingApproval)
+        .allowsHitTesting(!model.showingApproval)
     }
 
     @ViewBuilder
     private var approvalPage: some View {
-        if let displayedRequest {
+        if let displayedRequest = model.displayedRequest {
             PermissionApprovalSection(
                 request: displayedRequest,
                 allow: allow,
                 deny: deny,
                 onHeightChange: { h in
                     approvalHeight = h
-                    viewModel.composerContentHeight = pageHeight
+                    viewModel.measurements.composerContentHeight = pageHeight
                 }
             )
             .frame(width: pageWidth, alignment: .top)
-            .accessibilityHidden(!showingApproval)
-            .allowsHitTesting(showingApproval)
+            .accessibilityHidden(!model.showingApproval)
+            .allowsHitTesting(model.showingApproval)
         }
     }
 
+    /// Drives `ApprovalPagerModel`'s state machine from the view side:
+    /// the model owns *what* displayedRequest/showingApproval should be,
+    /// this owns *how* the transition is animated. Reduce Motion completes
+    /// the dismissal synchronously; otherwise `withAnimation`'s
+    /// `.logicallyComplete` completion callback clears the displayed
+    /// request only once the slide-out has actually finished (replacing
+    /// the old `Task.sleep(for: .milliseconds(280))` hack that guessed at
+    /// `.notchChrome`'s duration).
     private func syncDisplayedRequest(_ nextRequest: PermissionRequestApprovalParams?) {
-        dismissalTask?.cancel()
-        dismissalTask = nil
-
-        if let nextRequest {
-            displayedRequest = nextRequest
-            runPageAnimation {
-                showingApproval = true
+        if reduceMotion {
+            if let token = model.beginSync(request: nextRequest) {
+                approvalHeight = 0
+                model.completeDismissal(token: token)
+                viewModel.measurements.composerContentHeight = pageHeight
             }
             return
         }
 
-        runPageAnimation {
-            showingApproval = false
-        }
-        let dismissedRequest = displayedRequest
-        let task = Task { @MainActor in
-            guard !reduceMotion else {
-                guard displayedRequest == dismissedRequest, !showingApproval else { return }
-                displayedRequest = nil
-                approvalHeight = 0
-                viewModel.composerContentHeight = pageHeight
-                return
-            }
-            do {
-                try await Task.sleep(for: .milliseconds(280))
-            } catch {
-                return
-            }
-            guard displayedRequest == dismissedRequest, !showingApproval else { return }
-            displayedRequest = nil
+        var dismissalToken: Int?
+        withAnimation(.notchChrome, completionCriteria: .logicallyComplete) {
+            dismissalToken = model.beginSync(request: nextRequest)
+        } completion: {
+            guard let dismissalToken else { return }
+            model.completeDismissal(token: dismissalToken)
             approvalHeight = 0
-            viewModel.composerContentHeight = pageHeight
-        }
-        dismissalTask = task
-    }
-
-    private func runPageAnimation(_ updates: @escaping () -> Void) {
-        if reduceMotion {
-            updates()
-        } else {
-            withAnimation(.notchChrome, updates)
+            viewModel.measurements.composerContentHeight = pageHeight
         }
     }
 }
